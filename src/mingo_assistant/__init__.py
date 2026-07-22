@@ -1,0 +1,2 @@
+"""Mingo Assistant desktop application."""
+
