@@ -19,6 +19,12 @@ class CaseRepository:
     def list_deleted_cases(self) -> list[CaseSummary]:
         return [case for case in self._read_cases() if case.is_deleted]
 
+    def get_case(self, case_id: str) -> CaseSummary | None:
+        for case in self._read_cases():
+            if case.id == case_id:
+                return case
+        return None
+
     def _read_cases(self) -> list[CaseSummary]:
         self._ensure_file()
         raw_cases = json.loads(self.data_file.read_text(encoding="utf-8"))

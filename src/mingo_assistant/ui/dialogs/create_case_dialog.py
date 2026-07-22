@@ -4,7 +4,6 @@ from datetime import datetime
 from uuid import uuid4
 
 from PySide6.QtWidgets import (
-    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
@@ -15,6 +14,7 @@ from PySide6.QtWidgets import (
 )
 
 from mingo_assistant.models.case import CaseSummary
+from mingo_assistant.ui.widgets.combo_box import NoWheelComboBox
 
 
 class CreateCaseDialog(QDialog):
@@ -26,7 +26,7 @@ class CreateCaseDialog(QDialog):
         self.company_name_input = QLineEdit()
         self.company_name_input.setPlaceholderText("Ví dụ: Công ty TNHH ABC")
 
-        self.case_type_input = QComboBox()
+        self.case_type_input = NoWheelComboBox()
         self.case_type_input.addItems(
             [
                 "TNHH hai thành viên trở lên",
@@ -45,7 +45,7 @@ class CreateCaseDialog(QDialog):
         self.capital_input = QLineEdit()
         self.capital_input.setPlaceholderText("Ví dụ: 1.000.000.000 đồng")
 
-        self.status_input = QComboBox()
+        self.status_input = NoWheelComboBox()
         self.status_input.addItems(["Bản nháp", "Thiếu thông tin", "Sẵn sàng tạo"])
 
         form = QFormLayout()

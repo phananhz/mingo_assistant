@@ -142,6 +142,11 @@ QGroupBox::title {
     padding: 8px;
 }
 
+#TableCell {
+    background: #ffffff;
+    border: 1px solid #f0c8d6;
+}
+
 #StatusBadge {
     background: #ffe1eb;
     color: #9a315d;

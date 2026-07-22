@@ -26,7 +26,7 @@ class BusinessRegistrationDocumentsView(QWidget):
         self.case = case
         self.on_back = on_back
         self.on_edit = on_edit
-        self.version_content: QWidget | None = None
+        self.version_contents: list[QWidget] = []
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -116,34 +116,37 @@ class BusinessRegistrationDocumentsView(QWidget):
         layout.setContentsMargins(18, 16, 18, 18)
         layout.setSpacing(12)
 
-        files = self._document_paths()
-        if not files:
+        versions = self._versions()
+        if not versions:
             empty = QLabel("Hồ sơ này chưa có file Word đã xuất. Bấm 'Sửa dữ liệu hồ sơ' rồi xuất Word trước.")
             empty.setObjectName("EmptyDescription")
             empty.setWordWrap(True)
             layout.addWidget(empty)
             return wrapper
 
-        toggle = QCheckBox(f"Phiên 1 - {len(files)} file Word")
-        toggle.setObjectName("ResultText")
-        toggle.setChecked(True)
-        toggle.stateChanged.connect(self._toggle_version_content)
-        layout.addWidget(toggle)
-
-        self.version_content = QWidget()
-        version_layout = QVBoxLayout(self.version_content)
-        version_layout.setContentsMargins(0, 0, 0, 0)
-        version_layout.setSpacing(12)
-        for index, path in enumerate(files, start=1):
-            version_layout.addWidget(self._build_document_row(index, path))
-        layout.addWidget(self.version_content)
+        for version_index, version in enumerate(versions, start=1):
+            files = version["files"]
+            toggle = QCheckBox(f"{version['name']} - {len(files)} file Word - {version['exported_at'] or 'chưa có thời gian'}")
+            toggle.setObjectName("ResultText")
+            toggle.setChecked(version_index == len(versions))
+            content = QWidget()
+            version_layout = QVBoxLayout(content)
+            version_layout.setContentsMargins(0, 0, 0, 0)
+            version_layout.setSpacing(12)
+            for index, path in enumerate(files, start=1):
+                version_layout.addWidget(self._build_document_row(index, path, str(version["exported_at"])))
+            content.setVisible(toggle.isChecked())
+            toggle.stateChanged.connect(lambda state, selected=content: selected.setVisible(state == Qt.Checked))
+            self.version_contents.append(content)
+            layout.addWidget(toggle)
+            layout.addWidget(content)
         return wrapper
 
     def _toggle_version_content(self, state: int) -> None:
-        if self.version_content is not None:
-            self.version_content.setVisible(state == Qt.Checked)
+        for content in self.version_contents:
+            content.setVisible(state == Qt.Checked)
 
-    def _build_document_row(self, index: int, path: Path) -> QWidget:
+    def _build_document_row(self, index: int, path: Path, exported_at: str) -> QWidget:
         row = QFrame()
         row.setObjectName("Card")
         layout = QHBoxLayout(row)
@@ -161,7 +164,7 @@ class BusinessRegistrationDocumentsView(QWidget):
         file_path = QLabel(str(path))
         file_path.setObjectName("MetaText")
         file_path.setWordWrap(True)
-        time_text = QLabel(f"Đánh dấu thời gian: {self.case.exported_at or 'Chưa có'}")
+        time_text = QLabel(f"Đánh dấu thời gian: {exported_at or 'Chưa có'}")
         time_text.setObjectName("MetaText")
         info.addWidget(file_name)
         info.addWidget(file_path)
@@ -181,13 +184,37 @@ class BusinessRegistrationDocumentsView(QWidget):
         layout.addWidget(edit_button)
         return row
 
-    def _document_paths(self) -> list[Path]:
-        export_dir = Path(self.case.export_dir) if self.case.export_dir else None
+    def _versions(self) -> list[dict[str, object]]:
+        raw_versions = self.case.export_versions or []
+        if not raw_versions and self.case.export_dir:
+            raw_versions = [
+                {
+                    "name": "Phiên 1",
+                    "export_dir": self.case.export_dir,
+                    "exported_at": self.case.exported_at,
+                    "documents": self.case.generated_documents,
+                }
+            ]
+        versions: list[dict[str, object]] = []
+        for index, version in enumerate(raw_versions, start=1):
+            export_dir = Path(str(version.get("export_dir", ""))) if version.get("export_dir") else None
+            files = self._document_paths(export_dir, [str(item) for item in version.get("documents", []) or []])
+            if files:
+                versions.append(
+                    {
+                        "name": str(version.get("name") or f"Phiên {index}"),
+                        "exported_at": str(version.get("exported_at", "")),
+                        "files": files,
+                    }
+                )
+        return versions
+
+    def _document_paths(self, export_dir: Path | None, generated_documents: list[str]) -> list[Path]:
         if not export_dir or not export_dir.exists():
             return []
 
-        if self.case.generated_documents:
-            paths = [export_dir / file_name for file_name in self.case.generated_documents]
+        if generated_documents:
+            paths = [export_dir / file_name for file_name in generated_documents]
         else:
             paths = sorted(export_dir.glob("*.docx"))
         return [path for path in paths if path.exists()]

@@ -18,6 +18,7 @@ class CaseSummary:
     export_dir: str = ""
     exported_at: str = ""
     generated_documents: list[str] = field(default_factory=list)
+    export_versions: list[dict[str, object]] = field(default_factory=list)
     is_deleted: bool = False
     deleted_at: str = ""
     form_values: dict[str, str] = field(default_factory=dict)
@@ -46,6 +47,11 @@ class CaseSummary:
             exported_at=str(data.get("exported_at", "")),
             generated_documents=[
                 str(item) for item in data.get("generated_documents", []) if item
+            ],
+            export_versions=[
+                dict(item)
+                for item in data.get("export_versions", []) or []
+                if isinstance(item, dict)
             ],
             is_deleted=bool(data.get("is_deleted", False)),
             deleted_at=str(data.get("deleted_at", "")),

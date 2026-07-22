@@ -26,6 +26,7 @@ class GenerationResult:
     output_dir: Path
     generated: list[GeneratedDocument]
     skipped: list[str]
+    unresolved: dict[str, list[str]]
 
 
 class DocxTemplateGenerator:
@@ -41,20 +42,53 @@ class DocxTemplateGenerator:
 
         generated: list[GeneratedDocument] = []
         skipped: list[str] = []
+        unresolved: dict[str, list[str]] = {}
 
         for template in sorted(self.template_dir.iterdir()):
             if template.suffix.lower() == ".docx":
                 output_path = output_dir / template.name
                 shutil.copy2(template, output_path)
                 self._replace_placeholders(output_path, values)
+                remaining = self.unresolved_placeholders(output_path)
+                if remaining:
+                    unresolved[template.name] = remaining
                 generated.append(GeneratedDocument(template.name, output_path))
             elif template.suffix.lower() == ".doc":
                 skipped.append(f"{template.name} chưa được điền tự động vì đang là .doc")
 
-        return GenerationResult(output_dir=output_dir, generated=generated, skipped=skipped)
+        return GenerationResult(output_dir=output_dir, generated=generated, skipped=skipped, unresolved=unresolved)
+
+    def validate_templates(self, values: dict[str, str]) -> dict[str, list[str]]:
+        report: dict[str, list[str]] = {}
+        with tempfile.TemporaryDirectory(dir=self.export_root if self.export_root.exists() else None) as temp_dir:
+            temp_path = Path(temp_dir)
+            for template in sorted(self.template_dir.iterdir()):
+                if template.suffix.lower() != ".docx":
+                    continue
+                candidate = temp_path / template.name
+                shutil.copy2(template, candidate)
+                self._replace_placeholders(candidate, values)
+                unresolved = self.unresolved_placeholders(candidate)
+                if unresolved:
+                    report[template.name] = sorted(set(unresolved))
+        return report
+
+    def unresolved_placeholders(self, docx_path: Path) -> list[str]:
+        placeholders: list[str] = []
+        with zipfile.ZipFile(docx_path, "r") as package:
+            for item in package.infolist():
+                if not item.filename.startswith("word/") or not item.filename.endswith(".xml"):
+                    continue
+                data = package.read(item.filename)
+                if b"[" not in data or b"]" not in data:
+                    continue
+                placeholders.extend(self._extract_placeholders_from_xml(data))
+        return sorted(set(placeholders))
 
     def _replace_placeholders(self, docx_path: Path, values: dict[str, str]) -> None:
         document = Document(docx_path)
+        self._replace_known_sample_text(document, values)
+        self._replace_case_type_text(document, values)
         self._replace_business_lines_tables(document, values)
         self._replace_in_container(document, values)
         for section in document.sections:
@@ -63,19 +97,88 @@ class DocxTemplateGenerator:
         document.save(docx_path)
         self._replace_split_placeholders_in_package(docx_path, values)
 
+    def _replace_known_sample_text(self, document: Document, values: dict[str, str]) -> None:
+        replacements: dict[str, str] = {}
+        company_name = values.get("company_name", "").strip()
+        company_short_name = values.get("company_short_name", "").strip()
+        legal_name = values.get("legal_representative_full_name", "").strip()
+        if company_name:
+            for sample in [
+                "CÔNG TY TNHH THƯƠNG MẠI VÀ DỊCH VỤ THOMAS",
+                "CÔNG TY TNHH THƯƠNG MẠI VÀ DỊCH VỤ EDITION",
+                "CÔNG TY TNHH THƯƠNG MẠI VÀ DỊCH VỤ EDITON",
+                "CÔNG   TY   TNHH   THƯƠNG   MẠI   VÀ   DỊCH   VỤ   EDTION",
+            ]:
+                replacements[sample] = company_name
+        short_replacement = company_short_name or company_name
+        if short_replacement:
+            replacements["THOMAS EDITION"] = short_replacement
+            replacements["THOMAS EDITON"] = short_replacement
+        if legal_name:
+            replacements["NGUYỄN THANH HÓA"] = legal_name
+        if not replacements:
+            return
+        self._replace_plain_text_in_container(document, replacements)
+        for section in document.sections:
+            self._replace_plain_text_in_container(section.header, replacements)
+            self._replace_plain_text_in_container(section.footer, replacements)
+
+    def _replace_case_type_text(self, document: Document, values: dict[str, str]) -> None:
+        try:
+            member_count = int(values.get("company_member_count", "1") or "1")
+        except ValueError:
+            member_count = 1
+        if member_count <= 1:
+            return
+        replacements = {
+            "CÔNG TY TNHH MỘT THÀNH VIÊN": "CÔNG TY TNHH HAI THÀNH VIÊN TRỞ LÊN",
+            "Công ty TNHH Một thành viên": "Công ty TNHH Hai thành viên trở lên",
+            "Công ty trách nhiệm hữu hạn một thành viên": "Công ty trách nhiệm hữu hạn hai thành viên trở lên",
+            "công ty trách nhiệm hữu hạn một thành viên": "công ty trách nhiệm hữu hạn hai thành viên trở lên",
+            "trách nhiệm hữu hạn một thành viên": "trách nhiệm hữu hạn hai thành viên trở lên",
+            "một thành viên": "hai thành viên trở lên",
+        }
+        self._replace_plain_text_in_container(document, replacements)
+        for section in document.sections:
+            self._replace_plain_text_in_container(section.header, replacements)
+            self._replace_plain_text_in_container(section.footer, replacements)
+
+    def _replace_plain_text_in_container(self, container, replacements: dict[str, str]) -> None:
+        element = getattr(container, "_element", None)
+        if element is None:
+            element = getattr(container, "element", None)
+        if element is None:
+            return
+        for paragraph_element in element.xpath(".//w:p"):
+            paragraph = Paragraph(paragraph_element, container)
+            original = paragraph.text
+            replaced = original
+            for source, target in replacements.items():
+                replaced = replaced.replace(source, target)
+            if replaced == original:
+                continue
+            for run in paragraph.runs:
+                run.text = ""
+            if paragraph.runs:
+                paragraph.runs[0].text = replaced
+            else:
+                paragraph.add_run(replaced)
+
     def _replace_business_lines_tables(self, document: Document, values: dict[str, str]) -> None:
         business_lines = self._business_lines(values)
 
-        for table in document.tables:
+        for table in self._iter_tables(document):
             if not table.rows:
                 continue
-            header_text = " ".join(cell.text for cell in table.rows[0].cells)
-            folded_header = self._fold(header_text)
-            if "ten nganh" not in folded_header or "ma nganh" not in folded_header:
+            header_index = self._business_line_header_index(table)
+            if header_index is None:
+                continue
+            if len(table.rows[header_index].cells) < 4:
                 continue
 
-            template_row = deepcopy(table.rows[1]._tr) if len(table.rows) > 1 else deepcopy(table.rows[0]._tr)
-            for row in list(table.rows[1:]):
+            template_index = min(header_index + 1, len(table.rows) - 1)
+            template_row = deepcopy(table.rows[template_index]._tr)
+            for row in list(table.rows[header_index + 1 :]):
                 table._tbl.remove(row._tr)
 
             rows_to_write = business_lines or [{"name": "", "code": "", "is_main": False}]
@@ -86,6 +189,20 @@ class DocxTemplateGenerator:
                 self._set_cell_text(row.cells[1], line["name"])
                 self._set_cell_text(row.cells[2], line["code"])
                 self._set_cell_text(row.cells[3], "X" if line["is_main"] else "")
+
+    def _iter_tables(self, container):
+        for table in container.tables:
+            yield table
+            for row in table.rows:
+                for cell in row.cells:
+                    yield from self._iter_tables(cell)
+
+    def _business_line_header_index(self, table) -> int | None:
+        for index, row in enumerate(table.rows[:3]):
+            folded_header = self._fold(" ".join(cell.text for cell in row.cells))
+            if "ten nganh" in folded_header and "ma nganh" in folded_header:
+                return index
+        return None
 
     def _business_lines(self, values: dict[str, str]) -> list[dict[str, str | bool]]:
         lines: list[dict[str, str | bool]] = []
@@ -204,6 +321,16 @@ class DocxTemplateGenerator:
 
         return etree.tostring(root, encoding="UTF-8", xml_declaration=True, standalone=True)
 
+    def _extract_placeholders_from_xml(self, data: bytes) -> list[str]:
+        try:
+            root = etree.fromstring(data)
+        except etree.XMLSyntaxError:
+            return []
+        namespace = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+        text_nodes = root.xpath(".//w:t", namespaces=namespace)
+        joined = "".join(node.text or "" for node in text_nodes)
+        return [match.group(1).strip() for match in re.finditer(r"\[([^\[\]]{1,300})\]", joined)]
+
     def _replace_text(self, text: str, values: dict[str, str]) -> str:
         def replacement(match: re.Match[str]) -> str:
             placeholder = match.group(0)
@@ -215,8 +342,90 @@ class DocxTemplateGenerator:
 
     def _value_for_placeholder(self, placeholder: str, values: dict[str, str], context: str = "") -> str | None:
         normalized = self._normalize_key(placeholder)
-        if normalized in values and values[normalized].strip():
-            return values[normalized].strip()
+        known_direct_keys = {
+            "business_registration_office",
+            "company_name",
+            "company_short_name",
+            "company_address",
+            "company_address_detail",
+            "company_ward",
+            "company_province",
+            "company_phone",
+            "company_email",
+            "company_member_count",
+            "company_type_label",
+            "business_lines",
+            "charter_capital_number",
+            "charter_capital_text",
+            "charter_capital_full_text",
+            "cash_capital_text",
+            "asset_capital_text",
+            "member_capital_amount",
+            "member_capital_ratio",
+            "capital_zero",
+            "legal_representative_full_name",
+            "legal_representative_id_number",
+            "legal_representative_date_of_birth",
+            "legal_representative_gender",
+            "legal_representative_nationality",
+            "legal_representative_permanent_address",
+            "legal_representative_address_detail",
+            "legal_representative_ward",
+            "legal_representative_province",
+            "legal_representative_contact_address",
+            "legal_representative_place_of_origin",
+            "legal_representative_issue_date",
+            "legal_representative_expiry_date",
+            "legal_representative_position",
+            "director_full_name",
+            "director_date_of_birth",
+            "director_gender",
+            "director_id_number",
+            "director_phone",
+            "director_position",
+            "applicant_full_name",
+            "applicant_date_of_birth",
+            "applicant_gender",
+            "applicant_id_number",
+            "applicant_address_detail",
+            "applicant_ward",
+            "applicant_province",
+            "authorized_person_full_name",
+            "authorized_person_date_of_birth",
+            "authorized_person_gender",
+            "authorized_person_id_number",
+            "authorized_person_contact_address",
+            "authorized_person_phone",
+            "authorized_person_email",
+            "beneficial_owner_full_name",
+            "beneficial_owner_date_of_birth",
+            "beneficial_owner_gender",
+            "beneficial_owner_id_number",
+            "beneficial_owner_issue_date",
+            "beneficial_owner_address",
+            "document_place",
+            "document_day",
+            "document_month",
+            "document_year",
+            "document_place_date",
+        }
+        for index in range(1, 21):
+            known_direct_keys.update(
+                {
+                    f"business_line_{index}_name",
+                    f"business_line_{index}_code",
+                    f"business_line_{index}_is_main",
+                    f"member_{index}_full_name",
+                    f"member_{index}_id_number",
+                    f"member_{index}_date_of_birth",
+                    f"member_{index}_gender",
+                    f"member_{index}_permanent_address",
+                    f"member_{index}_capital_amount",
+                    f"member_{index}_capital_ratio",
+                }
+            )
+        if normalized in known_direct_keys:
+            return values.get(normalized, "").strip()
 
         for key, value in values.items():
             if self._normalize_key(key) == normalized and value.strip():
@@ -235,6 +444,10 @@ class DocxTemplateGenerator:
             "von_dieu_le_bang_chu": "charter_capital_text",
             "ho_ten": "legal_representative_full_name",
             "ho_va_ten": "legal_representative_full_name",
+            "member_full_name": "member_1_full_name",
+            "member_id_number": "member_1_id_number",
+            "member_date_of_birth": "member_1_date_of_birth",
+            "member_permanent_address": "member_1_permanent_address",
             "so_cccd": "legal_representative_id_number",
             "so_dinh_danh_ca_nhan": "legal_representative_id_number",
             "ngay_sinh": "legal_representative_date_of_birth",
@@ -265,6 +478,7 @@ class DocxTemplateGenerator:
         direct_sample_map = {
             "0": "capital_zero",
             "100": "member_capital_ratio",
+            "ba_ty_dong": "charter_capital_text",
             "x": "business_line_1_is_main",
             "nguyen_thi_khanh_haha": "authorized_person_full_name",
             "22_12_1111": "authorized_person_date_of_birth",
@@ -298,6 +512,7 @@ class DocxTemplateGenerator:
             "4610": "business_line_4_code",
             "ban_le_luong_thuc": "business_line_5_name",
             "4721": "business_line_5_code",
+            "hoat_dong_dich_vu_ho_tro_khac_lien_quan_den_van_tai_chi_tiet_hoat_dong_cua_cac_dai_ly_ban_ve_may_bay_tru_hoa_long_khi_de_van_chuyen_va_hoat_dong_lien_quan_den_van_tai_duong_hang_khong": "business_line_6_name",
             "hoat_dong_dich_vu_ho_tro_kinh_doanh_khac_con_lai_chua_duoc_phan_vao_dau_chi_tiet_xuat_nhap_khau_cac_mat_hang_doanh_nghiep_kinh_doanh": "business_line_6_name",
             "8299": "business_line_6_code",
             "kho_bai_va_luu_giu_hang_hoa_chi_tiet_luu_giu_hang_hoa_tru_kinh_doanh_kho_bai": "business_line_7_name",
@@ -335,6 +550,8 @@ class DocxTemplateGenerator:
             return values.get("document_place_date", "")
         if folded_placeholder.startswith("ngay") and "thang" in folded_placeholder and "nam" in folded_placeholder:
             return values.get("document_place_date", "")
+        if "noi ky" in folded_context:
+            return values.get("document_place", "")
         if "ngay [" in folded_context and "thang [" in folded_context and "nam [" in folded_context:
             if len(digits) == 4:
                 return values.get("document_year", "")
@@ -386,7 +603,11 @@ class DocxTemplateGenerator:
         if "ho chu dem va ten" in folded_context or "ho, chu dem va ten" in lowered:
             return values.get("legal_representative_full_name", "") or values.get("applicant_full_name", "")
         if "thomas" in folded_placeholder:
-            return values.get("legal_representative_full_name", "") or values.get("company_short_name", "") or values.get("company_name", "")
+            if "viet tat" in folded_context or "ten viet tat" in folded_context:
+                return values.get("company_short_name", "") or values.get("company_name", "")
+            if "cong ty" in folded_context or "doanh nghiep" in folded_context:
+                return values.get("company_name", "")
+            return values.get("company_short_name", "") or values.get("company_name", "")
         if re.search(r"\d{1,2}/\d{1,2}/\d{4}", placeholder):
             return values.get("legal_representative_date_of_birth", "") or values.get("document_place_date", "")
         if any(word in lowered for word in ["tỉnh", "xã", "phường", "thôn", "số nhà"]):
