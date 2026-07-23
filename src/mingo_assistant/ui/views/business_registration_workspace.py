@@ -76,6 +76,7 @@ FIELD_GROUPS = [
         "Thông tin doanh nghiệp",
         [
             ("company_name", "Tên doanh nghiệp"),
+            ("company_english_name", "Tên tiếng Anh"),
             ("company_short_name", "Tên viết tắt"),
             ("company_address", "Địa chỉ trụ sở đầy đủ"),
             ("company_address_detail", "Số nhà/đường/thôn"),
@@ -229,6 +230,7 @@ class BusinessRegistrationWorkspace(QWidget):
         self.syncing_person_fields = False
         self.syncing_address_fields = False
         self.last_export_dir: Path | None = None
+        self.selected_export_root: Path | None = Path(case.export_dir).parent if case and case.export_dir else None
         self.ocr_people: list[OcrPerson] = [OcrPerson("Người 1", role="legal_representative")]
         self.current_person_index = 0
 
@@ -302,6 +304,10 @@ class BusinessRegistrationWorkspace(QWidget):
         template_check_button.setObjectName("GhostButton")
         template_check_button.clicked.connect(self._check_templates)
 
+        storage_button = QPushButton("Chọn nơi lưu")
+        storage_button.setObjectName("GhostButton")
+        storage_button.clicked.connect(self._choose_export_root)
+
         export_button = QPushButton("Xuất Word")
         export_button.setObjectName("PrimaryButton")
         export_button.clicked.connect(self._export_documents)
@@ -309,6 +315,7 @@ class BusinessRegistrationWorkspace(QWidget):
         header.addWidget(back_button)
         header.addLayout(text, 1)
         header.addWidget(template_check_button)
+        header.addWidget(storage_button)
         header.addWidget(save_button)
         header.addWidget(export_button)
         return header
@@ -906,7 +913,7 @@ class BusinessRegistrationWorkspace(QWidget):
         if not address:
             return
         parsed = self.address_parser.parse(address)
-        detail = parsed.street_line or parsed.village
+        detail = self._address_detail_from_result(parsed)
         if not any([detail, parsed.ward, parsed.province]):
             return
 
@@ -1346,7 +1353,7 @@ class BusinessRegistrationWorkspace(QWidget):
                 continue
             if role == "applicant" and suffix == "permanent_address":
                 parsed = self.address_parser.parse(value)
-                self._set_field_if_empty("applicant_address_detail", parsed.street_line or parsed.village)
+                self._set_field_if_empty("applicant_address_detail", self._address_detail_from_result(parsed))
                 self._set_field_if_empty("applicant_ward", parsed.ward)
                 self._set_field_if_empty("applicant_province", parsed.province)
                 continue
@@ -1396,7 +1403,7 @@ class BusinessRegistrationWorkspace(QWidget):
         self._refresh_preview()
 
     def _fill_address_parts_from_result(self, target: str, result) -> None:
-        detail = result.street_line or result.village
+        detail = self._address_detail_from_result(result)
         if target == "company_address":
             mapping = {
                 "company_address_detail": detail,
@@ -1413,6 +1420,10 @@ class BusinessRegistrationWorkspace(QWidget):
             if value:
                 self._set_field(key, value)
 
+    def _address_detail_from_result(self, result) -> str:
+        parts = [result.street_line, result.village]
+        return ", ".join(part for part in parts if part)
+
     def _save_draft(self) -> None:
         saved_case = self.build_case_summary()
         self.on_save(saved_case)
@@ -1428,7 +1439,11 @@ class BusinessRegistrationWorkspace(QWidget):
 
         template_dir, export_root = self._template_and_export_dirs()
         generator = DocxTemplateGenerator(template_dir=template_dir, export_root=export_root)
-        template_issues = generator.validate_templates(values)
+        try:
+            template_issues = generator.validate_templates(values)
+        except Exception as exc:
+            QMessageBox.critical(self, "Lỗi kiểm tra mẫu Word", f"Không thể kiểm tra mẫu Word:\n{exc}")
+            return
         if template_issues:
             QMessageBox.warning(
                 self,
@@ -1437,8 +1452,17 @@ class BusinessRegistrationWorkspace(QWidget):
             )
             return
 
+        case_export_dir = self._case_export_dir(export_root, values)
+        version_number = self._next_export_version_number(case_export_dir)
+        version_name = f"bản {version_number}"
+        version_dir = case_export_dir / version_name
+
         try:
-            result = generator.generate(values, values.get("company_name", "ho_so_thanh_lap"))
+            result = generator.generate(
+                values,
+                values.get("company_name", "ho_so_thanh_lap"),
+                output_dir=version_dir,
+            )
         except Exception as exc:
             QMessageBox.critical(self, "Lỗi xuất Word", f"Không thể tạo hồ sơ:\n{exc}")
             return
@@ -1446,19 +1470,29 @@ class BusinessRegistrationWorkspace(QWidget):
         self.last_export_dir = result.output_dir
         exported_at = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
         generated_documents = [document.output_path.name for document in result.generated]
-        export_versions = self._next_export_versions(str(result.output_dir), exported_at, generated_documents)
+        export_versions = self._next_export_versions(
+            str(case_export_dir),
+            str(result.output_dir),
+            exported_at,
+            generated_documents,
+            version_name,
+        )
         saved_case = self.build_case_summary(
             status="Đã tạo hồ sơ",
             condition="Đủ dữ liệu",
             warning="Còn placeholder chưa điền trong file Word" if result.unresolved else None,
-            export_dir=str(result.output_dir),
+            export_dir=str(case_export_dir),
             exported_at=exported_at,
             generated_documents=generated_documents,
             export_versions=export_versions,
         )
         self.on_save(saved_case)
         self.case = saved_case
-        message = [f"Đã tạo {len(result.generated)} file DOCX.", f"Thư mục: {result.output_dir}"]
+        message = [
+            f"Đã tạo {len(result.generated)} file DOCX.",
+            f"Thư mục hồ sơ: {case_export_dir}",
+            f"Phiên bản: {version_name}",
+        ]
         if result.skipped:
             message.append("\nFile chưa xử lý:")
             message.extend(f"- {item}" for item in result.skipped)
@@ -1473,7 +1507,11 @@ class BusinessRegistrationWorkspace(QWidget):
         values = self.form_values()
         template_dir, export_root = self._template_and_export_dirs()
         generator = DocxTemplateGenerator(template_dir=template_dir, export_root=export_root)
-        template_issues = generator.validate_templates(values)
+        try:
+            template_issues = generator.validate_templates(values)
+        except Exception as exc:
+            QMessageBox.critical(self, "Lỗi kiểm tra mẫu Word", f"Không thể kiểm tra mẫu Word:\n{exc}")
+            return
         if not template_issues:
             QMessageBox.information(self, "Mẫu Word hợp lệ", "Tool đã hiểu toàn bộ placeholder trong 5 file mẫu.")
             return
@@ -1483,7 +1521,7 @@ class BusinessRegistrationWorkspace(QWidget):
         project_root = Path(__file__).resolve().parents[4]
         return (
             project_root / "assets" / "templates" / "word" / "business_registration",
-            project_root / "exports",
+            self.selected_export_root or project_root / "exports",
         )
 
     def _format_template_issues(self, issues: dict[str, list[str]]) -> str:
@@ -1495,27 +1533,80 @@ class BusinessRegistrationWorkspace(QWidget):
                 lines.append(f"  - ... và {len(placeholders) - 20} placeholder khác")
         return "\n".join(lines)
 
-    def _next_export_versions(self, export_dir: str, exported_at: str, documents: list[str]) -> list[dict[str, object]]:
+    def _case_export_dir(self, export_root: Path, values: dict[str, str]) -> Path:
+        folder_name = self._case_export_folder_name(values)
+        return export_root / folder_name
+
+    def _case_export_folder_name(self, values: dict[str, str]) -> str:
+        day = values.get("document_day", "").strip().zfill(2)
+        month = values.get("document_month", "").strip().zfill(2)
+        year = values.get("document_year", "").strip()
+        if not (day.strip("0") and month.strip("0") and year):
+            now = datetime.now()
+            day = f"{now.day:02d}"
+            month = f"{now.month:02d}"
+            year = str(now.year)
+        company_name = (values.get("company_name", "") or "HO SO THANH LAP").strip().upper()
+        return self._safe_export_folder_name(f"{day}.{month}.{year}.{company_name}")
+
+    def _safe_export_folder_name(self, value: str) -> str:
+        text = re.sub(r'[<>:"/\\|?*]', " ", value)
+        text = re.sub(r"\s+", " ", text).strip(" .")
+        return text[:160] or "ho_so_thanh_lap"
+
+    def _next_export_version_number(self, case_export_dir: Path) -> int:
+        existing_versions = list(self.case.export_versions) if self.case else []
+        numbers = [len(existing_versions)]
+        if not existing_versions and self.case and self.case.export_dir:
+            numbers.append(1)
+        if case_export_dir.exists():
+            for child in case_export_dir.iterdir():
+                if not child.is_dir():
+                    continue
+                match = re.fullmatch(r"bản\s+(\d+)", child.name.strip(), flags=re.IGNORECASE)
+                if match:
+                    numbers.append(int(match.group(1)))
+        return max(numbers) + 1
+
+    def _next_export_versions(
+        self,
+        case_export_dir: str,
+        version_export_dir: str,
+        exported_at: str,
+        documents: list[str],
+        version_name: str,
+    ) -> list[dict[str, object]]:
         existing_versions = list(self.case.export_versions) if self.case else []
         if not existing_versions and self.case and self.case.export_dir:
             existing_versions.append(
                 {
-                    "name": "Phiên 1",
+                    "name": "bản 1",
                     "export_dir": self.case.export_dir,
                     "exported_at": self.case.exported_at,
                     "documents": self.case.generated_documents,
                 }
             )
-        next_number = len(existing_versions) + 1
         existing_versions.append(
             {
-                "name": f"Phiên {next_number}",
-                "export_dir": export_dir,
+                "name": version_name,
+                "case_export_dir": case_export_dir,
+                "export_dir": version_export_dir,
                 "exported_at": exported_at,
                 "documents": documents,
             }
         )
         return existing_versions
+
+    def _choose_export_root(self) -> None:
+        _, default_export_root = self._template_and_export_dirs()
+        selected = QFileDialog.getExistingDirectory(
+            self,
+            "Chọn nơi lưu hồ sơ Word",
+            str(default_export_root),
+        )
+        if selected:
+            self.selected_export_root = Path(selected)
+            QMessageBox.information(self, "Đã chọn nơi lưu", f"Hồ sơ sẽ được lưu tại:\n{self.selected_export_root}")
 
     def _open_last_export_dir(self) -> None:
         if not self.last_export_dir or not self.last_export_dir.exists():
@@ -1665,11 +1756,21 @@ class BusinessRegistrationWorkspace(QWidget):
         values["company_type_label"] = self._case_type_for_members(member_count)
         if member_count == 1:
             values["member_capital_ratio"] = "100%"
+        elif capital_digits:
+            equal_amount = int(capital_digits) // member_count
+            equal_ratio = round(100 / member_count, 2)
+            values["member_capital_ratio"] = values.get("member_capital_ratio") or f"{equal_ratio:g}%"
+            if self._money_digits(values.get("member_capital_amount", "")) == capital_digits:
+                values["member_capital_amount"] = self._format_money(str(equal_amount))
         for index in range(1, member_count + 1):
-            values.setdefault(f"member_{index}_capital_amount", values.get("charter_capital_number", ""))
+            default_amount = values.get("charter_capital_number", "")
+            default_ratio = "100%" if member_count == 1 else values.get("member_capital_ratio", "")
+            if member_count > 1 and capital_digits:
+                default_amount = values.get("member_capital_amount", default_amount)
+            values.setdefault(f"member_{index}_capital_amount", default_amount)
             values.setdefault(
                 f"member_{index}_capital_ratio",
-                "100%" if member_count == 1 else values.get("member_capital_ratio", ""),
+                default_ratio,
             )
         values["business_lines"] = self._business_lines_summary(values)
 

@@ -1,0 +1,201 @@
+﻿{
+    "version":  1,
+    "templates":  {
+                      "1. Giấy đề nghị thành lập doanh nghiệp.docx":  {
+                                                                          "word/document.xml":  {
+                                                                                                    "placeholder_fields":  {
+                                                                                                                               "0":  "document_place_date",
+                                                                                                                               "1":  "business_registration_office",
+                                                                                                                               "2":  "applicant_full_name",
+                                                                                                                               "3":  "applicant_date_of_birth",
+                                                                                                                               "4":  "applicant_gender",
+                                                                                                                               "5":  "applicant_id_number",
+                                                                                                                               "6":  "applicant_address_detail",
+                                                                                                                               "7":  "applicant_ward",
+                                                                                                                               "8":  "applicant_province",
+                                                                                                                               "9":  "company_name",
+                                                                                                                               "10":  "company_address_detail",
+                                                                                                                               "11":  "company_ward",
+                                                                                                                               "12":  "company_province",
+                                                                                                                               "13":  "company_phone",
+                                                                                                                               "28":  "legal_representative_full_name",
+                                                                                                                               "29":  "legal_representative_date_of_birth",
+                                                                                                                               "30":  "legal_representative_gender",
+                                                                                                                               "31":  "legal_representative_id_number",
+                                                                                                                               "32":  "legal_representative_address_detail",
+                                                                                                                               "33":  "legal_representative_ward",
+                                                                                                                               "34":  "legal_representative_province",
+                                                                                                                               "35":  "legal_representative_nationality",
+                                                                                                                               "36":  "charter_capital_number_vnd",
+                                                                                                                               "37":  "charter_capital_text",
+                                                                                                                               "38":  "capital_zero",
+                                                                                                                               "39":  "capital_zero",
+                                                                                                                               "40":  "charter_capital_number",
+                                                                                                                               "41":  "capital_zero",
+                                                                                                                               "42":  "capital_zero",
+                                                                                                                               "43":  "capital_zero",
+                                                                                                                               "44":  "capital_zero",
+                                                                                                                               "45":  "charter_capital_number",
+                                                                                                                               "46":  "capital_total_ratio_number",
+                                                                                                                               "47":  "charter_capital_number",
+                                                                                                                               "48":  "capital_total_ratio_number",
+                                                                                                                               "49":  "capital_zero",
+                                                                                                                               "50":  "capital_zero",
+                                                                                                                               "51":  "capital_zero",
+                                                                                                                               "52":  "capital_zero",
+                                                                                                                               "53":  "capital_zero",
+                                                                                                                               "54":  "capital_zero",
+                                                                                                                               "55":  "capital_zero",
+                                                                                                                               "56":  "capital_zero",
+                                                                                                                               "57":  "capital_zero",
+                                                                                                                               "58":  "capital_zero",
+                                                                                                                               "59":  "charter_capital_number",
+                                                                                                                               "60":  "capital_total_ratio_number",
+                                                                                                                               "61":  "legal_representative_full_name",
+                                                                                                                               "62":  "legal_representative_date_of_birth",
+                                                                                                                               "63":  "legal_representative_gender",
+                                                                                                                               "64":  "legal_representative_id_number",
+                                                                                                                               "65":  "legal_representative_address_detail",
+                                                                                                                               "66":  "legal_representative_ward",
+                                                                                                                               "67":  "legal_representative_province",
+                                                                                                                               "68":  "legal_representative_nationality",
+                                                                                                                               "69":  "director_full_name",
+                                                                                                                               "70":  "director_date_of_birth",
+                                                                                                                               "71":  "director_gender",
+                                                                                                                               "72":  "director_id_number",
+                                                                                                                               "73":  "director_phone",
+                                                                                                                               "74":  "legal_representative_full_name"
+                                                                                                                           }
+                                                                                                }
+                                                                      },
+                      "2. Điều lệ Công ty.docx":  {
+                                                      "word/document.xml":  {
+                                                                                "placeholder_fields":  {
+                                                                                                           "0":  "company_name",
+                                                                                                           "1":  "company_name",
+                                                                                                           "2":  "company_address",
+                                                                                                           "3":  "company_phone",
+                                                                                                           "9":  "legal_representative_full_name",
+                                                                                                           "10":  "legal_representative_date_of_birth",
+                                                                                                           "11":  "legal_representative_gender",
+                                                                                                           "12":  "legal_representative_id_number",
+                                                                                                           "13":  "legal_representative_permanent_address",
+                                                                                                           "14":  "legal_representative_contact_address",
+                                                                                                           "15":  "charter_capital_full_text",
+                                                                                                           "16":  "asset_capital_text",
+                                                                                                           "17":  "cash_capital_text",
+                                                                                                           "18":  "document_date_only",
+                                                                                                           "19":  "legal_representative_full_name",
+                                                                                                           "20":  "company_english_name",
+                                                                                                           "21":  "company_short_name"
+                                                                                                       }
+                                                                            }
+                                                  },
+                      "3. Danh sách chủ sở hữu hưởng lợi.docx":  {
+                                                                     "word/document.xml":  {
+                                                                                               "placeholder_fields":  {
+                                                                                                                          "0":  "beneficial_owner_full_name",
+                                                                                                                          "1":  "beneficial_owner_date_of_birth",
+                                                                                                                          "2":  "beneficial_owner_gender",
+                                                                                                                          "3":  "beneficial_owner_issue_date",
+                                                                                                                          "4":  "beneficial_owner_address",
+                                                                                                                          "5":  "document_place",
+                                                                                                                          "6":  "document_day_with_trailing_space",
+                                                                                                                          "7":  "document_month",
+                                                                                                                          "8":  "document_year"
+                                                                                                                      },
+                                                                                               "plain_replacements":  [
+                                                                                                                          {
+                                                                                                                              "id":  "beneficial_owner.id_number",
+                                                                                                                              "text":  "0987654323",
+                                                                                                                              "field":  "beneficial_owner_id_number"
+                                                                                                                          },
+                                                                                                                          {
+                                                                                                                              "id":  "signature.legal_representative",
+                                                                                                                              "text":  "THOMASEDITON",
+                                                                                                                              "field":  "legal_representative_full_name"
+                                                                                                                          },
+                                                                                                                           {
+                                                                                                                               "id":  "signature.legal_representative.alt",
+                                                                                                                               "text":  "THOMASEDITION",
+                                                                                                                               "field":  "legal_representative_full_name"
+                                                                                                                           },
+                                                                                                                           {
+                                                                                                                               "id":  "signature.legal_representative.spaced",
+                                                                                                                               "text":  "THOMAS EDITON",
+                                                                                                                               "field":  "legal_representative_full_name"
+                                                                                                                           },
+                                                                                                                           {
+                                                                                                                               "id":  "signature.legal_representative.spaced_alt",
+                                                                                                                               "text":  "THOMAS EDITION",
+                                                                                                                               "field":  "legal_representative_full_name"
+                                                                                                                           }
+                                                                                                                       ]
+                                                                                           }
+                                                                 },
+                      "4. Giấy ủy quyền.docx":  {
+                                                    "word/document.xml":  {
+                                                                              "placeholder_fields":  {
+                                                                                                         "0":  "document_place_date",
+                                                                                                         "1":  "legal_representative_full_name",
+                                                                                                         "2":  "legal_representative_date_of_birth",
+                                                                                                         "3":  "legal_representative_gender",
+                                                                                                         "4":  "legal_representative_id_number",
+                                                                                                         "5":  "legal_representative_contact_address",
+                                                                                                         "6":  "authorized_person_full_name",
+                                                                                                         "7":  "authorized_person_date_of_birth",
+                                                                                                         "8":  "authorized_person_gender",
+                                                                                                         "9":  "authorized_person_id_number",
+                                                                                                         "10":  "authorized_person_contact_address",
+                                                                                                         "11":  "authorized_person_phone",
+                                                                                                         "12":  "authorized_person_email",
+                                                                                                         "13":  "business_registration_office",
+                                                                                                         "14":  "business_registration_office",
+                                                                                                         "15":  "business_registration_office"
+                                                                                                     },
+                                                                              "plain_replacements":  [
+                                                                                                         {
+                                                                                                             "id":  "authorizer.company_name",
+                                                                                                             "text":  "CÔNGTYTNHHTHƯƠNGMẠIVÀDỊCHVỤEDTION",
+                                                                                                             "field":  "company_name"
+                                                                                                         },
+                                                                                                         {
+                                                                                                             "id":  "authorizer.company_name.alt",
+                                                                                                             "text":  "CÔNGTYTNHHTHƯƠNGMẠIVÀDỊCHVỤEDITION",
+                                                                                                             "field":  "company_name"
+                                                                                                         },
+                                                                                                         {
+                                                                                                             "id":  "authorizer.company_name.spaced",
+                                                                                                             "text":  "CÔNG TY TNHH THƯƠNG MẠI VÀ DỊCH VỤ EDTION",
+                                                                                                             "field":  "company_name"
+                                                                                                         },
+                                                                                                         {
+                                                                                                             "id":  "authorizer.company_name.spaced_alt",
+                                                                                                             "text":  "CÔNG TY TNHH THƯƠNG MẠI VÀ DỊCH VỤ EDITION",
+                                                                                                             "field":  "company_name"
+                                                                                                         },
+                                                                                                         {
+                                                                                                             "id":  "signature.authorizer",
+                                                                                                             "text":  "THOMASEDITION",
+                                                                                                             "field":  "legal_representative_full_name"
+                                                                                                         },
+                                                                                                         {
+                                                                                                             "id":  "signature.authorizer.alt",
+                                                                                                             "text":  "THOMASEDITON",
+                                                                                                             "field":  "legal_representative_full_name"
+                                                                                                         },
+                                                                                                         {
+                                                                                                             "id":  "signature.authorizer.spaced",
+                                                                                                             "text":  "THOMAS EDITION",
+                                                                                                             "field":  "legal_representative_full_name"
+                                                                                                         },
+                                                                                                         {
+                                                                                                             "id":  "signature.authorizer.spaced_alt",
+                                                                                                             "text":  "THOMAS EDITON",
+                                                                                                             "field":  "legal_representative_full_name"
+                                                                                                         }
+                                                                                                     ]
+                                                                          }
+                                                }
+                  }
+}

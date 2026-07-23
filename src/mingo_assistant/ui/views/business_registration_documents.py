@@ -5,6 +5,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QCheckBox,
     QFrame,
     QGridLayout,
@@ -27,6 +28,8 @@ class BusinessRegistrationDocumentsView(QWidget):
         self.on_back = on_back
         self.on_edit = on_edit
         self.version_contents: list[QWidget] = []
+        self.version_button_group = QButtonGroup(self)
+        self.version_button_group.setExclusive(True)
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -126,25 +129,25 @@ class BusinessRegistrationDocumentsView(QWidget):
 
         for version_index, version in enumerate(versions, start=1):
             files = version["files"]
-            toggle = QCheckBox(f"{version['name']} - {len(files)} file Word - {version['exported_at'] or 'chưa có thời gian'}")
+            toggle = QCheckBox(
+                f"{version['name']} - {len(files)} file Word - {version['exported_at'] or 'chưa có thời gian'}"
+            )
             toggle.setObjectName("ResultText")
-            toggle.setChecked(version_index == len(versions))
             content = QWidget()
             version_layout = QVBoxLayout(content)
             version_layout.setContentsMargins(0, 0, 0, 0)
             version_layout.setSpacing(12)
             for index, path in enumerate(files, start=1):
                 version_layout.addWidget(self._build_document_row(index, path, str(version["exported_at"])))
-            content.setVisible(toggle.isChecked())
-            toggle.stateChanged.connect(lambda state, selected=content: selected.setVisible(state == Qt.Checked))
+            content.setVisible(False)
+            toggle.toggled.connect(lambda checked, selected=content: selected.setVisible(checked))
+            self.version_button_group.addButton(toggle, version_index)
             self.version_contents.append(content)
             layout.addWidget(toggle)
             layout.addWidget(content)
+            if version_index == len(versions):
+                toggle.setChecked(True)
         return wrapper
-
-    def _toggle_version_content(self, state: int) -> None:
-        for content in self.version_contents:
-            content.setVisible(state == Qt.Checked)
 
     def _build_document_row(self, index: int, path: Path, exported_at: str) -> QWidget:
         row = QFrame()
@@ -185,11 +188,11 @@ class BusinessRegistrationDocumentsView(QWidget):
         return row
 
     def _versions(self) -> list[dict[str, object]]:
-        raw_versions = self.case.export_versions or []
+        raw_versions = self.case.export_versions or self._scan_versions_from_case_dir()
         if not raw_versions and self.case.export_dir:
             raw_versions = [
                 {
-                    "name": "Phiên 1",
+                    "name": "bản 1",
                     "export_dir": self.case.export_dir,
                     "exported_at": self.case.exported_at,
                     "documents": self.case.generated_documents,
@@ -202,22 +205,82 @@ class BusinessRegistrationDocumentsView(QWidget):
             if files:
                 versions.append(
                     {
-                        "name": str(version.get("name") or f"Phiên {index}"),
+                        "name": str(version.get("name") or f"bản {index}"),
                         "exported_at": str(version.get("exported_at", "")),
+                        "export_dir": str(export_dir or ""),
                         "files": files,
                     }
                 )
+        if not versions and self.case.export_versions:
+            scanned_versions = self._scan_versions_from_case_dir()
+            for index, version in enumerate(scanned_versions, start=1):
+                export_dir = Path(str(version.get("export_dir", ""))) if version.get("export_dir") else None
+                files = self._document_paths(export_dir, [])
+                if files:
+                    versions.append(
+                        {
+                            "name": str(version.get("name") or f"bản {index}"),
+                            "exported_at": str(version.get("exported_at", "")),
+                            "export_dir": str(export_dir or ""),
+                            "files": files,
+                        }
+                    )
         return versions
+
+    def _scan_versions_from_case_dir(self) -> list[dict[str, object]]:
+        case_dir = Path(self.case.export_dir) if self.case.export_dir else None
+        if not case_dir or not case_dir.exists():
+            return []
+        version_dirs = [
+            child
+            for child in case_dir.iterdir()
+            if child.is_dir() and child.name.lower().startswith("bản ")
+        ]
+        if version_dirs:
+            return [
+                {
+                    "name": version_dir.name,
+                    "export_dir": str(version_dir),
+                    "exported_at": self.case.exported_at,
+                    "documents": [],
+                }
+                for version_dir in sorted(version_dirs, key=self._version_sort_key)
+            ]
+        return []
+
+    def _version_sort_key(self, path: Path) -> tuple[int, str]:
+        suffix = path.name.lower().replace("bản", "", 1).strip()
+        return (int(suffix) if suffix.isdigit() else 9999, path.name)
 
     def _document_paths(self, export_dir: Path | None, generated_documents: list[str]) -> list[Path]:
         if not export_dir or not export_dir.exists():
             return []
 
         if generated_documents:
-            paths = [export_dir / file_name for file_name in generated_documents]
+            paths: list[Path] = []
+            for file_name in generated_documents:
+                candidate = Path(file_name)
+                if candidate.is_absolute():
+                    paths.append(candidate)
+                    continue
+                paths.append(export_dir / file_name)
+                if not (export_dir / file_name).exists():
+                    matches = sorted(export_dir.rglob(Path(file_name).name))
+                    paths.extend(matches)
         else:
             paths = sorted(export_dir.glob("*.docx"))
-        return [path for path in paths if path.exists()]
+            if not paths:
+                paths = sorted(export_dir.rglob("*.docx"))
+        unique_paths: list[Path] = []
+        seen: set[str] = set()
+        for path in paths:
+            if not path.exists() or path.suffix.lower() != ".docx":
+                continue
+            key = str(path.resolve())
+            if key not in seen:
+                unique_paths.append(path)
+                seen.add(key)
+        return unique_paths
 
     def _open_file(self, path: Path) -> None:
         if not path.exists():
