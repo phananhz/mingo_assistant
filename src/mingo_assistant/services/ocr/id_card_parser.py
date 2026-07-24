@@ -198,8 +198,7 @@ class IdCardParser:
     def _find_address(self, lines: list[str], keywords: list[str]) -> str:
         folded_keywords = [self._fold(keyword) for keyword in keywords]
         for index, line in enumerate(lines):
-            folded = self._fold(line)
-            if any(keyword in folded for keyword in folded_keywords) or self._is_address_marker_only(line):
+            if self._is_matching_address_marker(lines, index, folded_keywords):
                 parts: list[str] = []
                 if ":" in line:
                     value = line.split(":", 1)[1].strip()
@@ -212,10 +211,10 @@ class IdCardParser:
                 if tail:
                     parts.append(tail)
                 for next_line in lines[index + 1 : index + 6]:
-                    if self._is_new_field(next_line):
-                        break
-                    if self._is_address_marker_only(next_line) or self._is_label_or_document_noise(next_line):
+                    if self._is_current_address_marker(next_line, folded_keywords) or self._is_label_or_document_noise(next_line):
                         continue
+                    if self._is_new_field(next_line) or self._is_other_address_marker(next_line, folded_keywords):
+                        break
                     parts.append(next_line)
                 return self._dedupe_address_parts(parts)
         return ""
@@ -275,6 +274,36 @@ class IdCardParser:
         ]
         return not any(word in folded for word in blocked)
 
+    def _is_matching_address_marker(self, lines: list[str], index: int, folded_keywords: list[str]) -> bool:
+        line = lines[index]
+        if self._is_current_address_marker(line, folded_keywords):
+            return True
+        folded = self._fold(line).strip(" :")
+        if folded != "noi" or not self._expects_residence_marker(folded_keywords):
+            return False
+        nearby = " ".join(lines[index : index + 3])
+        return self._is_current_address_marker(nearby, folded_keywords)
+
+    def _is_current_address_marker(self, line: str, folded_keywords: list[str]) -> bool:
+        folded = self._fold(line)
+        return any(keyword in folded for keyword in folded_keywords)
+
+    def _is_other_address_marker(self, line: str, folded_keywords: list[str]) -> bool:
+        folded = self._fold(line)
+        has_residence = any(marker in folded for marker in ["thuong tru", "residence"])
+        has_origin = any(marker in folded for marker in ["que quan", "origin", "ongin"])
+        if self._expects_residence_marker(folded_keywords):
+            return has_origin
+        if self._expects_origin_marker(folded_keywords):
+            return has_residence
+        return False
+
+    def _expects_residence_marker(self, folded_keywords: list[str]) -> bool:
+        return any(keyword in {"thuong tru", "residence", "place of residence"} for keyword in folded_keywords)
+
+    def _expects_origin_marker(self, folded_keywords: list[str]) -> bool:
+        return any(keyword in {"que quan", "origin", "ongin", "place of origin", "nguyen quan"} for keyword in folded_keywords)
+
     def _is_address_marker_only(self, line: str) -> bool:
         folded = self._fold(line).strip(" :")
         markers = {
@@ -296,11 +325,12 @@ class IdCardParser:
             r"que\s+quan",
             r"qu[eê]\s+qu[aá]n",
         ]
-        tail = ""
+        latest_end = -1
         for pattern in patterns:
             matches = list(re.finditer(pattern, line, flags=re.IGNORECASE))
             if matches:
-                tail = line[matches[-1].end() :].strip(" .:-I|/")
+                latest_end = max(latest_end, matches[-1].end())
+        tail = line[latest_end:].strip(" .:-I|/") if latest_end >= 0 else ""
         if tail and not self._is_label_or_document_noise(tail):
             return tail
         return ""
