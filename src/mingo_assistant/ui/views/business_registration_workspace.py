@@ -221,6 +221,7 @@ class BusinessRegistrationWorkspace(QWidget):
         self.id_parser = IdCardParser()
         self.address_parser = AddressParser()
         self.fields: dict[str, QLineEdit | QTextEdit] = {}
+        self.ocr_card_fields: dict[str, QLineEdit | QTextEdit] = {}
         self.business_line_rows: list[BusinessLineRow] = []
         self.business_line_table: QFrame | None = None
         self.form_sections: dict[str, QWidget] = {}
@@ -405,10 +406,51 @@ class BusinessRegistrationWorkspace(QWidget):
         self.raw_ocr_text.setMinimumHeight(110)
         layout.addWidget(self.raw_ocr_text)
 
+        layout.addWidget(self._build_cccd_result_section())
+
         parse_button = QPushButton("Xử lý văn bản OCR vào form")
         parse_button.setObjectName("GhostButton")
         parse_button.clicked.connect(self._parse_ocr_text)
         layout.addWidget(parse_button, 0, Qt.AlignRight)
+        return group
+
+    def _build_cccd_result_section(self) -> QWidget:
+        group = QGroupBox("Thông tin CCCD nhận diện")
+        group.setObjectName("CccdResultCard")
+        layout = QGridLayout(group)
+        layout.setHorizontalSpacing(14)
+        layout.setVerticalSpacing(8)
+
+        fields: list[tuple[str, str, bool]] = [
+            ("legal_representative_full_name", "Họ và tên", False),
+            ("legal_representative_id_number", "Số CCCD", False),
+            ("legal_representative_date_of_birth", "Ngày sinh", False),
+            ("legal_representative_gender", "Giới tính", False),
+            ("legal_representative_nationality", "Quốc tịch", False),
+            ("legal_representative_expiry_date", "Có giá trị đến", False),
+            ("legal_representative_place_of_origin", "Quê quán", True),
+            ("legal_representative_permanent_address", "Nơi thường trú", True),
+            ("legal_representative_issue_date", "Ngày cấp", False),
+        ]
+        for index, (key, label_text, multiline) in enumerate(fields):
+            row = index // 2
+            column = (index % 2) * 2
+            label = QLabel(label_text)
+            label.setObjectName("FilterLabel")
+            if multiline:
+                field: QLineEdit | QTextEdit = QTextEdit()
+                field.setFixedHeight(58)
+            else:
+                field = QLineEdit()
+            field.setPlaceholderText(label_text)
+            self.ocr_card_fields[key] = field
+            layout.addWidget(label, row, column)
+            layout.addWidget(field, row, column + 1)
+
+        apply_button = QPushButton("Đưa thông tin CCCD vào form")
+        apply_button.setObjectName("PrimaryButton")
+        apply_button.clicked.connect(self._apply_cccd_result_to_form)
+        layout.addWidget(apply_button, (len(fields) + 1) // 2, 0, 1, 4, Qt.AlignRight)
         return group
 
     def _build_address_section(self) -> QWidget:
@@ -1159,6 +1201,7 @@ class BusinessRegistrationWorkspace(QWidget):
         self.person_role_input.blockSignals(True)
         self.person_role_input.setCurrentIndex(role_index)
         self.person_role_input.blockSignals(False)
+        self._update_cccd_result_fields(person.data)
 
     def _role_index(self, role: str) -> int:
         for index, (role_key, _) in enumerate(PERSON_ROLES):
@@ -1298,6 +1341,42 @@ class BusinessRegistrationWorkspace(QWidget):
         seconds = int(remaining % 60)
         return f"{minutes} phút {seconds} giây"
 
+    def _update_cccd_result_fields(self, values: dict[str, str]) -> None:
+        for key, field in self.ocr_card_fields.items():
+            value = values.get(key, "")
+            field.blockSignals(True)
+            if isinstance(field, QTextEdit):
+                field.setPlainText(value)
+            else:
+                field.setText(value)
+            field.blockSignals(False)
+
+    def _cccd_result_values(self) -> dict[str, str]:
+        values: dict[str, str] = {}
+        for key, field in self.ocr_card_fields.items():
+            if isinstance(field, QTextEdit):
+                values[key] = field.toPlainText().strip()
+            else:
+                values[key] = field.text().strip()
+        return values
+
+    def _apply_cccd_result_to_form(self) -> None:
+        values = self._cccd_result_values()
+        if not any(values.values()):
+            QMessageBox.warning(self, "Chưa có dữ liệu CCCD", "Bạn cần OCR ảnh hoặc nhập thông tin CCCD trước.")
+            return
+        self._apply_cccd_values_to_current_person(values)
+
+    def _apply_cccd_values_to_current_person(self, card_values: dict[str, str]) -> None:
+        person = self.ocr_people[self.current_person_index]
+        person.data = {key: value for key, value in card_values.items() if value}
+        full_name = card_values.get("legal_representative_full_name", "")
+        if full_name:
+            person.name = f"Người {self.current_person_index + 1} - {full_name}"
+            self._refresh_people_buttons()
+        self._apply_person_data_to_role(card_values, person.role, self.current_person_index + 1, overwrite=True)
+        self._refresh_preview()
+
     def _parse_ocr_text(self) -> None:
         text = self.raw_ocr_text.toPlainText().strip()
         if not text:
@@ -1306,18 +1385,14 @@ class BusinessRegistrationWorkspace(QWidget):
 
         card = self.id_parser.parse(text)
         card_values = card.to_form_values()
-        person = self.ocr_people[self.current_person_index]
-        person.data = card_values
-        if card.full_name:
-            person.name = f"Người {self.current_person_index + 1} - {card.full_name}"
-            self._refresh_people_buttons()
-        self._apply_person_data_to_role(card_values, person.role, self.current_person_index + 1)
+        self._update_cccd_result_fields(card_values)
+        self._apply_cccd_values_to_current_person(card_values)
         self._parse_registration_office_from_text(text)
         if card.warnings:
             QMessageBox.warning(self, "Cảnh báo dữ liệu CCCD", "\n".join(card.warnings))
         self._refresh_preview()
 
-    def _apply_person_data_to_role(self, card_values: dict[str, str], role: str, person_number: int) -> None:
+    def _apply_person_data_to_role(self, card_values: dict[str, str], role: str, person_number: int, overwrite: bool = False) -> None:
         role_prefix_map = {
             "legal_representative": "legal_representative",
             "applicant": "applicant",
@@ -1353,19 +1428,32 @@ class BusinessRegistrationWorkspace(QWidget):
                 continue
             if role == "applicant" and suffix == "permanent_address":
                 parsed = self.address_parser.parse(value)
-                self._set_field_if_empty("applicant_address_detail", self._address_detail_from_result(parsed))
-                self._set_field_if_empty("applicant_ward", parsed.ward)
-                self._set_field_if_empty("applicant_province", parsed.province)
+                if overwrite:
+                    self._set_field("applicant_address_detail", self._address_detail_from_result(parsed))
+                    self._set_field("applicant_ward", parsed.ward)
+                    self._set_field("applicant_province", parsed.province)
+                else:
+                    self._set_field_if_empty("applicant_address_detail", self._address_detail_from_result(parsed))
+                    self._set_field_if_empty("applicant_ward", parsed.ward)
+                    self._set_field_if_empty("applicant_province", parsed.province)
                 continue
             target_key = f"{prefix}_{target_suffixes[suffix]}"
-            self._set_field_if_empty(target_key, value)
+            if overwrite:
+                self._set_field(target_key, value)
+            else:
+                self._set_field_if_empty(target_key, value)
 
         if role == "legal_representative":
+            if card_values.get("legal_representative_permanent_address"):
+                self._sync_address_parts("legal_representative_permanent_address")
             self._sync_director_from_legal_representative()
         elif role == "authorized_person":
             address = card_values.get("legal_representative_permanent_address", "")
             if address:
-                self._set_field_if_empty("authorized_person_contact_address", address)
+                if overwrite:
+                    self._set_field("authorized_person_contact_address", address)
+                else:
+                    self._set_field_if_empty("authorized_person_contact_address", address)
 
     def _parse_registration_office_from_text(self, text: str) -> None:
         office_match = re.search(r"(Phòng\s+Đăng\s+ký\s+kinh\s+doanh[^\n\r,.]*)", text, flags=re.IGNORECASE)

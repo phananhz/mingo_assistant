@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 from docx import Document
-from docx.shared import Inches
+from docx.shared import Inches, Pt
 from docx.text.paragraph import Paragraph
 from lxml import etree
 
@@ -183,8 +183,10 @@ class DocxTemplateGenerator:
         self._replace_case_type_text(document, values)
         self._replace_business_lines_tables(document, values)
         self._replace_asset_contribution_tables(document, values)
+        self._fix_registration_office_lines(document, values)
         self._fix_contact_lines(document, values)
         self._apply_bold_uppercase_formatting(document, values)
+        self._fix_signature_font_sizes(document, docx_path.name, values)
         document.save(docx_path)
 
     def _replace_case_type_text(self, document: Document, values: dict[str, str]) -> None:
@@ -416,24 +418,29 @@ class DocxTemplateGenerator:
         return None
 
     def _replace_asset_contribution_tables(self, document: Document, values: dict[str, str]) -> None:
-        assets = self._asset_contributions(values)
         for table in self._iter_tables(document):
             if not table.rows:
                 continue
             header_index = self._asset_header_index(table)
             if header_index is None or len(table.rows[header_index].cells) < 4:
                 continue
-            template_index = min(header_index + 1, len(table.rows) - 1)
-            template_row = deepcopy(table.rows[template_index]._tr)
-            for row in list(table.rows[header_index + 1 :]):
-                table._tbl.remove(row._tr)
-            for index, asset in enumerate(assets, start=1):
-                table._tbl.append(deepcopy(template_row))
-                row = table.rows[-1]
+            asset_rows, total_row = self._asset_table_rows(table, header_index)
+            if not asset_rows:
+                continue
+            assets = self._asset_template_contributions(values, [row.cells[1].text for row in asset_rows])
+            for index, row in enumerate(asset_rows, start=1):
+                asset = assets[index - 1]
                 self._set_cell_text(row.cells[0], str(index))
                 self._set_cell_text(row.cells[1], asset["name"])
                 self._set_cell_text(row.cells[2], asset["amount"])
                 self._set_cell_text(row.cells[3], asset["ratio"])
+            if total_row is not None:
+                total_label_left = " ".join(total_row.cells[0].text.split()) or "Tổng số"
+                total_label_right = " ".join(total_row.cells[1].text.split()) or "Tổng số"
+                self._set_cell_text(total_row.cells[0], total_label_left)
+                self._set_cell_text(total_row.cells[1], total_label_right)
+                self._set_cell_text(total_row.cells[2], self._asset_total_amount_text(values, assets))
+                self._set_cell_text(total_row.cells[3], self._asset_total_ratio_text(values, assets))
 
     def _asset_header_index(self, table) -> int | None:
         for index, row in enumerate(table.rows[:3]):
@@ -468,6 +475,81 @@ class DocxTemplateGenerator:
                 "ratio": "100",
             }
         ]
+
+    def _asset_table_rows(self, table, header_index: int):
+        body_rows = list(table.rows[header_index + 1 :])
+        if not body_rows:
+            return [], None
+        asset_rows = []
+        total_row = None
+        for row in body_rows:
+            folded = self._fold(" ".join(cell.text for cell in row.cells[:2]))
+            if "tong so" in folded:
+                total_row = row
+                continue
+            asset_rows.append(row)
+        return asset_rows, total_row
+
+    def _asset_template_contributions(self, values: dict[str, str], default_names: list[str]) -> list[dict[str, str]]:
+        total = self._money_number(values.get("charter_capital_number", ""))
+        manual_assets = self._has_manual_asset_contributions(values)
+        assets: list[dict[str, str]] = []
+        for index, default_name in enumerate(default_names, start=1):
+            name = str(values.get(f"asset_contribution_{index}_name", "") or "").strip()
+            amount = str(values.get(f"asset_contribution_{index}_amount", "") or "").strip()
+            ratio = str(values.get(f"asset_contribution_{index}_ratio", "") or "").strip()
+            if not name:
+                name = " ".join(str(default_name or "").split())
+            if not amount:
+                amount = str(values.get("charter_capital_number", "") or "").strip() if index == 1 and total and not manual_assets else "0"
+            amount_number = self._money_number(amount)
+            if not ratio and total:
+                if amount_number:
+                    ratio = f"{round(amount_number * 100 / total, 2):g}"
+                else:
+                    ratio = "0"
+            elif not ratio:
+                ratio = "100" if index == 1 and amount_number else "0"
+            assets.append(
+                {
+                    "name": name or f"Tai san {index}",
+                    "amount": self._asset_amount_text(amount),
+                    "ratio": ratio.rstrip("% "),
+                }
+            )
+        return assets
+
+    def _has_manual_asset_contributions(self, values: dict[str, str]) -> bool:
+        for index in range(1, 11):
+            if any(
+                str(values.get(f"asset_contribution_{index}_{field}", "") or "").strip()
+                for field in ("name", "amount", "ratio")
+            ):
+                return True
+        return False
+
+    def _asset_amount_text(self, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return "0"
+        text = re.sub(r"\s*(VNĐ|VND|đồng)\s*$", "", text, flags=re.IGNORECASE).strip()
+        return text or "0"
+
+    def _asset_total_amount_text(self, values: dict[str, str], assets: list[dict[str, str]]) -> str:
+        total = str(values.get("charter_capital_number", "") or "").strip()
+        if total:
+            return self._asset_amount_text(total)
+        summed = sum(self._money_number(asset["amount"]) for asset in assets)
+        return self._asset_amount_text(str(summed))
+
+    def _asset_total_ratio_text(self, values: dict[str, str], assets: list[dict[str, str]]) -> str:
+        ratio = str(values.get("capital_total_ratio", "") or "").strip().rstrip("% ")
+        if ratio:
+            return ratio
+        summed = sum(float(asset["ratio"] or "0") for asset in assets if str(asset["ratio"]).strip())
+        if summed:
+            return f"{summed:g}"
+        return "100"
 
     def _money_number(self, value: str) -> int:
         digits = re.sub(r"\D", "", str(value or ""))
@@ -514,12 +596,52 @@ class DocxTemplateGenerator:
             except Exception:
                 pass
 
+    def _fix_registration_office_lines(self, document: Document, values: dict[str, str]) -> None:
+        office = self._registration_office_text(values)
+        if not office:
+            return
+        for paragraph in self._iter_paragraphs(document):
+            folded = self._fold(paragraph.text)
+            if "kinh gui" not in folded or "phong dang ky kinh doanh" not in folded:
+                continue
+            self._replace_paragraph_text(paragraph, f"Kính gửi: {office}")
+            for run in paragraph.runs:
+                run.bold = False
+
+    def _registration_office_text(self, values: dict[str, str]) -> str:
+        office = str(values.get("business_registration_office", "") or "").strip()
+        if not office:
+            return ""
+        return re.sub(r"^\s*Kính gửi\s*:\s*", "", office, flags=re.IGNORECASE).strip()
+
     def _apply_bold_uppercase_formatting(self, document: Document, values: dict[str, str]) -> None:
         terms = self._bold_terms(values)
         if not terms:
             return
         for paragraph in self._iter_paragraphs(document):
             self._bold_terms_in_paragraph(paragraph, terms)
+
+    def _fix_signature_font_sizes(self, document: Document, template_name: str, values: dict[str, str]) -> None:
+        if not template_name.startswith("3. "):
+            return
+        signer = str(values.get("legal_representative_full_name", "") or "").strip().upper()
+        if not signer:
+            return
+        folded_signer = self._fold(signer)
+        for table in self._iter_tables(document):
+            for row in table.rows:
+                for cell in row.cells:
+                    folded_cell = self._fold(cell.text)
+                    if folded_signer not in folded_cell:
+                        continue
+                    if "nguoi dai dien" not in folded_cell and "chu tich" not in folded_cell:
+                        continue
+                    for paragraph in cell.paragraphs:
+                        if folded_signer not in self._fold(paragraph.text):
+                            continue
+                        for run in paragraph.runs:
+                            if run.text:
+                                run.font.size = Pt(13)
 
     def _bold_terms(self, values: dict[str, str]) -> list[str]:
         terms: set[str] = set()

@@ -61,7 +61,7 @@ class IdCardParser:
         lines = [line for line in lines if line]
         joined = "\n".join(lines)
 
-        qr = self._parse_qr_payload(joined)
+        qr = self._parse_qr_payload(raw_text)
         mrz = self._parse_mrz(lines)
 
         card = ExtractedIdCard(raw_text=raw_text)
@@ -72,11 +72,11 @@ class IdCardParser:
             or self._find_first_date(joined)
             or mrz.date_of_birth
         )
-        card.gender = qr.gender or self._find_gender(lines) or mrz.gender
+        card.gender = qr.gender or self._find_gender(lines) or mrz.gender or self._gender_from_id_number(card.id_number)
         card.nationality = self._find_value_after_keywords(lines, ["quoc tich", "nationality"]) or self._find_nationality(joined) or mrz.nationality
         card.full_name = qr.full_name or self._find_name(lines) or mrz.full_name
         card.permanent_address = qr.permanent_address or self._find_address(lines, ["thuong tru", "residence", "place of residence"])
-        card.place_of_origin = self._find_address(lines, ["que quan", "origin", "place of origin", "nguyen quan"])
+        card.place_of_origin = self._find_address(lines, ["que quan", "origin", "ongin", "place of origin", "nguyen quan"])
         card.issue_date = qr.issue_date or self._find_date_after_keywords(lines, ["ngay cap", "date of issue", "date, month, year"])
         card.expiry_date = self._find_expiry(lines) or mrz.expiry_date
         card.unknown_lines = lines
@@ -87,6 +87,7 @@ class IdCardParser:
         return " ".join(line.replace("|", " ").replace(":", ": ").split())
 
     def _fold(self, value: str) -> str:
+        value = value.replace(chr(273), "d").replace(chr(272), "D")
         normalized = unicodedata.normalize("NFKD", value)
         ascii_text = "".join(ch for ch in normalized if not unicodedata.combining(ch))
         return ascii_text.lower()
@@ -116,7 +117,7 @@ class IdCardParser:
     def _find_expiry(self, lines: list[str]) -> str:
         for index, line in enumerate(lines):
             folded = self._fold(line)
-            if "gia tri" in folded or "expiry" in folded:
+            if "gia tri" in folded or "gia tr" in folded or "co gia" in folded or "expiry" in folded:
                 date = self._find_first_date(line)
                 if date:
                     return date
@@ -125,21 +126,36 @@ class IdCardParser:
         return ""
 
     def _find_gender(self, lines: list[str]) -> str:
-        for line in lines:
+        for index, line in enumerate(lines):
             folded = self._fold(line).replace("ü", "u")
             if "sex" not in folded and "gioi tinh" not in folded:
                 continue
-            if re.search(r"\b(nu|female|f)\b", folded):
-                return "Nữ"
-            if re.search(r"\b(nam|male|m)\b", folded):
-                return "Nam"
+            gender = self._gender_from_text(line)
+            if gender:
+                return gender
+            for next_line in lines[index + 1 : index + 3]:
+                if self._is_label_or_document_noise(next_line):
+                    break
+                gender = self._gender_from_text(next_line)
+                if gender:
+                    return gender
+        return ""
 
-        folded_text = self._fold("\n".join(lines)).replace("viet nam", "").replace("ü", "u")
-        if re.search(r"\b(nu|female)\b", folded_text):
+    def _gender_from_text(self, value: str) -> str:
+        folded = self._fold(value).replace("ü", "u")
+        if "viet nam" in folded:
+            return ""
+        if "nữ" in value.lower() or re.search(r"\b(nu|female|f)\b", folded):
             return "Nữ"
-        if re.search(r"\b(nam|male)\b", folded_text):
+        if re.search(r"\b(nam|male|m)\b", folded):
             return "Nam"
         return ""
+
+    def _gender_from_id_number(self, id_number: str) -> str:
+        if not re.fullmatch(r"\d{12}", id_number or ""):
+            return ""
+        gender_code = int(id_number[3])
+        return "Nữ" if gender_code % 2 else "Nam"
 
     def _find_nationality(self, text: str) -> str:
         folded = self._fold(text)
@@ -152,56 +168,112 @@ class IdCardParser:
         for index, line in enumerate(lines):
             folded = self._fold(line)
             if any(keyword in folded for keyword in folded_keywords):
-                if ":" in line:
-                    value = line.split(":", 1)[1].strip()
-                    if value:
-                        return value
-                if index + 1 < len(lines):
-                    return lines[index + 1].strip()
+                value = self._value_on_label_line(line, keywords)
+                if value:
+                    return value
+                for next_line in lines[index + 1 : index + 4]:
+                    if self._is_label_or_document_noise(next_line):
+                        continue
+                    return next_line.strip()
         return ""
 
     def _find_name(self, lines: list[str]) -> str:
         for index, line in enumerate(lines):
             folded = self._fold(line)
             if "ho va ten" in folded or "full name" in folded:
-                if ":" in line:
-                    value = line.split(":", 1)[1].strip()
-                    if value:
-                        return value.upper()
-                if index + 1 < len(lines):
-                    return lines[index + 1].strip().upper()
+                value = self._value_on_label_line(line, ["ho va ten", "full name"])
+                if self._is_name_candidate(value):
+                    return value.upper()
+                for next_line in lines[index + 1 : index + 5]:
+                    if self._is_name_candidate(next_line):
+                        return next_line.strip().upper()
 
         candidates = [
             line
             for line in lines
-            if len(line.split()) >= 2
-            and not re.search(r"\d", line)
-            and not any(word in self._fold(line) for word in ["can cuoc", "identity", "quoc tich", "ngay sinh", "republic"])
+            if self._is_name_candidate(line)
         ]
         return candidates[0].upper() if candidates else ""
 
     def _find_address(self, lines: list[str], keywords: list[str]) -> str:
         folded_keywords = [self._fold(keyword) for keyword in keywords]
         for index, line in enumerate(lines):
-            folded = self._fold(" ".join(lines[index : index + 3]))
-            if any(keyword in folded for keyword in folded_keywords):
+            folded = self._fold(line)
+            if any(keyword in folded for keyword in folded_keywords) or self._is_address_marker_only(line):
                 parts: list[str] = []
                 if ":" in line:
                     value = line.split(":", 1)[1].strip()
                     if value:
                         parts.append(value)
-                marker_block = " ".join(lines[index : index + 3])
-                tail = self._address_tail_from_marker(marker_block)
+                tail = self._address_tail_from_marker(line)
+                if not tail:
+                    marker_block = " ".join(lines[index : index + 3])
+                    tail = self._address_tail_from_marker(marker_block)
                 if tail:
                     parts.append(tail)
                 for next_line in lines[index + 1 : index + 6]:
                     if self._is_new_field(next_line):
                         break
-                    if self._is_address_marker_only(next_line):
+                    if self._is_address_marker_only(next_line) or self._is_label_or_document_noise(next_line):
                         continue
                     parts.append(next_line)
-                return ", ".join(parts).strip(" ,")
+                return self._dedupe_address_parts(parts)
         return ""
+
+    def _value_on_label_line(self, line: str, keywords: list[str]) -> str:
+        if ":" in line:
+            value = line.split(":", 1)[1].strip()
+            if value and not self._is_label_or_document_noise(value):
+                return value
+        value = line
+        replacements = [
+            r"ho\s+va\s+ten",
+            r"ho\s+v[aà]\s+t[eê]n",
+            r"full\s+name",
+            r"qu[oó]c\s+t[iị]ch",
+            r"quoc\s+tich",
+            r"nationality",
+            r"gi[oơ]i\s+t[ií]nh",
+            r"gioi\s+tinh",
+            r"sex",
+        ]
+        for pattern in replacements:
+            value = re.sub(pattern, "", value, flags=re.IGNORECASE)
+        value = value.strip(" :/-")
+        if value and not self._is_label_or_document_noise(value):
+            return value
+        return ""
+
+    def _is_name_candidate(self, line: str) -> bool:
+        clean = line.strip(" :/-")
+        folded = self._fold(clean)
+        if not clean or len(clean.split()) < 2 or re.search(r"\d", clean):
+            return False
+        if self._is_label_or_document_noise(clean):
+            return False
+        blocked = [
+            "can cuoc",
+            "identity",
+            "citizen",
+            "quoc tich",
+            "nationality",
+            "ngay sinh",
+            "birth",
+            "republic",
+            "independence",
+            "freedom",
+            "happiness",
+            "doc lap",
+            "tu do",
+            "hanh phuc",
+            "que quan",
+            "origin",
+            "thuong tru",
+            "residence",
+            "gia tri",
+            "expiry",
+        ]
+        return not any(word in folded for word in blocked)
 
     def _is_address_marker_only(self, line: str) -> bool:
         folded = self._fold(line).strip(" :")
@@ -215,16 +287,22 @@ class IdCardParser:
         return folded in markers
 
     def _address_tail_from_marker(self, line: str) -> str:
-        folded = self._fold(line)
-        markers = ["place of residence", "place of origin", "noi thuong tru", "que quan"]
-        for marker in markers:
-            index = folded.find(marker)
-            if index == -1:
-                continue
-            original_tail_start = min(len(line), index + len(marker))
-            tail = line[original_tail_start:].strip(" .:-I|/")
-            if tail:
-                return tail
+        patterns = [
+            r"place\s+of\s+residence",
+            r"noi\s+thuong\s+tru",
+            r"n[oơ]i\s+th[uư][oờ]ng\s+tr[uú]",
+            r"place\s+of\s+origin",
+            r"place\s+o[ií]\s+on?gin",
+            r"que\s+quan",
+            r"qu[eê]\s+qu[aá]n",
+        ]
+        tail = ""
+        for pattern in patterns:
+            matches = list(re.finditer(pattern, line, flags=re.IGNORECASE))
+            if matches:
+                tail = line[matches[-1].end() :].strip(" .:-I|/")
+        if tail and not self._is_label_or_document_noise(tail):
+            return tail
         return ""
 
     def _is_new_field(self, line: str) -> bool:
@@ -238,9 +316,71 @@ class IdCardParser:
             "sex",
             "gia tri",
             "gia tr",
+            "co gia",
             "expiry",
+            "thuong tru",
+            "residence",
+            "que quan",
+            "origin",
         ]
         return any(marker in folded for marker in markers)
+
+    def _is_label_or_document_noise(self, line: str) -> bool:
+        folded = self._fold(line).strip(" :/-")
+        if not folded:
+            return True
+        exact_markers = {
+            "so",
+            "no",
+            "ho va ten",
+            "full name",
+            "ngay sinh",
+            "date of birth",
+            "gioi tinh",
+            "sex",
+            "quoc tich",
+            "nationality",
+            "que quan",
+            "place of origin",
+            "noi thuong tru",
+            "place of residence",
+            "date of expiry",
+            "date of oxpiry",
+            "citizen identity card",
+            "socialist republic of viet nam",
+            "independence",
+            "freedom",
+            "happiness",
+            "doc lap",
+            "tu do",
+            "hanh phuc",
+        }
+        if folded in exact_markers:
+            return True
+        fuzzy_markers = [
+            "place oi ongin",
+            "place oi origin",
+            "place of ongin",
+        ]
+        if any(marker in folded for marker in fuzzy_markers):
+            return True
+        if folded.startswith("---") or folded.startswith("qr data"):
+            return True
+        return False
+
+    def _dedupe_address_parts(self, parts: list[str]) -> str:
+        result: list[str] = []
+        seen: set[str] = set()
+        for part in parts:
+            clean = part.strip(" ,.;")
+            if not clean or self._is_label_or_document_noise(clean):
+                continue
+            key = self._fold(clean)
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(clean)
+        return ", ".join(result)
 
     def _parse_qr_payload(self, text: str) -> QrData:
         for raw_line in text.splitlines():

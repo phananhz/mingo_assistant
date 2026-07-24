@@ -82,17 +82,38 @@ class OcrService:
             return ""
 
         detector = cv2.QRCodeDetector()
-        data, _, _ = detector.detectAndDecode(image)
-        if data:
-            return data.strip()
+        for candidate in self._qr_candidates(image):
+            data, _, _ = detector.detectAndDecode(candidate)
+            if data:
+                return data.strip()
 
+            try:
+                retval, decoded_info, _, _ = detector.detectAndDecodeMulti(candidate)
+            except Exception:
+                continue
+            if retval:
+                text = "\n".join(item.strip() for item in decoded_info if item and item.strip())
+                if text:
+                    return text
+        return ""
+
+    def _qr_candidates(self, image: Any) -> list[Any]:
         try:
-            retval, decoded_info, _, _ = detector.detectAndDecodeMulti(image)
+            import cv2
         except Exception:
-            return ""
-        if not retval:
-            return ""
-        return "\n".join(item.strip() for item in decoded_info if item and item.strip())
+            return [image]
+
+        candidates = [image]
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        candidates.append(gray)
+        height, width = image.shape[:2]
+        if max(height, width) < 1600:
+            scale = 1600 / max(height, width)
+            size = (int(width * scale), int(height * scale))
+            resized = cv2.resize(image, size, interpolation=cv2.INTER_CUBIC)
+            candidates.append(resized)
+            candidates.append(cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY))
+        return candidates
 
     def _get_ocr(self) -> Any:
         if self._ocr is not None:

@@ -98,6 +98,22 @@ QGroupBox::title {
     padding: 0 6px;
 }
 
+QGroupBox#CccdResultCard {
+    background: #fbfdff;
+    border: 1px solid #b9d7f2;
+    color: #1f5f99;
+}
+
+QGroupBox#CccdResultCard QLineEdit,
+QGroupBox#CccdResultCard QTextEdit {
+    border: 1px solid #b9d7f2;
+}
+
+QGroupBox#CccdResultCard QLineEdit:focus,
+QGroupBox#CccdResultCard QTextEdit:focus {
+    border: 1px solid #2f80ed;
+}
+
 #ResultText {
     color: #9b315f;
     font-size: 15px;
