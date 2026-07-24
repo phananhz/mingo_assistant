@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date
 from difflib import SequenceMatcher
 
 from mingo_assistant.services.normalization.administrative_place_matcher import AdministrativePlaceMatcher
@@ -30,32 +30,9 @@ class ExtractedIdCard:
             "legal_representative_id_number": self.id_number,
             "legal_representative_date_of_birth": self.date_of_birth,
             "legal_representative_gender": self.gender,
-            "legal_representative_nationality": self.nationality,
             "legal_representative_permanent_address": self.permanent_address,
             "legal_representative_place_of_origin": self.place_of_origin,
-            "legal_representative_issue_date": self.issue_date,
-            "legal_representative_expiry_date": self.expiry_date,
         }
-
-
-@dataclass
-class MrzData:
-    full_name: str = ""
-    id_number: str = ""
-    date_of_birth: str = ""
-    gender: str = ""
-    nationality: str = ""
-    expiry_date: str = ""
-
-
-@dataclass
-class QrData:
-    full_name: str = ""
-    id_number: str = ""
-    date_of_birth: str = ""
-    gender: str = ""
-    permanent_address: str = ""
-    issue_date: str = ""
 
 
 class IdCardParser:
@@ -67,33 +44,21 @@ class IdCardParser:
         lines = [line for line in lines if line]
         joined = "\n".join(lines)
 
-        qr = self._parse_qr_payload(raw_text)
-        mrz = self._parse_mrz(lines)
-
         card = ExtractedIdCard(raw_text=raw_text)
-        card.id_number = qr.id_number or self._find_id_number(joined) or mrz.id_number
-        card.date_of_birth = (
-            qr.date_of_birth
-            or self._find_date_after_keywords(lines, ["sinh", "birth"])
-            or self._find_first_date(joined)
-            or mrz.date_of_birth
-        )
-        card.gender = qr.gender or self._find_gender(lines) or mrz.gender or self._gender_from_id_number(card.id_number)
-        card.nationality = self._find_value_after_keywords(lines, ["quoc tich", "nationality"]) or self._find_nationality(joined) or mrz.nationality or "Việt Nam"
-        card.full_name = qr.full_name or self._find_name(lines) or mrz.full_name
-        card.permanent_address = qr.permanent_address or self._find_address(lines, ["thuong tru", "residence", "place of residence"])
+        card.id_number = self._find_id_number(joined)
+        card.date_of_birth = self._find_date_of_birth(lines, joined)
+        card.gender = self._find_gender(lines) or self._gender_from_id_number(card.id_number)
+        card.full_name = self._find_name(lines)
+        card.permanent_address = self._find_address(lines, ["thuong tru", "residence", "place of residence"])
         card.place_of_origin = self._find_address(lines, ["que quan", "origin", "ongin", "place of origin", "nguyen quan"])
         card.place_of_origin = self.place_matcher.normalize_address(card.place_of_origin)
         card.permanent_address = self.place_matcher.normalize_address(card.permanent_address)
         card.permanent_address = self._complete_residence_with_origin(card.permanent_address, card.place_of_origin)
-        card.issue_date = qr.issue_date or self._find_date_after_keywords(lines, ["ngay cap", "date of issue", "date, month, year"])
-        card.expiry_date = self._find_expiry(lines) or mrz.expiry_date
         card.unknown_lines = lines
-        card.warnings = self._build_warnings(card, mrz)
         return card
 
     def _clean_line(self, line: str) -> str:
-        return " ".join(line.replace("|", " ").replace(":", ": ").split())
+        return " ".join(line.replace(":", ": ").split())
 
     def _fold(self, value: str) -> str:
         value = value.replace(chr(273), "d").replace(chr(272), "D")
@@ -111,19 +76,66 @@ class IdCardParser:
         return max(matches, key=len)
 
     def _find_first_date(self, text: str) -> str:
-        match = re.search(r"\b\d{1,2}[/-]\d{1,2}[/-]\d{4}\b", text)
-        return match.group(0) if match else ""
+        dates = self._collect_dates(text)
+        if dates:
+            return dates[0]
+        return ""
+
+    def _find_date_of_birth(self, lines: list[str], joined: str) -> str:
+        keyword_date = self._find_date_after_keywords(lines, ["sinh", "birth", "dato", "duto"])
+        if keyword_date:
+            return keyword_date
+
+        candidates = [item for item in self._collect_dates(joined) if self._is_plausible_birth_date(item)]
+        if candidates:
+            return candidates[0]
+        dates = self._collect_dates(joined)
+        return dates[0] if dates else ""
+
+    def _collect_dates(self, text: str) -> list[str]:
+        dates: list[str] = []
+        for match in re.finditer(r"\b[0-9OolI]{1,2}\s*[/-]\s*[0-9OolI]{1,2}\s*[/-]\s*[0-9OolI]{4}\b", text):
+            normalized = self._normalize_ocr_date(match.group(0))
+            if normalized:
+                dates.append(normalized)
+        return dates
+
+    def _is_plausible_birth_date(self, value: str) -> bool:
+        day, month, year = self._date_parts(value)
+        current_year = date.today().year
+        return 1900 <= year <= current_year
+
+    def _date_sort_key(self, value: str) -> tuple[int, int, int]:
+        day, month, year = self._date_parts(value)
+        return (year, month, day)
+
+    def _date_parts(self, value: str) -> tuple[int, int, int]:
+        day, month, year = value.split("/")
+        return (int(day), int(month), int(year))
+
+    def _normalize_ocr_date(self, value: str) -> str:
+        fixed = value.translate(str.maketrans({"O": "0", "o": "0", "l": "1", "I": "1"}))
+        parts = [part.strip() for part in re.split(r"[/-]", fixed)]
+        if len(parts) != 3:
+            return ""
+        day, month, year = parts
+        if not (day.isdigit() and month.isdigit() and year.isdigit()):
+            return ""
+        day_int = int(day)
+        month_int = int(month)
+        if not (1 <= day_int <= 31 and 1 <= month_int <= 12 and len(year) == 4):
+            return ""
+        return f"{day_int:02d}/{month_int:02d}/{year}"
 
     def _find_date_after_keywords(self, lines: list[str], keywords: list[str]) -> str:
         folded_keywords = [self._fold(keyword) for keyword in keywords]
         for index, line in enumerate(lines):
             folded = self._fold(line)
             if any(keyword in folded for keyword in folded_keywords):
-                date = self._find_first_date(line)
-                if date:
+                nearby = " ".join(lines[max(0, index - 2) : index + 5])
+                date = self._find_first_date(nearby)
+                if date and self._is_plausible_birth_date(date):
                     return date
-                if index + 1 < len(lines):
-                    return self._find_first_date(lines[index + 1])
         return ""
 
     def _find_expiry(self, lines: list[str]) -> str:
@@ -545,25 +557,8 @@ class IdCardParser:
             return residence
         return self._dedupe_address_parts([residence, origin])
 
-    def _parse_qr_payload(self, text: str) -> QrData:
-        for raw_line in text.splitlines():
-            line = raw_line.strip()
-            if line.count("|") < 4:
-                continue
-            parts = [part.strip() for part in line.split("|")]
-            if not parts or not re.fullmatch(r"\d{9,12}", parts[0]):
-                continue
-            return QrData(
-                id_number=parts[0],
-                full_name=parts[2].upper() if len(parts) > 2 else "",
-                date_of_birth=self._format_compact_date(parts[3]) if len(parts) > 3 else "",
-                gender=self._normalize_gender(parts[4]) if len(parts) > 4 else "",
-                permanent_address=parts[5] if len(parts) > 5 else "",
-                issue_date=self._format_compact_date(parts[6]) if len(parts) > 6 else "",
-            )
-        return QrData()
-
-    def _parse_mrz(self, lines: list[str]) -> MrzData:
+    def _parse_mrz(self, lines: list[str]) -> None:
+        return None
         mrz_lines = []
         for line in lines:
             compact = re.sub(r"\s+", "", line.upper())
@@ -586,35 +581,10 @@ class IdCardParser:
             )
         return MrzData()
 
-    def _mrz_id_number(self, line: str) -> str:
-        digits = re.sub(r"\D", "", line[5:])
-        if len(digits) >= 12:
-            return digits[:12]
-        if len(digits) >= 9:
-            return digits[:9]
-        return ""
-
-    def _parse_mrz_name(self, line: str) -> str:
-        name = line.replace("<", " ").strip()
-        return " ".join(name.split())
-
-    def _format_mrz_date(self, value: str, *, is_birth: bool) -> str:
-        if not re.fullmatch(r"\d{6}", value):
-            return ""
-        yy = int(value[0:2])
-        mm = value[2:4]
-        dd = value[4:6]
-        current_yy = datetime.now().year % 100
-        if is_birth:
-            year = 2000 + yy if yy <= current_yy else 1900 + yy
-        else:
-            year = 2000 + yy
-        return f"{dd}/{mm}/{year}"
-
     def _format_compact_date(self, value: str) -> str:
         digits = re.sub(r"\D", "", value)
         if len(digits) != 8:
-            return value
+            return self._normalize_ocr_date(value) or value
         return f"{digits[0:2]}/{digits[2:4]}/{digits[4:8]}"
 
     def _normalize_gender(self, value: str) -> str:
@@ -624,13 +594,3 @@ class IdCardParser:
         if folded in {"m", "male", "nam"}:
             return "Nam"
         return value
-
-    def _build_warnings(self, card: ExtractedIdCard, mrz: MrzData) -> list[str]:
-        warnings: list[str] = []
-        if mrz.full_name and card.full_name and self._fold(mrz.full_name) not in self._fold(card.full_name):
-            warnings.append(f"Tên mặt trước khác MRZ mặt sau: '{card.full_name}' và '{mrz.full_name}'.")
-        if mrz.gender and card.gender and mrz.gender != card.gender:
-            warnings.append(f"Giới tính mặt trước khác MRZ mặt sau: '{card.gender}' và '{mrz.gender}'.")
-        if mrz.date_of_birth and card.date_of_birth and mrz.date_of_birth != card.date_of_birth:
-            warnings.append(f"Ngày sinh mặt trước khác MRZ mặt sau: '{card.date_of_birth}' và '{mrz.date_of_birth}'.")
-        return warnings

@@ -10,6 +10,7 @@ from uuid import uuid4
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QDesktopServices, QPixmap
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QApplication,
     QButtonGroup,
     QCheckBox,
@@ -27,6 +28,8 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QStackedWidget,
+    QTableWidget,
+    QTableWidgetItem,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -35,6 +38,7 @@ from PySide6.QtCore import QUrl
 
 from mingo_assistant.models.case import CaseSummary
 from mingo_assistant.services.documents.docx_generator import DocxTemplateGenerator
+from mingo_assistant.services.business_lines.industry_lookup import IndustryCatalog, IndustryRow
 from mingo_assistant.services.normalization.address_parser import AddressParser
 from mingo_assistant.services.ocr.id_card_parser import IdCardParser
 from mingo_assistant.services.ocr.ocr_service import OcrService
@@ -220,10 +224,14 @@ class BusinessRegistrationWorkspace(QWidget):
         self.ocr_service = OcrService()
         self.id_parser = IdCardParser()
         self.address_parser = AddressParser()
+        self.industry_catalog = IndustryCatalog.load_from_project(Path(__file__).resolve().parents[4])
         self.fields: dict[str, QLineEdit | QTextEdit] = {}
         self.ocr_card_fields: dict[str, QLineEdit | QTextEdit] = {}
         self.business_line_rows: list[BusinessLineRow] = []
         self.business_line_table: QFrame | None = None
+        self.industry_search_input = QLineEdit()
+        self.industry_results_table = QTableWidget()
+        self.industry_detail = QTextEdit()
         self.form_sections: dict[str, QWidget] = {}
         self.person_fill_selectors: dict[str, QComboBox] = {}
         self.authorized_person_defaults = authorized_person_defaults or {}
@@ -249,7 +257,7 @@ class BusinessRegistrationWorkspace(QWidget):
         self.delete_back_image_button = QPushButton("Xóa ảnh mặt sau")
         self.ocr_progress = QProgressBar()
         self.ocr_status_label = QLabel("Sẵn sàng nhận diện")
-        self.ocr_eta_label = QLabel("Thời gian còn lại: --")
+        self.ocr_eta_label = QLabel("Đã chạy: --")
         self.people_list_layout = QHBoxLayout()
         self.form_nav_layout = QHBoxLayout()
         self.form_stack = QStackedWidget()
@@ -365,13 +373,9 @@ class BusinessRegistrationWorkspace(QWidget):
 
         image_previews = QHBoxLayout()
         self._setup_image_preview_label(self.front_image_preview, "Bấm để chọn ảnh mặt trước")
-        self._setup_image_preview_label(self.back_image_preview, "Bấm để chọn ảnh mặt sau")
-        self.front_image_preview.clicked.connect(lambda: self._choose_person_image("front"))
-        self.back_image_preview.clicked.connect(lambda: self._choose_person_image("back"))
+        self.front_image_preview.clicked.connect(lambda: self._open_or_choose_person_image("front"))
         self.delete_front_image_button.setObjectName("GhostButton")
-        self.delete_back_image_button.setObjectName("GhostButton")
         self.delete_front_image_button.clicked.connect(lambda: self._delete_person_image("front"))
-        self.delete_back_image_button.clicked.connect(lambda: self._delete_person_image("back"))
 
         front_box = QVBoxLayout()
         front_title = QLabel("Mặt trước")
@@ -381,21 +385,14 @@ class BusinessRegistrationWorkspace(QWidget):
         front_box.addWidget(self.front_image_label)
         front_box.addWidget(self.delete_front_image_button)
 
-        back_box = QVBoxLayout()
-        back_title = QLabel("Mặt sau")
-        back_title.setObjectName("FilterLabel")
-        back_box.addWidget(back_title)
-        back_box.addWidget(self.back_image_preview)
-        back_box.addWidget(self.back_image_label)
-        back_box.addWidget(self.delete_back_image_button)
-
         image_previews.addLayout(front_box)
-        image_previews.addLayout(back_box)
         image_previews.addStretch(1)
         layout.addLayout(image_previews)
 
         self.ocr_progress.setRange(0, 100)
         self.ocr_progress.setValue(0)
+        self.ocr_progress.setTextVisible(True)
+        self.ocr_progress.setFormat("0%")
         progress_layout = QHBoxLayout()
         progress_layout.addWidget(self.ocr_progress, 1)
         progress_layout.addWidget(self.ocr_status_label)
@@ -426,11 +423,8 @@ class BusinessRegistrationWorkspace(QWidget):
             ("legal_representative_id_number", "Số CCCD", False),
             ("legal_representative_date_of_birth", "Ngày sinh", False),
             ("legal_representative_gender", "Giới tính", False),
-            ("legal_representative_nationality", "Quốc tịch", False),
-            ("legal_representative_expiry_date", "Có giá trị đến", False),
             ("legal_representative_place_of_origin", "Quê quán", True),
             ("legal_representative_permanent_address", "Nơi thường trú", True),
-            ("legal_representative_issue_date", "Ngày cấp", False),
         ]
         for index, (key, label_text, multiline) in enumerate(fields):
             row = index // 2
@@ -608,6 +602,7 @@ class BusinessRegistrationWorkspace(QWidget):
         section = QGroupBox("Ngành nghề kinh doanh")
         layout = QVBoxLayout(section)
         layout.setSpacing(10)
+        layout.addWidget(self._build_industry_lookup_panel())
 
         table = QFrame()
         table.setObjectName("BusinessLineTable")
@@ -643,6 +638,156 @@ class BusinessRegistrationWorkspace(QWidget):
         add_button.clicked.connect(self._show_next_business_line_row)
         layout.addWidget(add_button, 0, Qt.AlignRight)
         return section
+
+    def _build_industry_lookup_panel(self) -> QWidget:
+        panel = QGroupBox("Tra cứu ngành nghề")
+        panel.setObjectName("IndustryLookupPanel")
+        layout = QVBoxLayout(panel)
+        layout.setSpacing(8)
+
+        search_row = QHBoxLayout()
+        self.industry_search_input.setObjectName("IndustrySearchInput")
+        self.industry_search_input.setPlaceholderText("Nhập mã ngành, tên ngành hoặc từ khóa hoạt động")
+        self.industry_search_input.textChanged.connect(self._refresh_industry_results)
+        add_selected_button = QPushButton("Thêm ngành đã chọn")
+        add_selected_button.setObjectName("PrimaryButton")
+        add_selected_button.clicked.connect(self._add_selected_industry_row)
+        search_row.addWidget(self.industry_search_input, 1)
+        search_row.addWidget(add_selected_button)
+        layout.addLayout(search_row)
+
+        self.industry_results_table.setObjectName("IndustryTable")
+        self.industry_results_table.setColumnCount(3)
+        self.industry_results_table.setHorizontalHeaderLabels(["Mã", "Tên ngành", "Chi tiết"])
+        self.industry_results_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.industry_results_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.industry_results_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.industry_results_table.setAlternatingRowColors(True)
+        self.industry_results_table.setMinimumHeight(220)
+        self.industry_results_table.itemSelectionChanged.connect(self._show_selected_industry_detail)
+        header = self.industry_results_table.horizontalHeader()
+        header.setStretchLastSection(True)
+        self.industry_results_table.setColumnWidth(0, 95)
+        self.industry_results_table.setColumnWidth(1, 360)
+        layout.addWidget(self.industry_results_table)
+
+        self.industry_detail.setReadOnly(True)
+        self.industry_detail.setFixedHeight(78)
+        self.industry_detail.setPlaceholderText("Chọn một ngành để xem mô tả.")
+        layout.addWidget(self.industry_detail)
+        self._refresh_industry_results()
+        return panel
+
+    def _refresh_industry_results(self) -> None:
+        if not self.industry_catalog.is_available:
+            self.industry_results_table.setRowCount(0)
+            self.industry_detail.setPlainText("Chưa có dữ liệu ngành nghề trong assets/business_lines/vsic_2025.json.")
+            return
+
+        query = self.industry_search_input.text().strip()
+        rows = self.industry_catalog.filter_rows(query)
+        rows = self._rank_industry_rows(rows, query)[:80]
+        self.industry_results_table.setRowCount(len(rows))
+        for row_index, row in enumerate(rows):
+            code = self._industry_row_code(row)
+            name_item = QTableWidgetItem(row.name)
+            code_item = QTableWidgetItem(code)
+            detail_item = QTableWidgetItem(self._compact_text(row.detail, 160))
+            for item in (code_item, name_item, detail_item):
+                item.setData(Qt.UserRole, row)
+            self.industry_results_table.setItem(row_index, 0, code_item)
+            self.industry_results_table.setItem(row_index, 1, name_item)
+            self.industry_results_table.setItem(row_index, 2, detail_item)
+        if rows:
+            self.industry_results_table.selectRow(0)
+        else:
+            self.industry_detail.setPlainText("Không tìm thấy ngành phù hợp.")
+
+    def _rank_industry_rows(self, rows: list[IndustryRow], query: str) -> list[IndustryRow]:
+        folded_query = self.industry_catalog._fold(query)
+        if not folded_query:
+            return rows[:80]
+
+        def score(row: IndustryRow) -> tuple[int, int, str]:
+            code = self._industry_row_code(row)
+            folded_name = self.industry_catalog._fold(row.name)
+            folded_detail = self.industry_catalog._fold(row.detail)
+            if code == query:
+                rank = 0
+            elif code.startswith(query):
+                rank = 1
+            elif folded_name.startswith(folded_query):
+                rank = 2
+            elif folded_query in folded_name:
+                rank = 3
+            elif folded_query in folded_detail:
+                rank = 4
+            else:
+                rank = 5
+            return (rank, len(code), row.name)
+
+        return sorted(rows, key=score)
+
+    def _selected_industry_row(self) -> IndustryRow | None:
+        selected = self.industry_results_table.selectedItems()
+        if not selected:
+            return None
+        row = selected[0].data(Qt.UserRole)
+        return row if hasattr(row, "levels") and hasattr(row, "name") else None
+
+    def _show_selected_industry_detail(self) -> None:
+        row = self._selected_industry_row()
+        if row is None:
+            return
+        code = self._industry_row_code(row)
+        text = f"{code} - {row.name}" if code else row.name
+        if row.detail:
+            text = f"{text}\n{row.detail}"
+        self.industry_detail.setPlainText(text)
+
+    def _add_selected_industry_row(self) -> None:
+        row = self._selected_industry_row()
+        if row is None:
+            QMessageBox.information(self, "Chưa chọn ngành", "Bạn cần chọn một ngành nghề trong bảng tra cứu.")
+            return
+        target_index = self._first_available_business_line_index()
+        if target_index is None:
+            QMessageBox.information(self, "Đã đủ ngành nghề", "Hiện form đang hỗ trợ tối đa 10 ngành nghề trong một hồ sơ.")
+            return
+        business_row = self.business_line_rows[target_index - 1]
+        code = self._industry_row_code(row)
+        business_row.name_field.setPlainText(self._industry_row_form_text(row))
+        business_row.code_field.setText(code)
+        self._set_business_line_row_visible(target_index, True)
+        if not any(item.main_checkbox.isChecked() for item in self.business_line_rows):
+            business_row.main_checkbox.setChecked(True)
+        self._refresh_preview()
+
+    def _first_available_business_line_index(self) -> int | None:
+        for index, row in enumerate(self.business_line_rows, start=1):
+            if not row.cells[0].isVisible():
+                return index
+            if not row.name_field.toPlainText().strip() and not row.code_field.text().strip():
+                return index
+        return None
+
+    def _industry_row_code(self, row: IndustryRow) -> str:
+        for level in reversed(row.levels):
+            if level.strip():
+                return level.strip()
+        return ""
+
+    def _industry_row_form_text(self, row: IndustryRow) -> str:
+        text = row.name.strip()
+        if row.detail:
+            text = f"{text}\nChi tiết: {row.detail.strip()}"
+        return text
+
+    def _compact_text(self, value: str, limit: int) -> str:
+        text = " ".join((value or "").split())
+        if len(text) <= limit:
+            return text
+        return text[: limit - 3].rstrip() + "..."
 
     def _add_business_line_row(self, parent_layout: QGridLayout, index: int, visible: bool) -> None:
         name_field = QTextEdit()
@@ -1236,16 +1381,27 @@ class BusinessRegistrationWorkspace(QWidget):
         if not image_path:
             label.setPixmap(QPixmap())
             label.setText(empty_text)
+            label.setToolTip(empty_text)
             return
 
         pixmap = QPixmap(image_path)
         if pixmap.isNull():
             label.setPixmap(QPixmap())
             label.setText("Không đọc được ảnh")
+            label.setToolTip(image_path)
             return
 
         label.setText("")
+        label.setToolTip(f"Bấm để xem ảnh đã tải lên\n{image_path}")
         label.setPixmap(pixmap.scaled(label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+
+    def _open_or_choose_person_image(self, side: str) -> None:
+        person = self.ocr_people[self.current_person_index]
+        image_path = person.front_path if side == "front" else person.back_path
+        if image_path and Path(image_path).exists():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(image_path))))
+            return
+        self._choose_person_image(side)
 
     def _choose_person_image(self, side: str) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -1286,10 +1442,9 @@ class BusinessRegistrationWorkspace(QWidget):
     def _run_ocr(self) -> None:
         self.ocr_service.set_engine(self.ocr_engine_input.currentData() or "easyocr")
         person = self.ocr_people[self.current_person_index]
-        image_jobs = [("mặt trước", person.front_path), ("mặt sau", person.back_path)]
-        image_jobs = [(label, image_path) for label, image_path in image_jobs if image_path]
+        image_jobs = [("mặt trước", person.front_path)] if person.front_path else []
         if not image_jobs:
-            QMessageBox.warning(self, "Chưa chọn ảnh", "Bạn cần chọn ít nhất ảnh mặt trước hoặc mặt sau của CCCD.")
+            QMessageBox.warning(self, "Chưa chọn ảnh mặt trước", "Bạn cần chọn ảnh mặt trước của CCCD để nhận diện thông tin cá nhân.")
             return
 
         QApplication.setOverrideCursor(Qt.WaitCursor)
@@ -1297,22 +1452,25 @@ class BusinessRegistrationWorkspace(QWidget):
             texts: list[str] = []
             total = len(image_jobs)
             start = monotonic()
-            self._update_ocr_progress(0, "Đang chuẩn bị OCR", "--")
+            self._update_ocr_progress(0, "Đang chuẩn bị OCR", "0 giây")
             for index, (side_label, image_path) in enumerate(image_jobs, start=1):
                 self._update_ocr_progress(
                     int(((index - 1) / total) * 100),
                     f"Đang xử lý {side_label}",
-                    self._format_eta(start, index - 1, total),
+                    self._format_elapsed(start),
                 )
                 QApplication.processEvents()
 
-                extracted_text = self.ocr_service.extract_text(image_path)
+                extracted_text = self.ocr_service.extract_text(
+                    image_path,
+                    progress_callback=lambda percent, status: self._update_ocr_progress(percent, status, self._format_elapsed(start)),
+                )
                 texts.append(f"--- {person.name} - {side_label} ---\n{extracted_text}")
 
                 self._update_ocr_progress(
                     int((index / total) * 100),
                     f"Đã xử lý {side_label}",
-                    self._format_eta(start, index, total),
+                    self._format_elapsed(start),
                 )
                 QApplication.processEvents()
         except Exception as exc:
@@ -1321,24 +1479,24 @@ class BusinessRegistrationWorkspace(QWidget):
         finally:
             QApplication.restoreOverrideCursor()
 
-        self._update_ocr_progress(100, "Hoàn thành OCR", "0 giây")
+        self._update_ocr_progress(100, "Hoàn thành OCR", self._format_elapsed(start))
         self.raw_ocr_text.setPlainText("\n\n".join(texts))
         self._parse_ocr_text()
 
     def _update_ocr_progress(self, percent: int, status: str, eta: str) -> None:
-        self.ocr_progress.setValue(max(0, min(100, percent)))
+        value = max(0, min(100, percent))
+        self.ocr_progress.setValue(value)
+        self.ocr_progress.setFormat(f"{value}%")
         self.ocr_status_label.setText(status)
-        self.ocr_eta_label.setText(f"Thời gian còn lại: {eta}")
+        self.ocr_eta_label.setText(f"Đã chạy: {eta}")
+        QApplication.processEvents()
 
-    def _format_eta(self, start: float, completed: int, total: int) -> str:
-        if completed <= 0:
-            return "--"
-        elapsed = monotonic() - start
-        remaining = max(0.0, (elapsed / completed) * (total - completed))
-        if remaining < 60:
-            return f"{int(remaining)} giây"
-        minutes = int(remaining // 60)
-        seconds = int(remaining % 60)
+    def _format_elapsed(self, start: float) -> str:
+        elapsed = max(0.0, monotonic() - start)
+        if elapsed < 60:
+            return f"{int(elapsed)} giây"
+        minutes = int(elapsed // 60)
+        seconds = int(elapsed % 60)
         return f"{minutes} phút {seconds} giây"
 
     def _update_cccd_result_fields(self, values: dict[str, str]) -> None:
@@ -1405,22 +1563,16 @@ class BusinessRegistrationWorkspace(QWidget):
             "id_number": "legal_representative_id_number",
             "date_of_birth": "legal_representative_date_of_birth",
             "gender": "legal_representative_gender",
-            "nationality": "legal_representative_nationality",
             "permanent_address": "legal_representative_permanent_address",
             "place_of_origin": "legal_representative_place_of_origin",
-            "issue_date": "legal_representative_issue_date",
-            "expiry_date": "legal_representative_expiry_date",
         }
         target_suffixes = {
             "full_name": "full_name",
             "id_number": "id_number",
             "date_of_birth": "date_of_birth",
             "gender": "gender",
-            "nationality": "nationality",
             "permanent_address": "permanent_address",
             "place_of_origin": "place_of_origin",
-            "issue_date": "issue_date",
-            "expiry_date": "expiry_date",
         }
         for suffix, source_key in source_map.items():
             value = card_values.get(source_key, "")

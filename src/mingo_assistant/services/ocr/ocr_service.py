@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 class OcrService:
@@ -14,20 +14,23 @@ class OcrService:
         self._ocr: Any | None = None
         self._easyocr_reader: Any | None = None
 
-    def extract_text(self, image_path: str | Path) -> str:
+    def extract_text(self, image_path: str | Path, progress_callback: Callable[[int, str], None] | None = None) -> str:
         path = Path(image_path)
         if not path.exists():
             raise FileNotFoundError(f"Không tìm thấy ảnh: {path}")
 
-        qr_text = self.extract_qr_text(path)
         if self.engine == "easyocr":
-            lines = self._run_easyocr(path)
+            lines = self._run_easyocr(path, progress_callback=progress_callback)
         else:
+            if progress_callback:
+                progress_callback(20, "Dang khoi tao PaddleOCR")
             ocr = self._get_ocr()
+            if progress_callback:
+                progress_callback(45, "Dang nhan dien van ban")
             result = self._run_ocr(ocr, str(path))
             lines = self._collect_text_lines(result)
-        if qr_text:
-            lines.insert(0, f"QR_DATA: {qr_text}")
+            if progress_callback:
+                progress_callback(90, "Dang tong hop ket qua")
         return "\n".join(line for line in lines if line.strip())
 
     def set_engine(self, engine: str) -> None:
@@ -35,53 +38,107 @@ class OcrService:
             raise ValueError(f"Unsupported OCR engine: {engine}")
         self.engine = engine
 
-    def _run_easyocr(self, image_path: Path) -> list[str]:
+    def _run_easyocr(self, image_path: Path, progress_callback: Callable[[int, str], None] | None = None) -> list[str]:
         reader = self._get_easyocr_reader()
         image = self._read_image_for_cv(image_path)
         lines: list[str] = []
         sources = self._easyocr_sources(image) if image is not None else [str(image_path)]
-        for source in sources:
+        total = max(1, len(sources))
+        if progress_callback:
+            progress_callback(10, "Dang cat vung chu tren CCCD")
+        for index, source in enumerate(sources, start=1):
+            if progress_callback:
+                percent = 10 + int(((index - 1) / total) * 80)
+                progress_callback(percent, f"Dang nhan dien vung {index}/{total}")
             results = reader.readtext(source, detail=1, paragraph=False)
-            for item in results:
+            for item in self._sort_ocr_results(results):
                 if len(item) >= 2 and isinstance(item[1], str):
-                    text = item[1].strip()
+                    confidence = float(item[2]) if len(item) >= 3 and isinstance(item[2], (int, float)) else 1.0
+                    text = self._clean_ocr_line(item[1])
+                    if confidence < 0.18 and not self._is_high_value_cccd_line(text):
+                        continue
                     if self._looks_like_text(text):
                         lines.append(text)
+            if progress_callback:
+                percent = 10 + int((index / total) * 80)
+                progress_callback(percent, f"Da xu ly vung {index}/{total}")
+        if progress_callback:
+            progress_callback(92, "Dang gop ket qua OCR")
         return self._dedupe_keep_order(lines)
 
     def _easyocr_sources(self, image: Any) -> list[Any]:
         try:
             import cv2
-            import numpy as np
         except Exception:
             return [image]
 
-        candidates: list[Any] = [image]
         height, width = image.shape[:2]
         base = image
         if max(height, width) < 1800:
             scale = 1800 / max(height, width)
             base = cv2.resize(image, (int(width * scale), int(height * scale)), interpolation=cv2.INTER_CUBIC)
-            candidates.append(base)
-
-        gray = cv2.cvtColor(base, cv2.COLOR_BGR2GRAY)
-        clahe = cv2.createCLAHE(clipLimit=2.2, tileGridSize=(8, 8)).apply(gray)
-        candidates.append(clahe)
-
-        kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]])
-        candidates.append(cv2.filter2D(base, -1, kernel))
-
         base_height, base_width = base.shape[:2]
-        text_crop = base[int(base_height * 0.30) : base_height, int(base_width * 0.22) : base_width]
-        address_crop = base[int(base_height * 0.55) : base_height, int(base_width * 0.20) : base_width]
-        if text_crop.size:
-            candidates.append(text_crop)
-        if address_crop.size:
-            candidates.append(address_crop)
-            address_gray = cv2.cvtColor(address_crop, cv2.COLOR_BGR2GRAY)
-            candidates.append(cv2.createCLAHE(clipLimit=2.4, tileGridSize=(8, 8)).apply(address_gray))
+        crop_boxes = [
+            (0.28, 0.08, 0.92, 0.92),
+            (0.28, 0.18, 0.92, 0.72),
+            (0.28, 0.54, 0.92, 0.94),
+        ]
+        candidates: list[Any] = []
+        for left, top, right, bottom in crop_boxes:
+            crop = base[int(base_height * top) : int(base_height * bottom), int(base_width * left) : int(base_width * right)]
+            if crop.size:
+                candidates.extend(self._crop_variants(crop))
 
-        return candidates
+        return candidates or [base]
+
+    def _crop_variants(self, crop: Any) -> list[Any]:
+        try:
+            import cv2
+        except Exception:
+            return [crop]
+
+        variants = [crop]
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        variants.append(cv2.createCLAHE(clipLimit=2.4, tileGridSize=(8, 8)).apply(gray))
+        return variants
+
+    def _sort_ocr_results(self, results: Any) -> list[Any]:
+        if not isinstance(results, list):
+            return []
+
+        def key(item: Any) -> tuple[int, int]:
+            if not isinstance(item, (list, tuple)) or not item:
+                return (0, 0)
+            box = item[0]
+            if not isinstance(box, (list, tuple)) or not box:
+                return (0, 0)
+            xs: list[float] = []
+            ys: list[float] = []
+            for point in box:
+                if isinstance(point, (list, tuple)) and len(point) >= 2:
+                    xs.append(float(point[0]))
+                    ys.append(float(point[1]))
+            return (int(min(ys) if ys else 0), int(min(xs) if xs else 0))
+
+        return sorted(results, key=key)
+
+    def _clean_ocr_line(self, text: str) -> str:
+        replacements = {
+            "Â«": "<",
+            "«": "<",
+            "»": "<",
+            "|": " ",
+        }
+        result = text.strip()
+        for source, target in replacements.items():
+            result = result.replace(source, target)
+        return " ".join(result.split())
+
+    def _is_high_value_cccd_line(self, text: str) -> bool:
+        folded = text.lower()
+        if any(marker in folded for marker in ["full name", "date of birth", "place of", "idvnm"]):
+            return True
+        return any(char.isdigit() for char in text)
 
     def _get_easyocr_reader(self) -> Any:
         if self._easyocr_reader is not None:
@@ -104,51 +161,6 @@ class OcrService:
             return cv2.imdecode(image_bytes, cv2.IMREAD_COLOR)
         except Exception:
             return None
-
-    def extract_qr_text(self, image_path: str | Path) -> str:
-        try:
-            import cv2
-            import numpy as np
-        except Exception:
-            return ""
-
-        image = self._read_image_for_cv(Path(image_path))
-        if image is None:
-            return ""
-
-        detector = cv2.QRCodeDetector()
-        for candidate in self._qr_candidates(image):
-            data, _, _ = detector.detectAndDecode(candidate)
-            if data:
-                return data.strip()
-
-            try:
-                retval, decoded_info, _, _ = detector.detectAndDecodeMulti(candidate)
-            except Exception:
-                continue
-            if retval:
-                text = "\n".join(item.strip() for item in decoded_info if item and item.strip())
-                if text:
-                    return text
-        return ""
-
-    def _qr_candidates(self, image: Any) -> list[Any]:
-        try:
-            import cv2
-        except Exception:
-            return [image]
-
-        candidates = [image]
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        candidates.append(gray)
-        height, width = image.shape[:2]
-        if max(height, width) < 1600:
-            scale = 1600 / max(height, width)
-            size = (int(width * scale), int(height * scale))
-            resized = cv2.resize(image, size, interpolation=cv2.INTER_CUBIC)
-            candidates.append(resized)
-            candidates.append(cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY))
-        return candidates
 
     def _get_ocr(self) -> Any:
         if self._ocr is not None:
