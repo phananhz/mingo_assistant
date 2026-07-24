@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
@@ -21,6 +22,8 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSpacerItem,
     QStackedWidget,
+    QTableWidget,
+    QTableWidgetItem,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -28,6 +31,7 @@ from PySide6.QtWidgets import (
 
 from mingo_assistant.models.case import CaseSummary
 from mingo_assistant.repositories.case_repository import CaseRepository
+from mingo_assistant.services.business_lines.industry_lookup import IndustryCatalog, IndustryRow
 from mingo_assistant.ui.views.business_registration_documents import BusinessRegistrationDocumentsView
 from mingo_assistant.ui.views.business_registration_workspace import BusinessRegistrationWorkspace
 from mingo_assistant.ui.widgets.combo_box import NoWheelComboBox
@@ -35,6 +39,7 @@ from mingo_assistant.ui.widgets.combo_box import NoWheelComboBox
 
 NAV_ITEMS = [
     ("business_registration", "Hồ sơ thành lập doanh nghiệp"),
+    ("industry_lookup", "Tra cứu ngành nghề kinh doanh"),
     ("trash", "Thùng rác"),
     ("capital_change", "Hồ sơ thay đổi vốn điều lệ"),
     ("legal_representative_change", "Hồ sơ thay đổi đại diện pháp luật"),
@@ -81,6 +86,10 @@ class MainWindow(QMainWindow):
         self.current_card_columns = 0
         self.trash_container = QWidget()
         self.trash_layout = QVBoxLayout(self.trash_container)
+        self.industry_catalog = IndustryCatalog.load_from_project(Path(__file__).resolve().parents[3])
+        self.industry_search_input = QLineEdit()
+        self.industry_table = QTableWidget()
+        self.industry_status_label = QLabel()
 
         root = QWidget()
         root_layout = QHBoxLayout(root)
@@ -122,7 +131,7 @@ class MainWindow(QMainWindow):
         layout.addStretch(1)
 
         footer = QLabel("Dữ liệu lưu cục bộ trên máy")
-        footer.setStyleSheet("color: #ffe3ec; font-size: 12px;")
+        footer.setStyleSheet("color: #fff0f6; font-size: 12px;")
         layout.addWidget(footer)
 
         return sidebar
@@ -134,10 +143,12 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
 
         self.business_page = self._build_business_registration_page()
+        self.industry_lookup_page = self._build_industry_lookup_page()
         self.trash_page = self._build_trash_page()
         self.coming_soon_page = self._build_coming_soon_page()
 
         self.stack.addWidget(self.business_page)
+        self.stack.addWidget(self.industry_lookup_page)
         self.stack.addWidget(self.trash_page)
         self.stack.addWidget(self.coming_soon_page)
         layout.addWidget(self.stack)
@@ -152,6 +163,9 @@ class MainWindow(QMainWindow):
 
         if key == "business_registration":
             self.stack.setCurrentWidget(self.business_page)
+        elif key == "industry_lookup":
+            self._refresh_industry_lookup()
+            self.stack.setCurrentWidget(self.industry_lookup_page)
         elif key == "trash":
             self._refresh_trash()
             self.stack.setCurrentWidget(self.trash_page)
@@ -242,6 +256,109 @@ class MainWindow(QMainWindow):
         scroll.setWidget(self.trash_container)
         layout.addWidget(scroll, 1)
         return page
+
+    def _build_industry_lookup_page(self) -> QWidget:
+        page = QWidget()
+        page.setObjectName("IndustryLookupPage")
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(24, 22, 24, 22)
+        layout.setSpacing(18)
+
+        header = QVBoxLayout()
+        title = QLabel("Tra cứu ngành nghề kinh doanh")
+        title.setObjectName("IndustryLookupTitle")
+        description = QLabel("Tra cứu mã ngành, tên ngành và nội dung ngành theo Hệ thống ngành kinh tế Việt Nam 2025.")
+        description.setObjectName("IndustryLookupDescription")
+        description.setWordWrap(True)
+        header.addWidget(title)
+        header.addWidget(description)
+        layout.addLayout(header)
+
+        panel = QFrame()
+        panel.setObjectName("IndustryLookupPanel")
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(18, 16, 18, 18)
+        panel_layout.setSpacing(12)
+
+        source = QLabel("Hệ thống ngành kinh tế Việt Nam 2025 - Quyết định 36/2025/QĐ-TTg")
+        source.setObjectName("IndustryLookupSource")
+        source.setAlignment(Qt.AlignCenter)
+        panel_layout.addWidget(source)
+
+        sub_source = QLabel("Bảng chuyển đổi Hệ thống ngành nghề kinh tế Việt Nam VSIC 2018 - VSIC 2025")
+        sub_source.setObjectName("IndustryLookupSubSource")
+        sub_source.setAlignment(Qt.AlignCenter)
+        sub_source.setWordWrap(True)
+        panel_layout.addWidget(sub_source)
+
+        search_row = QHBoxLayout()
+        self.industry_search_input.setObjectName("IndustrySearchInput")
+        self.industry_search_input.setPlaceholderText("Nhập mã ngành, tên ngành để tìm kiếm...")
+        self.industry_search_input.textChanged.connect(self._refresh_industry_lookup)
+        search_row.addWidget(self.industry_search_input, 1)
+        panel_layout.addLayout(search_row)
+
+        self.industry_table.setObjectName("IndustryTable")
+        self.industry_table.setColumnCount(6)
+        self.industry_table.setHorizontalHeaderLabels(["Cấp 1", "Cấp 2", "Cấp 3", "Cấp 4", "Cấp 5", "Tên ngành"])
+        self.industry_table.setAlternatingRowColors(True)
+        self.industry_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.industry_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.industry_table.verticalHeader().setVisible(False)
+        self.industry_table.verticalHeader().setDefaultSectionSize(42)
+        self.industry_table.setMinimumHeight(460)
+        self.industry_table.setColumnWidth(0, 48)
+        self.industry_table.setColumnWidth(1, 48)
+        self.industry_table.setColumnWidth(2, 58)
+        self.industry_table.setColumnWidth(3, 58)
+        self.industry_table.setColumnWidth(4, 68)
+        self.industry_table.horizontalHeader().setStretchLastSection(True)
+        panel_layout.addWidget(self.industry_table, 1)
+
+        self.industry_status_label.setObjectName("IndustryLookupStatus")
+        self.industry_status_label.setWordWrap(True)
+        panel_layout.addWidget(self.industry_status_label)
+
+        layout.addWidget(panel, 1)
+        self._refresh_industry_lookup()
+        return page
+
+    def _refresh_industry_lookup(self) -> None:
+        self.industry_table.clearContents()
+        self.industry_table.setRowCount(0)
+        if not self.industry_catalog.is_available:
+            self.industry_table.setRowCount(1)
+            item = QTableWidgetItem(
+                "Chưa có dữ liệu ngành nghề chuẩn để tra cứu. "
+                "Cần bổ sung file assets/business_lines/vsic_2025.json từ nguồn chính thức trước khi dùng."
+            )
+            self.industry_table.setItem(0, 0, item)
+            self.industry_table.setSpan(0, 0, 1, 6)
+            self.industry_status_label.setText(
+                "Repo hiện chưa có dataset VSIC 2025 đầy đủ. Không tự điền dữ liệu để tránh sai mã ngành hoặc nội dung ngành."
+            )
+            return
+
+        rows = self.industry_catalog.filter_rows(self.industry_search_input.text())
+        self.industry_table.setRowCount(len(rows))
+        for row_index, row in enumerate(rows):
+            for column, value in enumerate([*row.levels, row.name]):
+                item = QTableWidgetItem(value)
+                if column < 5:
+                    item.setTextAlignment(Qt.AlignCenter)
+                else:
+                    item.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+                if row.detail:
+                    item.setToolTip(row.detail)
+                self.industry_table.setItem(row_index, column, item)
+        code_count = self._industry_row_code_count(rows)
+        self.industry_status_label.setText(
+            f"Đang dùng dữ liệu từ: {self.industry_catalog.source_path}. "
+            f"Hiển thị {len(rows)} dòng bảng từ {code_count} mã ngành phù hợp."
+        )
+
+    def _industry_row_code_count(self, rows: list[IndustryRow]) -> int:
+        return sum(1 for row in rows for code in row.levels if code)
 
     def _build_filters(self) -> QWidget:
         layout = self.filters_layout
