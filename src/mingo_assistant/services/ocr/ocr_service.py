@@ -38,15 +38,50 @@ class OcrService:
     def _run_easyocr(self, image_path: Path) -> list[str]:
         reader = self._get_easyocr_reader()
         image = self._read_image_for_cv(image_path)
-        source = image if image is not None else str(image_path)
-        results = reader.readtext(source, detail=1, paragraph=False)
         lines: list[str] = []
-        for item in results:
-            if len(item) >= 2 and isinstance(item[1], str):
-                text = item[1].strip()
-                if self._looks_like_text(text):
-                    lines.append(text)
+        sources = self._easyocr_sources(image) if image is not None else [str(image_path)]
+        for source in sources:
+            results = reader.readtext(source, detail=1, paragraph=False)
+            for item in results:
+                if len(item) >= 2 and isinstance(item[1], str):
+                    text = item[1].strip()
+                    if self._looks_like_text(text):
+                        lines.append(text)
         return self._dedupe_keep_order(lines)
+
+    def _easyocr_sources(self, image: Any) -> list[Any]:
+        try:
+            import cv2
+            import numpy as np
+        except Exception:
+            return [image]
+
+        candidates: list[Any] = [image]
+        height, width = image.shape[:2]
+        base = image
+        if max(height, width) < 1800:
+            scale = 1800 / max(height, width)
+            base = cv2.resize(image, (int(width * scale), int(height * scale)), interpolation=cv2.INTER_CUBIC)
+            candidates.append(base)
+
+        gray = cv2.cvtColor(base, cv2.COLOR_BGR2GRAY)
+        clahe = cv2.createCLAHE(clipLimit=2.2, tileGridSize=(8, 8)).apply(gray)
+        candidates.append(clahe)
+
+        kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]])
+        candidates.append(cv2.filter2D(base, -1, kernel))
+
+        base_height, base_width = base.shape[:2]
+        text_crop = base[int(base_height * 0.30) : base_height, int(base_width * 0.22) : base_width]
+        address_crop = base[int(base_height * 0.55) : base_height, int(base_width * 0.20) : base_width]
+        if text_crop.size:
+            candidates.append(text_crop)
+        if address_crop.size:
+            candidates.append(address_crop)
+            address_gray = cv2.cvtColor(address_crop, cv2.COLOR_BGR2GRAY)
+            candidates.append(cv2.createCLAHE(clipLimit=2.4, tileGridSize=(8, 8)).apply(address_gray))
+
+        return candidates
 
     def _get_easyocr_reader(self) -> Any:
         if self._easyocr_reader is not None:

@@ -4,6 +4,8 @@ import re
 import unicodedata
 from dataclasses import dataclass
 
+from mingo_assistant.services.normalization.administrative_place_matcher import AdministrativePlaceMatcher
+
 
 @dataclass
 class AddressParseResult:
@@ -97,8 +99,12 @@ class AddressParser:
         "an giang": "An Giang",
     }
 
+    def __init__(self, place_matcher: AdministrativePlaceMatcher | None = None) -> None:
+        self.place_matcher = place_matcher or AdministrativePlaceMatcher()
+
     def parse(self, text: str) -> AddressParseResult:
-        clean = self._normalize_spaces(text)
+        clean = self._normalize_spaces(self.place_matcher.normalize_address(text))
+        parts = self._address_parts(clean)
         result = AddressParseResult()
         result.company_name = self._extract_company_name(clean)
         result.village = self._extract_level(clean, ["thôn", "ấp", "khu", "tổ"])
@@ -106,8 +112,8 @@ class AddressParser:
         result.district = self._extract_level(clean, ["huyện", "quận", "thị xã", "thành phố"])
         result.province = self._extract_level(clean, ["tỉnh", "thành phố"])
         result.district = ""
-        result.province = self._normalize_province(result.province)
-        result.street_line = self._extract_street_line(clean, result)
+        result.province = self._normalize_province(result.province or self._extract_province_from_parts(parts))
+        result.street_line = self._extract_street_line(parts, result)
         result.normalized_address = self._build_normalized_address(result)
         return result
 
@@ -129,17 +135,27 @@ class AddressParser:
             return ""
         return f"{match.group(1).title()} {match.group(2).strip()}".strip(" ,.;")
 
-    def _extract_street_line(self, text: str, result: AddressParseResult) -> str:
-        candidates = [part.strip(" ,.;") for part in re.split(r"[,;]", text) if part.strip(" ,.;")]
+    def _address_parts(self, text: str) -> list[str]:
+        return [part.strip(" ,.;") for part in re.split(r"[,;]", text) if part.strip(" ,.;")]
+
+    def _extract_province_from_parts(self, parts: list[str]) -> str:
+        for part in reversed(parts):
+            match = self.place_matcher.best_province_name(part)
+            if match:
+                return match
+        return ""
+
+    def _extract_street_line(self, candidates: list[str], result: AddressParseResult) -> str:
         blocked = {result.company_name.lower(), result.village.lower(), result.ward.lower(), result.district.lower(), result.province.lower()}
+        details: list[str] = []
         for candidate in candidates:
             lowered = candidate.lower()
             if lowered in blocked:
                 continue
             if any(keyword in lowered for keyword in ["công ty", "xã ", "phường ", "huyện ", "quận ", "tỉnh ", "thành phố "]):
                 continue
-            return candidate
-        return ""
+            details.append(candidate)
+        return ", ".join(details)
 
     def _build_normalized_address(self, result: AddressParseResult) -> str:
         parts = [result.street_line, result.village, result.ward, result.province]
