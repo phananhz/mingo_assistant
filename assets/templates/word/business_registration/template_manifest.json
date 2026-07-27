@@ -151,50 +151,10 @@
                                                                                                          "12":  "authorized_person_email",
                                                                                                          "13":  "business_registration_office",
                                                                                                          "14":  "business_registration_office",
-                                                                                                         "15":  "business_registration_office"
-                                                                                                     },
-                                                                              "plain_replacements":  [
-                                                                                                         {
-                                                                                                             "id":  "authorizer.company_name",
-                                                                                                             "text":  "CÔNGTYTNHHTHƯƠNGMẠIVÀDỊCHVỤEDTION",
-                                                                                                             "field":  "company_name"
-                                                                                                         },
-                                                                                                         {
-                                                                                                             "id":  "authorizer.company_name.alt",
-                                                                                                             "text":  "CÔNGTYTNHHTHƯƠNGMẠIVÀDỊCHVỤEDITION",
-                                                                                                             "field":  "company_name"
-                                                                                                         },
-                                                                                                         {
-                                                                                                             "id":  "authorizer.company_name.spaced",
-                                                                                                             "text":  "CÔNG TY TNHH THƯƠNG MẠI VÀ DỊCH VỤ EDTION",
-                                                                                                             "field":  "company_name"
-                                                                                                         },
-                                                                                                         {
-                                                                                                             "id":  "authorizer.company_name.spaced_alt",
-                                                                                                             "text":  "CÔNG TY TNHH THƯƠNG MẠI VÀ DỊCH VỤ EDITION",
-                                                                                                             "field":  "company_name"
-                                                                                                         },
-                                                                                                         {
-                                                                                                             "id":  "signature.authorizer",
-                                                                                                             "text":  "THOMASEDITION",
-                                                                                                             "field":  "legal_representative_full_name"
-                                                                                                         },
-                                                                                                         {
-                                                                                                             "id":  "signature.authorizer.alt",
-                                                                                                             "text":  "THOMASEDITON",
-                                                                                                             "field":  "legal_representative_full_name"
-                                                                                                         },
-                                                                                                         {
-                                                                                                             "id":  "signature.authorizer.spaced",
-                                                                                                             "text":  "THOMAS EDITION",
-                                                                                                             "field":  "legal_representative_full_name"
-                                                                                                         },
-                                                                                                         {
-                                                                                                             "id":  "signature.authorizer.spaced_alt",
-                                                                                                             "text":  "THOMAS EDITON",
-                                                                                                             "field":  "legal_representative_full_name"
-                                                                                                         }
-                                                                                                     ]
+                                                                                                         "15":  "business_registration_office",
+                                                                                                         "16":  "company_name",
+                                                                                                         "17":  "legal_representative_full_name"
+                                                                                                     }
                                                                           }
                                                 }
                   }

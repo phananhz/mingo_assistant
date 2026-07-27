@@ -1921,13 +1921,12 @@ class BusinessRegistrationWorkspace(QWidget):
             values[f"member_{member_index}_{suffix}"] = data.get(source_key, "")
 
     def _apply_value_defaults(self, values: dict[str, str]) -> None:
-        document_place = values.get("document_place", "").strip()
         document_day = values.get("document_day", "").strip()
         document_month = values.get("document_month", "").strip()
         document_year = values.get("document_year", "").strip()
 
-        if not values.get("document_place_date") and document_place and document_day and document_month and document_year:
-            values["document_place_date"] = f"{document_place}, ngày {document_day} tháng {document_month} năm {document_year}"
+        if not values.get("document_place_date") and document_day and document_month and document_year:
+            values["document_place_date"] = f"ngày {document_day} tháng {document_month} năm {document_year}"
 
         self._fill_composed_address(
             values,
