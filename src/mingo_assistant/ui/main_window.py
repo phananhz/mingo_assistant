@@ -4,11 +4,12 @@ import json
 from pathlib import Path
 from uuid import uuid4
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QUrl
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QDialog,
     QDialogButtonBox,
+    QGroupBox,
     QFormLayout,
     QFrame,
     QGridLayout,
@@ -28,6 +29,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from PySide6.QtGui import QDesktopServices
 
 from mingo_assistant.models.case import CaseSummary
 from mingo_assistant.repositories.case_repository import CaseRepository
@@ -90,6 +92,7 @@ class MainWindow(QMainWindow):
         self.industry_search_input = QLineEdit()
         self.industry_table = QTableWidget()
         self.industry_status_label = QLabel()
+        self.industry_detail = QTextEdit()
 
         root = QWidget()
         root_layout = QHBoxLayout(root)
@@ -280,9 +283,14 @@ class MainWindow(QMainWindow):
         panel_layout.setContentsMargins(18, 16, 18, 18)
         panel_layout.setSpacing(12)
 
-        source = QLabel("Hệ thống ngành kinh tế Việt Nam 2025 - Quyết định 36/2025/QĐ-TTg")
+        source = QLabel(
+            '<a href="https://vanban.chinhphu.vn/?classid=1&docid=215475&pageid=27160">'
+            "Nguồn chính thức: Quyết định 36/2025/QĐ-TTg - Cổng Thông tin điện tử Chính phủ</a>"
+        )
         source.setObjectName("IndustryLookupSource")
         source.setAlignment(Qt.AlignCenter)
+        source.setOpenExternalLinks(False)
+        source.linkActivated.connect(lambda url: QDesktopServices.openUrl(QUrl(url)))
         panel_layout.addWidget(source)
 
         sub_source = QLabel("Bảng chuyển đổi Hệ thống ngành nghề kinh tế Việt Nam VSIC 2018 - VSIC 2025")
@@ -313,7 +321,19 @@ class MainWindow(QMainWindow):
         self.industry_table.setColumnWidth(3, 58)
         self.industry_table.setColumnWidth(4, 68)
         self.industry_table.horizontalHeader().setStretchLastSection(True)
+        self.industry_table.itemSelectionChanged.connect(self._show_selected_industry_detail)
         panel_layout.addWidget(self.industry_table, 1)
+
+        detail_group = QGroupBox("Chi tiết ngành nghề")
+        detail_layout = QVBoxLayout(detail_group)
+        detail_layout.setContentsMargins(10, 10, 10, 10)
+        self.industry_detail.setReadOnly(True)
+        self.industry_detail.setMinimumHeight(150)
+        self.industry_detail.setPlaceholderText(
+            "Chọn một ngành trong bảng để xem nội dung hoạt động và các trường hợp loại trừ."
+        )
+        detail_layout.addWidget(self.industry_detail)
+        panel_layout.addWidget(detail_group)
 
         self.industry_status_label.setObjectName("IndustryLookupStatus")
         self.industry_status_label.setWordWrap(True)
@@ -337,6 +357,7 @@ class MainWindow(QMainWindow):
             self.industry_status_label.setText(
                 "Repo hiện chưa có dataset VSIC 2025 đầy đủ. Không tự điền dữ liệu để tránh sai mã ngành hoặc nội dung ngành."
             )
+            self.industry_detail.clear()
             return
 
         rows = self.industry_catalog.filter_rows(self.industry_search_input.text())
@@ -344,6 +365,7 @@ class MainWindow(QMainWindow):
         for row_index, row in enumerate(rows):
             for column, value in enumerate([*row.levels, row.name]):
                 item = QTableWidgetItem(value)
+                item.setData(Qt.UserRole, row)
                 if column < 5:
                     item.setTextAlignment(Qt.AlignCenter)
                 else:
@@ -351,6 +373,10 @@ class MainWindow(QMainWindow):
                 if row.detail:
                     item.setToolTip(row.detail)
                 self.industry_table.setItem(row_index, column, item)
+        if rows:
+            self.industry_table.selectRow(0)
+        else:
+            self.industry_detail.setPlainText("Không tìm thấy ngành phù hợp.")
         code_count = self._industry_row_code_count(rows)
         self.industry_status_label.setText(
             f"Đang dùng dữ liệu từ: {self.industry_catalog.source_path}. "
@@ -359,6 +385,22 @@ class MainWindow(QMainWindow):
 
     def _industry_row_code_count(self, rows: list[IndustryRow]) -> int:
         return sum(1 for row in rows for code in row.levels if code)
+
+    def _show_selected_industry_detail(self) -> None:
+        selected = self.industry_table.selectedItems()
+        if not selected:
+            return
+        row = selected[0].data(Qt.UserRole)
+        if not isinstance(row, IndustryRow):
+            return
+        code = next((level for level in reversed(row.levels) if level), "")
+        title = f"{code} - {row.name}" if code else row.name
+        sections = [title]
+        if row.included_detail:
+            sections.append(f"Nội dung hoạt động:\n{row.included_detail}")
+        if row.excluded_detail:
+            sections.append(f"Loại trừ:\n{row.excluded_detail}")
+        self.industry_detail.setPlainText("\n\n".join(sections))
 
     def _build_filters(self) -> QWidget:
         layout = self.filters_layout

@@ -7,7 +7,7 @@ from pathlib import Path
 from time import monotonic
 from uuid import uuid4
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QUrl, Qt, Signal
 from PySide6.QtGui import QDesktopServices, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -34,8 +34,6 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PySide6.QtCore import QUrl
-
 from mingo_assistant.models.case import CaseSummary
 from mingo_assistant.services.documents.docx_generator import DocxTemplateGenerator
 from mingo_assistant.services.business_lines.industry_lookup import IndustryCatalog, IndustryRow
@@ -284,7 +282,6 @@ class BusinessRegistrationWorkspace(QWidget):
 
         layout.addLayout(self._build_header())
         layout.addWidget(self._build_ocr_section())
-        layout.addWidget(self._build_address_section())
         layout.addWidget(self._build_form_section())
 
         scroll.setWidget(page)
@@ -401,14 +398,8 @@ class BusinessRegistrationWorkspace(QWidget):
 
         self.raw_ocr_text.setPlaceholderText("Kết quả OCR sẽ hiển thị ở đây. Bạn cũng có thể dán văn bản OCR vào rồi bấm xử lý.")
         self.raw_ocr_text.setMinimumHeight(110)
-        layout.addWidget(self.raw_ocr_text)
 
         layout.addWidget(self._build_cccd_result_section())
-
-        parse_button = QPushButton("Xử lý văn bản OCR vào form")
-        parse_button.setObjectName("GhostButton")
-        parse_button.clicked.connect(self._parse_ocr_text)
-        layout.addWidget(parse_button, 0, Qt.AlignRight)
         return group
 
     def _build_cccd_result_section(self) -> QWidget:
@@ -645,6 +636,15 @@ class BusinessRegistrationWorkspace(QWidget):
         layout = QVBoxLayout(panel)
         layout.setSpacing(8)
 
+        source = QLabel(
+            '<a href="https://vanban.chinhphu.vn/?classid=1&docid=215475&pageid=27160">'
+            "Nguồn chính thức: Quyết định 36/2025/QĐ-TTg - Cổng Thông tin điện tử Chính phủ</a>"
+        )
+        source.setObjectName("IndustryLookupSource")
+        source.setOpenExternalLinks(False)
+        source.linkActivated.connect(lambda url: QDesktopServices.openUrl(QUrl(url)))
+        layout.addWidget(source)
+
         search_row = QHBoxLayout()
         self.industry_search_input.setObjectName("IndustrySearchInput")
         self.industry_search_input.setPlaceholderText("Nhập mã ngành, tên ngành hoặc từ khóa hoạt động")
@@ -672,8 +672,10 @@ class BusinessRegistrationWorkspace(QWidget):
         layout.addWidget(self.industry_results_table)
 
         self.industry_detail.setReadOnly(True)
-        self.industry_detail.setFixedHeight(78)
-        self.industry_detail.setPlaceholderText("Chọn một ngành để xem mô tả.")
+        self.industry_detail.setMinimumHeight(150)
+        self.industry_detail.setPlaceholderText(
+            "Chọn một ngành để xem nội dung hoạt động và các trường hợp loại trừ."
+        )
         layout.addWidget(self.industry_detail)
         self._refresh_industry_results()
         return panel
@@ -740,10 +742,12 @@ class BusinessRegistrationWorkspace(QWidget):
         if row is None:
             return
         code = self._industry_row_code(row)
-        text = f"{code} - {row.name}" if code else row.name
-        if row.detail:
-            text = f"{text}\n{row.detail}"
-        self.industry_detail.setPlainText(text)
+        sections = [f"{code} - {row.name}" if code else row.name]
+        if row.included_detail:
+            sections.append(f"Nội dung hoạt động:\n{row.included_detail}")
+        if row.excluded_detail:
+            sections.append(f"Loại trừ:\n{row.excluded_detail}")
+        self.industry_detail.setPlainText("\n\n".join(sections))
 
     def _add_selected_industry_row(self) -> None:
         row = self._selected_industry_row()

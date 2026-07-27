@@ -20,6 +20,17 @@ class IndustryRow:
     name: str
     detail: str = ""
 
+    @property
+    def included_detail(self) -> str:
+        """Return the official scope text before the exclusion section."""
+        return self.detail.split("Loại trừ:", 1)[0].strip()
+
+    @property
+    def excluded_detail(self) -> str:
+        """Return the official exclusion text, when the source provides it."""
+        parts = self.detail.split("Loại trừ:", 1)
+        return parts[1].strip() if len(parts) == 2 else ""
+
 
 @dataclass(frozen=True)
 class IndustryCatalog:
