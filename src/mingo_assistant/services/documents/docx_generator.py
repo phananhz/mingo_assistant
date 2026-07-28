@@ -187,11 +187,11 @@ class DocxTemplateGenerator:
         self._replace_case_type_text(document, values)
         self._replace_business_lines_tables_v2(document, values)
         self._replace_asset_contribution_tables(document, values)
+        self._normalize_file1_financial_tables(document, docx_path.name)
         self._fix_registration_office_lines(document, values)
         self._fix_contact_lines(document, values)
         self._apply_bold_uppercase_formatting(document, values)
         self._fix_signature_font_sizes(document, docx_path.name, values)
-        self._normalize_statute_signature_layout(document, docx_path.name, values)
         self._normalize_power_of_attorney_layout(document, docx_path.name, values)
         document.save(docx_path)
 
@@ -690,6 +690,109 @@ class DocxTemplateGenerator:
                 self._set_cell_text(total_row.cells[2], self._asset_total_amount_text(values, assets))
                 self._set_cell_text(total_row.cells[3], self._asset_total_ratio_text(values, assets))
 
+    def _normalize_file1_financial_tables(self, document: Document, template_name: str) -> None:
+        """Use one stable table system for sections 7 and 8 of file 1."""
+        if not template_name.startswith("1. "):
+            return
+
+        for table in self._iter_tables(document):
+            if not table.rows:
+                continue
+            header_text = self._fold(" ".join(cell.text for cell in table.rows[0].cells))
+            if "loai nguon von" in header_text and "ty le" in header_text:
+                self._normalize_financial_table_geometry(table, [3300, 4700, 1353])
+                self._normalize_financial_table_cells(table, header_index=0, name_column=0)
+            elif "tai san gop von" in header_text and "ty le" in header_text:
+                self._normalize_financial_table_geometry(table, [800, 3900, 3300, 1353])
+                self._normalize_financial_table_cells(table, header_index=0, name_column=1)
+
+    def _normalize_financial_table_geometry(self, table, widths: list[int]) -> None:
+        if len(table.rows[0].cells) != len(widths):
+            return
+        table.autofit = False
+        table_properties = table._tbl.tblPr
+        table_width = table_properties.find(qn("w:tblW"))
+        if table_width is None:
+            table_width = OxmlElement("w:tblW")
+            table_properties.insert(0, table_width)
+        table_width.set(qn("w:w"), str(sum(widths)))
+        table_width.set(qn("w:type"), "dxa")
+
+        table_indent = table_properties.find(qn("w:tblInd"))
+        if table_indent is not None:
+            table_indent.set(qn("w:w"), "0")
+            table_indent.set(qn("w:type"), "dxa")
+        table_layout = table_properties.find(qn("w:tblLayout"))
+        if table_layout is None:
+            table_layout = OxmlElement("w:tblLayout")
+            table_properties.append(table_layout)
+        table_layout.set(qn("w:type"), "fixed")
+
+        grid_columns = table._tbl.tblGrid.gridCol_lst
+        if len(grid_columns) != len(widths):
+            return
+        for column, width in zip(grid_columns, widths):
+            column.set(qn("w:w"), str(width))
+        for row in table.rows:
+            self._remove_row_height_v2(row._tr)
+            for cell, width in zip(row.cells, widths):
+                cell_properties = cell._tc.get_or_add_tcPr()
+                cell_width = cell_properties.find(qn("w:tcW"))
+                if cell_width is None:
+                    cell_width = OxmlElement("w:tcW")
+                    cell_properties.insert(0, cell_width)
+                cell_width.set(qn("w:w"), str(width))
+                cell_width.set(qn("w:type"), "dxa")
+
+    def _normalize_financial_table_cells(self, table, header_index: int, name_column: int) -> None:
+        for row_index, row in enumerate(table.rows):
+            for column_index, cell in enumerate(row.cells):
+                cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+                self._remove_vertical_cell_padding(cell)
+                alignment = WD_ALIGN_PARAGRAPH.CENTER if row_index == header_index or column_index != name_column else WD_ALIGN_PARAGRAPH.LEFT
+                for paragraph in cell.paragraphs:
+                    paragraph.alignment = alignment
+                    paragraph.paragraph_format.space_before = Pt(0)
+                    paragraph.paragraph_format.space_after = Pt(0)
+                    paragraph.paragraph_format.line_spacing = 1
+                    paragraph.paragraph_format.left_indent = Inches(0)
+                    paragraph.paragraph_format.right_indent = Inches(0)
+                    paragraph.paragraph_format.first_line_indent = Inches(0)
+                    self._set_compact_table_paragraph_spacing(paragraph)
+
+    def _remove_vertical_cell_padding(self, cell) -> None:
+        """Match the reference form's tight table cells.
+
+        Word applies a default top/bottom cell margin when the template does
+        not define one. That margin remains visible even when paragraph
+        before/after spacing is zero, which makes generated tables look
+        vertically loose compared with the reference form.
+        """
+        tc_pr = cell._tc.get_or_add_tcPr()
+        tc_mar = tc_pr.find(qn("w:tcMar"))
+        if tc_mar is None:
+            tc_mar = OxmlElement("w:tcMar")
+            tc_pr.append(tc_mar)
+        for side in ("top", "bottom"):
+            margin = tc_mar.find(qn(f"w:{side}"))
+            if margin is None:
+                margin = OxmlElement(f"w:{side}")
+                tc_mar.append(margin)
+            margin.set(qn("w:w"), "0")
+            margin.set(qn("w:type"), "dxa")
+
+    def _set_compact_table_paragraph_spacing(self, paragraph) -> None:
+        """Write deterministic single-line spacing into the paragraph XML."""
+        p_pr = paragraph._p.get_or_add_pPr()
+        spacing = p_pr.find(qn("w:spacing"))
+        if spacing is None:
+            spacing = OxmlElement("w:spacing")
+            p_pr.append(spacing)
+        spacing.set(qn("w:before"), "0")
+        spacing.set(qn("w:after"), "0")
+        spacing.set(qn("w:line"), "240")
+        spacing.set(qn("w:lineRule"), "auto")
+
     def _asset_header_index(self, table) -> int | None:
         for index, row in enumerate(table.rows[:3]):
             folded_header = self._fold(" ".join(cell.text for cell in row.cells))
@@ -909,42 +1012,6 @@ class DocxTemplateGenerator:
                         for run in paragraph.runs:
                             if run.text:
                                 run.font.size = Pt(13)
-
-    def _normalize_statute_signature_layout(
-        self, document: Document, template_name: str, values: dict[str, str]
-    ) -> None:
-        """Place the statute's owner/legal-representative block in the right half."""
-        if not template_name.startswith("2. "):
-            return
-
-        signer = str(values.get("legal_representative_full_name", "") or "").strip().upper()
-        if not signer:
-            return
-        folded_signer = self._fold(signer)
-        paragraphs = list(self._iter_paragraphs(document))
-        start_index = next(
-            (
-                index
-                for index, paragraph in enumerate(paragraphs)
-                if "chu so huu cong ty" in self._fold(paragraph.text)
-                and "nguoi dai dien theo phap luat" in self._fold(paragraph.text)
-            ),
-            None,
-        )
-        if start_index is None:
-            return
-
-        # The source template contains the signature block as consecutive
-        # paragraphs. Give all of them the same right-side text frame so the
-        # heading and the signer share one vertical axis.
-        for paragraph in paragraphs[start_index:]:
-            if paragraph.text.strip() or paragraph is paragraphs[start_index]:
-                paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                paragraph.paragraph_format.left_indent = Inches(3.6)
-                paragraph.paragraph_format.right_indent = Inches(0)
-                paragraph.paragraph_format.first_line_indent = Inches(0)
-            if folded_signer in self._fold(paragraph.text):
-                break
 
     def _normalize_power_of_attorney_layout(
         self, document: Document, template_name: str, values: dict[str, str]

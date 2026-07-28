@@ -60,6 +60,134 @@ QPushButton#NavButton[active="true"] {
     font-size: 13px;
 }
 
+#DocumentsEyebrow {
+    color: #c46a93;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 1px;
+}
+
+#SummaryCard,
+#DocumentsPanel {
+    background: #ffffff;
+    border: 1px solid #f0d4df;
+    border-radius: 12px;
+}
+
+#SectionTitle {
+    color: #4b2434;
+    font-size: 16px;
+    font-weight: 800;
+}
+
+#SectionCount,
+#SectionHint,
+#VersionMeta,
+#DocumentMeta {
+    color: #8b6877;
+    font-size: 12px;
+}
+
+#SummaryLabel {
+    color: #a15b78;
+    font-size: 10px;
+    font-weight: 800;
+}
+
+#SummaryValue {
+    color: #4b2434;
+    font-size: 14px;
+    font-weight: 700;
+}
+
+#SummaryPath,
+#DocumentPath {
+    color: #8b6877;
+    font-size: 11px;
+}
+
+#SummaryStatus {
+    background: #e9f8ef;
+    color: #27804c;
+    border-radius: 12px;
+    padding: 5px 11px;
+    font-size: 11px;
+    font-weight: 800;
+}
+
+#VersionCard {
+    background: #fffafd;
+    border: 1px solid #f1d8e3;
+    border-radius: 9px;
+}
+
+QRadioButton#VersionSelector {
+    color: #9b315f;
+    font-size: 14px;
+    font-weight: 800;
+    spacing: 8px;
+}
+
+QRadioButton#VersionSelector::indicator {
+    width: 16px;
+    height: 16px;
+    border: 1px solid #d798b5;
+    border-radius: 8px;
+    background: #ffffff;
+}
+
+QRadioButton#VersionSelector::indicator:checked {
+    border: 5px solid #c46a93;
+    background: #ffffff;
+}
+
+#DocumentRow {
+    background: #ffffff;
+    border: 1px solid #f3dfe7;
+    border-radius: 8px;
+}
+
+#DocumentIndex {
+    background: #ffe8f0;
+    color: #9b315f;
+    border-radius: 8px;
+    padding: 8px 4px;
+    font-size: 11px;
+    font-weight: 800;
+}
+
+#DocumentTitle {
+    color: #4b2434;
+    font-size: 14px;
+    font-weight: 800;
+}
+
+QPushButton#CompactPrimaryButton,
+QPushButton#CompactGhostButton {
+    min-width: 68px;
+    padding: 7px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+}
+
+QPushButton#CompactPrimaryButton {
+    background: #c46a93;
+    color: #ffffff;
+    border: none;
+    font-weight: 800;
+}
+
+QPushButton#CompactPrimaryButton:hover {
+    background: #aa527b;
+}
+
+QPushButton#CompactGhostButton {
+    background: #ffffff;
+    color: #9b315f;
+    border: 1px solid #efc4d6;
+    font-weight: 700;
+}
+
 #FilterLabel {
     color: #70455a;
     font-size: 10px;
