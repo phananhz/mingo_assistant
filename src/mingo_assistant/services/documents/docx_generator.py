@@ -445,10 +445,24 @@ class DocxTemplateGenerator:
 
         header = table.rows[header_index]
         self._remove_row_height_v2(header._tr)
-        self._mark_repeating_table_header(header)
+        self._unmark_repeating_table_header_v2(header)
         header_texts = ["STT", "Tên ngành", "Mã ngành", "Ngành, nghề\nkinh doanh\nchính"]
         for cell, text, width in zip(header.cells[:4], header_texts, widths):
             self._write_business_line_cell_v2(cell, text, width, "center", bold=True)
+
+    def _unmark_repeating_table_header_v2(self, row) -> None:
+        """Keep the industry table header on the first page only.
+
+        Word repeats a row on every page when ``w:tblHeader`` is present.
+        The legal form's reference layout intentionally continues the table
+        without repeating the column headings, so remove the flag explicitly
+        even if it exists in the source template.
+        """
+        tr_pr = row._tr.find(qn("w:trPr"))
+        if tr_pr is None:
+            return
+        for header_flag in tr_pr.findall(qn("w:tblHeader")):
+            tr_pr.remove(header_flag)
 
     def _new_business_line_row_xml_v2(self, widths: list[int]):
         row = OxmlElement("w:tr")
@@ -627,9 +641,11 @@ class DocxTemplateGenerator:
             tc_w.set(qn("w:type"), "dxa")
 
     def _mark_repeating_table_header(self, row) -> None:
+        # Industry tables must continue without repeating their headings on
+        # later pages. Keep this legacy helper defensive for older callers.
         tr_pr = row._tr.get_or_add_trPr()
-        if not tr_pr.findall(qn("w:tblHeader")):
-            tr_pr.append(OxmlElement("w:tblHeader"))
+        for header_flag in tr_pr.findall(qn("w:tblHeader")):
+            tr_pr.remove(header_flag)
 
     def _iter_tables(self, container):
         for table in container.tables:
