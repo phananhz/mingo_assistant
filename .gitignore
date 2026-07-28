@@ -18,6 +18,9 @@ data/app/*
 data/temp/*
 exports/*
 logs/*
+DataTrainCCCD/
+.tmp-*/
+*.docx~
 !data/app/.gitkeep
 !data/temp/.gitkeep
 !exports/.gitkeep

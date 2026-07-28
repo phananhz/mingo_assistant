@@ -12,6 +12,10 @@ from datetime import datetime
 from pathlib import Path
 
 from docx import Document
+from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 from docx.shared import Inches, Pt
 from docx.text.paragraph import Paragraph
 from lxml import etree
@@ -181,12 +185,13 @@ class DocxTemplateGenerator:
         document = Document(docx_path)
         self._replace_manifest_plain_text(document, docx_path.name, values)
         self._replace_case_type_text(document, values)
-        self._replace_business_lines_tables(document, values)
+        self._replace_business_lines_tables_v2(document, values)
         self._replace_asset_contribution_tables(document, values)
         self._fix_registration_office_lines(document, values)
         self._fix_contact_lines(document, values)
         self._apply_bold_uppercase_formatting(document, values)
         self._fix_signature_font_sizes(document, docx_path.name, values)
+        self._normalize_power_of_attorney_layout(document, docx_path.name, values)
         document.save(docx_path)
 
     def _replace_case_type_text(self, document: Document, values: dict[str, str]) -> None:
@@ -302,14 +307,35 @@ class DocxTemplateGenerator:
             return ratio.rstrip("% ").strip()
         raw = str(values.get(target, "") or "").strip()
         if target in self.DETAIL_ADDRESS_FIELDS:
+            if target.startswith("company_"):
+                return self._company_address_part(values, "detail")
             return self._address_detail_only(raw)
         if target in self.WARD_FIELDS:
+            if target.startswith("company_"):
+                return self._company_address_part(values, "ward")
             return self._administrative_part_only(raw, {"xa", "phuong", "thi_tran"})
         if target in self.PROVINCE_FIELDS:
+            if target.startswith("company_"):
+                return self._company_address_part(values, "province")
             return self._normalize_province(self._administrative_part_only(raw, {"tinh", "thanh_pho"}))
         if target in self.UPPERCASE_BOLD_FIELDS:
             return raw.upper()
         return raw
+
+    def _company_address_part(self, values: dict[str, str], part: str) -> str:
+        full = str(values.get("company_address", "") or "").strip()
+        detail = str(values.get("company_address_detail", "") or "").strip()
+        ward = str(values.get("company_ward", "") or "").strip()
+        province = str(values.get("company_province", "") or "").strip()
+        has_admin_parts = bool(re.search(r"(?i)\b(xã|phường|thị trấn|đặc khu|tỉnh|thành phố)\b", full))
+        source = full if has_admin_parts else detail
+        if part == "detail":
+            return self._address_detail_only(source or detail)
+        if part == "ward":
+            parsed = self._administrative_part_only(source, {"xa", "phuong", "thi_tran", "dac_khu"})
+            return parsed if parsed != source or source else ward
+        parsed = self._normalize_province(self._administrative_part_only(source, {"tinh", "thanh_pho"}))
+        return parsed if parsed != source or source else province
 
     def _capital_total_ratio(self, values: dict[str, str]) -> str:
         ratio = str(values.get("capital_total_ratio", "") or "").strip()
@@ -374,6 +400,156 @@ class DocxTemplateGenerator:
                 break
         return self.PROVINCE_AFTER_MERGER.get(normalized, text)
 
+    def _replace_business_lines_tables_v2(self, document: Document, values: dict[str, str]) -> None:
+        business_lines = self._business_lines(values)
+        for table in self._iter_tables(document):
+            if not table.rows:
+                continue
+            header_index = self._business_line_header_index(table)
+            if header_index is None or len(table.rows[header_index].cells) != 4:
+                continue
+            widths = self._business_line_widths_v2(table)
+            self._prepare_business_line_table_v2(table, header_index, widths)
+            source_row = deepcopy(table.rows[header_index + 1]._tr) if len(table.rows) > header_index + 1 else None
+            for row in list(table.rows[header_index + 1 :]):
+                table._tbl.remove(row._tr)
+            rows_to_write = business_lines or [{"name": "", "code": "", "is_main": False}]
+            for index, line in enumerate(rows_to_write, start=1):
+                row_xml = deepcopy(source_row) if source_row is not None else self._new_business_line_row_xml_v2(widths)
+                self._strip_business_line_row_content_v2(row_xml)
+                table._tbl.append(row_xml)
+                self._write_business_line_row_v2(table.rows[-1], index, line, widths)
+
+    def _business_line_widths_v2(self, table) -> list[int]:
+        widths = [int(column.get(qn("w:w")) or 0) for column in table._tbl.tblGrid.gridCol_lst[:4]]
+        if len(widths) != 4 or not all(widths):
+            raise ValueError("Bảng ngành nghề phải có geometry hợp lệ cho 4 cột.")
+        return widths
+
+    def _prepare_business_line_table_v2(self, table, header_index: int, widths: list[int]) -> None:
+        table.autofit = False
+        tbl_pr = table._tbl.tblPr
+        tbl_w = tbl_pr.find(qn("w:tblW"))
+        if tbl_w is None:
+            tbl_w = OxmlElement("w:tblW")
+            tbl_pr.insert(0, tbl_w)
+        tbl_w.set(qn("w:w"), str(sum(widths)))
+        tbl_w.set(qn("w:type"), "dxa")
+        tbl_layout = tbl_pr.find(qn("w:tblLayout"))
+        if tbl_layout is None:
+            tbl_layout = OxmlElement("w:tblLayout")
+            tbl_pr.append(tbl_layout)
+        tbl_layout.set(qn("w:type"), "fixed")
+        for column, width in zip(table._tbl.tblGrid.gridCol_lst[:4], widths):
+            column.set(qn("w:w"), str(width))
+
+        header = table.rows[header_index]
+        self._remove_row_height_v2(header._tr)
+        self._mark_repeating_table_header(header)
+        header_texts = ["STT", "Tên ngành", "Mã ngành", "Ngành, nghề\nkinh doanh\nchính"]
+        for cell, text, width in zip(header.cells[:4], header_texts, widths):
+            self._write_business_line_cell_v2(cell, text, width, "center", bold=True)
+
+    def _new_business_line_row_xml_v2(self, widths: list[int]):
+        row = OxmlElement("w:tr")
+        for width in widths:
+            cell = OxmlElement("w:tc")
+            tc_pr = OxmlElement("w:tcPr")
+            tc_w = OxmlElement("w:tcW")
+            tc_w.set(qn("w:w"), str(width))
+            tc_w.set(qn("w:type"), "dxa")
+            tc_pr.append(tc_w)
+            cell.append(tc_pr)
+            row.append(cell)
+        return row
+
+    def _strip_business_line_row_content_v2(self, row_xml) -> None:
+        self._remove_row_height_v2(row_xml)
+        tr_pr = row_xml.find(qn("w:trPr"))
+        if tr_pr is not None:
+            for element in list(tr_pr):
+                if element.tag in {qn("w:trHeight"), qn("w:cantSplit")}:
+                    tr_pr.remove(element)
+        for cell in row_xml.findall(qn("w:tc")):
+            for child in list(cell):
+                if child.tag != qn("w:tcPr"):
+                    cell.remove(child)
+
+    def _remove_row_height_v2(self, row_xml) -> None:
+        tr_pr = row_xml.find(qn("w:trPr"))
+        if tr_pr is not None:
+            for element in tr_pr.findall(qn("w:trHeight")):
+                tr_pr.remove(element)
+
+    def _write_business_line_row_v2(self, row, index: int, line: dict[str, str | bool], widths: list[int]) -> None:
+        self._remove_row_height_v2(row._tr)
+        self._write_business_line_cell_v2(row.cells[0], str(index), widths[0], "center")
+        self._write_business_line_cell_v2(row.cells[1], str(line["name"]), widths[1], "left")
+        self._write_business_line_cell_v2(row.cells[2], str(line["code"]), widths[2], "center", bold=bool(line["is_main"]))
+        self._write_business_line_cell_v2(row.cells[3], "X" if line["is_main"] else "", widths[3], "center", bold=bool(line["is_main"]))
+
+    def _write_business_line_cell_v2(self, cell, value: str, width: int, alignment: str, bold: bool = False) -> None:
+        tc = cell._tc
+        tc_pr = tc.get_or_add_tcPr()
+        tc_w = tc_pr.find(qn("w:tcW"))
+        if tc_w is None:
+            tc_w = OxmlElement("w:tcW")
+            tc_pr.insert(0, tc_w)
+        tc_w.set(qn("w:w"), str(width))
+        tc_w.set(qn("w:type"), "dxa")
+        v_align = tc_pr.find(qn("w:vAlign"))
+        if v_align is None:
+            v_align = OxmlElement("w:vAlign")
+            tc_pr.append(v_align)
+        v_align.set(qn("w:val"), "center")
+        for child in list(tc):
+            if child.tag != qn("w:tcPr"):
+                tc.remove(child)
+
+        paragraph = OxmlElement("w:p")
+        p_pr = OxmlElement("w:pPr")
+        p_style = OxmlElement("w:pStyle")
+        p_style.set(qn("w:val"), "TableParagraph")
+        p_pr.append(p_style)
+        spacing = OxmlElement("w:spacing")
+        spacing.set(qn("w:before"), "0")
+        spacing.set(qn("w:after"), "0")
+        spacing.set(qn("w:line"), "276")
+        spacing.set(qn("w:lineRule"), "auto")
+        p_pr.append(spacing)
+        indent = OxmlElement("w:ind")
+        indent.set(qn("w:left"), "0")
+        indent.set(qn("w:right"), "0")
+        indent.set(qn("w:firstLine"), "0")
+        p_pr.append(indent)
+        justification = OxmlElement("w:jc")
+        justification.set(qn("w:val"), alignment)
+        p_pr.append(justification)
+        paragraph.append(p_pr)
+        for line_index, line in enumerate(str(value or "").splitlines() or [""]):
+            if line_index:
+                break_run = OxmlElement("w:r")
+                break_run.append(OxmlElement("w:br"))
+                paragraph.append(break_run)
+            run = OxmlElement("w:r")
+            r_pr = OxmlElement("w:rPr")
+            size = OxmlElement("w:sz")
+            size.set(qn("w:val"), "26")
+            r_pr.append(size)
+            size_cs = OxmlElement("w:szCs")
+            size_cs.set(qn("w:val"), "26")
+            r_pr.append(size_cs)
+            if bold:
+                r_pr.append(OxmlElement("w:b"))
+            run.append(r_pr)
+            text_node = OxmlElement("w:t")
+            text_node.text = line
+            if line[:1].isspace() or line[-1:].isspace():
+                text_node.set(qn("xml:space"), "preserve")
+            run.append(text_node)
+            paragraph.append(run)
+        tc.append(paragraph)
+
     def _replace_business_lines_tables(self, document: Document, values: dict[str, str]) -> None:
         business_lines = self._business_lines(values)
 
@@ -386,6 +562,7 @@ class DocxTemplateGenerator:
             if len(table.rows[header_index].cells) < 4:
                 continue
 
+            column_widths = self._normalize_business_line_table(table, header_index)
             template_index = min(header_index + 1, len(table.rows) - 1)
             template_row = deepcopy(table.rows[template_index]._tr)
             for row in list(table.rows[header_index + 1 :]):
@@ -395,10 +572,64 @@ class DocxTemplateGenerator:
             for index, line in enumerate(rows_to_write, start=1):
                 table._tbl.append(deepcopy(template_row))
                 row = table.rows[-1]
-                self._set_cell_text(row.cells[0], str(index))
-                self._set_cell_text(row.cells[1], line["name"])
-                self._set_cell_text(row.cells[2], line["code"], bold=bool(line["is_main"]))
-                self._set_cell_text(row.cells[3], "X" if line["is_main"] else "", bold=bool(line["is_main"]))
+                row.height = None
+                self._set_business_line_row_widths(row, column_widths)
+                self._set_business_line_cell(row.cells[0], str(index), WD_ALIGN_PARAGRAPH.CENTER)
+                self._set_business_line_cell(row.cells[1], str(line["name"]), WD_ALIGN_PARAGRAPH.LEFT)
+                self._set_business_line_cell(
+                    row.cells[2], str(line["code"]), WD_ALIGN_PARAGRAPH.CENTER, bold=bool(line["is_main"])
+                )
+                self._set_business_line_cell(
+                    row.cells[3], "X" if line["is_main"] else "", WD_ALIGN_PARAGRAPH.CENTER, bold=bool(line["is_main"])
+                )
+
+    def _normalize_business_line_table(self, table, header_index: int) -> list[int]:
+        grid_columns = table._tbl.tblGrid.gridCol_lst
+        widths = [int(column.get(qn("w:w")) or 0) for column in grid_columns[:4]]
+        if len(widths) != 4 or not all(widths):
+            widths = [int(cell.width or 0) for cell in table.rows[header_index].cells[:4]]
+        if len(widths) != 4 or not all(widths):
+            widths = [900, 5100, 1500, 1900]
+
+        table.autofit = False
+        table_width = sum(widths)
+        tbl_w = table._tbl.tblPr.find(qn("w:tblW"))
+        if tbl_w is None:
+            tbl_w = OxmlElement("w:tblW")
+            table._tbl.tblPr.insert(0, tbl_w)
+        tbl_w.set(qn("w:w"), str(table_width))
+        tbl_w.set(qn("w:type"), "dxa")
+
+        for column, width in zip(grid_columns[:4], widths):
+            column.set(qn("w:w"), str(width))
+
+        header = table.rows[header_index]
+        self._mark_repeating_table_header(header)
+        header_texts = ["STT", "Tên ngành", "Mã ngành", "Ngành, nghề\nkinh doanh\nchính"]
+        for index, cell in enumerate(header.cells[:4]):
+            self._set_business_line_cell(cell, header_texts[index], WD_ALIGN_PARAGRAPH.CENTER, bold=True)
+            cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+        self._set_business_line_row_widths(header, widths)
+
+        for row in table.rows[header_index + 1 :]:
+            row.height = None
+            self._set_business_line_row_widths(row, widths)
+        return widths
+
+    def _set_business_line_row_widths(self, row, widths: list[int]) -> None:
+        for cell, width in zip(row.cells[:4], widths):
+            tc_pr = cell._tc.get_or_add_tcPr()
+            tc_w = tc_pr.find(qn("w:tcW"))
+            if tc_w is None:
+                tc_w = OxmlElement("w:tcW")
+                tc_pr.append(tc_w)
+            tc_w.set(qn("w:w"), str(width))
+            tc_w.set(qn("w:type"), "dxa")
+
+    def _mark_repeating_table_header(self, row) -> None:
+        tr_pr = row._tr.get_or_add_trPr()
+        if not tr_pr.findall(qn("w:tblHeader")):
+            tr_pr.append(OxmlElement("w:tblHeader"))
 
     def _iter_tables(self, container):
         for table in container.tables:
@@ -581,6 +812,25 @@ class DocxTemplateGenerator:
             run.add_break()
             run.add_text(line)
 
+    def _set_business_line_cell(self, cell, value: str, alignment, bold: bool = False) -> None:
+        cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+        cell.text = ""
+        paragraph = cell.paragraphs[0]
+        paragraph.alignment = alignment
+        paragraph.paragraph_format.left_indent = None
+        paragraph.paragraph_format.right_indent = None
+        paragraph.paragraph_format.first_line_indent = None
+        paragraph.paragraph_format.space_before = Pt(0)
+        paragraph.paragraph_format.space_after = Pt(0)
+        paragraph.paragraph_format.line_spacing = 1
+        lines = str(value or "").splitlines() or [""]
+        for line_index, line in enumerate(lines):
+            if line_index:
+                paragraph.add_run().add_break()
+            run = paragraph.add_run(line)
+            run.bold = bold
+            run.font.size = Pt(13)
+
     def _fix_contact_lines(self, document: Document, values: dict[str, str]) -> None:
         phone = str(values.get("authorized_person_phone", "") or "").strip()
         email = str(values.get("authorized_person_email", "") or "").strip()
@@ -642,6 +892,63 @@ class DocxTemplateGenerator:
                         for run in paragraph.runs:
                             if run.text:
                                 run.font.size = Pt(13)
+
+    def _normalize_power_of_attorney_layout(
+        self, document: Document, template_name: str, values: dict[str, str]
+    ) -> None:
+        if not template_name.startswith("4. "):
+            return
+
+        for paragraph in self._iter_paragraphs(document):
+            if not paragraph.text.strip():
+                continue
+            paragraph.paragraph_format.keep_together = False
+            paragraph.paragraph_format.keep_with_next = False
+            for run in paragraph.runs:
+                if run.text and (run.font.size is None or run.font.size.pt > 13):
+                    run.font.size = Pt(12.5)
+
+        body = document._body._element
+        table_seen = False
+        children = list(body)
+        for index, child in enumerate(children):
+            if child.tag.endswith("}tbl"):
+                table_seen = True
+                continue
+            next_child = children[index + 1] if index + 1 < len(children) else None
+            if (
+                child.tag.endswith("}p")
+                and next_child is not None
+                and next_child.tag.endswith("}tbl")
+                and not "".join(child.itertext()).strip()
+            ):
+                body.remove(child)
+                continue
+            if table_seen and child.tag.endswith("}p") and not "".join(child.itertext()).strip():
+                body.remove(child)
+
+        signer = str(values.get("legal_representative_full_name", "") or "").strip().upper()
+        if not signer:
+            return
+        for table in self._iter_tables(document):
+            if not table.rows:
+                continue
+            for cell in table.rows[-1].cells:
+                if "ben uy quyen" not in self._fold(cell.text):
+                    continue
+                cell.text = ""
+                entries = [("BÊN UỶ QUYỀN", True), ("(ký, ghi rõ họ tên)", False), ("", False), (signer, True)]
+                for index, (text, bold) in enumerate(entries):
+                    paragraph = cell.paragraphs[0] if index == 0 else cell.add_paragraph()
+                    paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    paragraph.paragraph_format.space_before = Pt(0)
+                    paragraph.paragraph_format.space_after = Pt(0)
+                    paragraph.paragraph_format.line_spacing = 1
+                    run = paragraph.add_run(text)
+                    run.bold = bold
+                    run.font.size = Pt(12.5)
+                table.rows[-1].height = None
+                return
 
     def _bold_terms(self, values: dict[str, str]) -> list[str]:
         terms: set[str] = set()
@@ -930,7 +1237,12 @@ class DocxTemplateGenerator:
             for match in matches:
                 placeholder = match.group(1).strip()
                 manifest_target = manifest_fields.get(str(placeholder_index))
-                if manifest_target is not None:
+                # Explicit field placeholders added to a template must win over
+                # the legacy sequential manifest index.  The latter describes
+                # bookmark fields, not the order of visible [field] tokens.
+                if placeholder in {"company_english_name", "company_short_name"}:
+                    replacement = self._value_for_template_target(placeholder, values)
+                elif manifest_target is not None:
                     replacement = self._value_for_template_target(str(manifest_target), values)
                 else:
                     replacement = self._value_for_placeholder(placeholder, values, context)

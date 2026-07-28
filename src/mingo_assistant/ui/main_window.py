@@ -1055,6 +1055,7 @@ class MainWindow(QMainWindow):
             case=case,
             on_export=self._open_case_documents,
             authorized_person_defaults=self._load_authorized_person(),
+            industry_catalog=self.industry_catalog,
         )
         self.stack.addWidget(self.current_workspace)
         self.stack.setCurrentWidget(self.current_workspace)

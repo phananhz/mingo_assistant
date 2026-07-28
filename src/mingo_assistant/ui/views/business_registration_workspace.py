@@ -7,7 +7,7 @@ from pathlib import Path
 from time import monotonic
 from uuid import uuid4
 
-from PySide6.QtCore import QUrl, Qt, Signal
+from PySide6.QtCore import QObject, QThread, QUrl, Qt, Signal, Slot
 from PySide6.QtGui import QDesktopServices, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -204,6 +204,30 @@ class ClickableImageLabel(QLabel):
         super().mousePressEvent(event)
 
 
+class DocxExportWorker(QObject):
+    finished = Signal(object)
+
+    def __init__(self, template_dir: Path, export_root: Path, values: dict[str, str], case_name: str, output_dir: Path) -> None:
+        super().__init__()
+        self.template_dir = template_dir
+        self.export_root = export_root
+        self.values = values
+        self.case_name = case_name
+        self.output_dir = output_dir
+
+    def run(self) -> None:
+        try:
+            generator = DocxTemplateGenerator(template_dir=self.template_dir, export_root=self.export_root)
+            template_issues = generator.validate_templates(self.values)
+            if template_issues:
+                self.finished.emit({"template_issues": template_issues})
+                return
+            result = generator.generate(self.values, self.case_name, output_dir=self.output_dir)
+            self.finished.emit({"result": result})
+        except Exception as exc:
+            self.finished.emit({"error": str(exc)})
+
+
 class BusinessRegistrationWorkspace(QWidget):
     def __init__(
         self,
@@ -212,6 +236,7 @@ class BusinessRegistrationWorkspace(QWidget):
         case: CaseSummary | None = None,
         on_export=None,
         authorized_person_defaults: dict[str, str] | None = None,
+        industry_catalog: IndustryCatalog | None = None,
     ) -> None:
         super().__init__()
         self.on_back = on_back
@@ -222,7 +247,7 @@ class BusinessRegistrationWorkspace(QWidget):
         self.ocr_service = OcrService()
         self.id_parser = IdCardParser()
         self.address_parser = AddressParser()
-        self.industry_catalog = IndustryCatalog.load_from_project(Path(__file__).resolve().parents[4])
+        self.industry_catalog = industry_catalog or IndustryCatalog.load_from_project(Path(__file__).resolve().parents[4])
         self.fields: dict[str, QLineEdit | QTextEdit] = {}
         self.ocr_card_fields: dict[str, QLineEdit | QTextEdit] = {}
         self.business_line_rows: list[BusinessLineRow] = []
@@ -240,6 +265,11 @@ class BusinessRegistrationWorkspace(QWidget):
         self.selected_export_root: Path | None = Path(case.export_dir).parent if case and case.export_dir else None
         self.ocr_people: list[OcrPerson] = [OcrPerson("Người 1", role="legal_representative")]
         self.current_person_index = 0
+        self._initializing = True
+        self._export_thread: QThread | None = None
+        self._export_worker: DocxExportWorker | None = None
+        self._export_case_dir: Path | None = None
+        self._export_version_name = ""
 
         self.raw_ocr_text = QTextEdit()
         self.address_input = QTextEdit()
@@ -265,6 +295,7 @@ class BusinessRegistrationWorkspace(QWidget):
         self._build_ui()
         self._refresh_selected_person_images()
         self._seed_from_case(case)
+        self._initializing = False
         self._refresh_preview()
 
     def _build_ui(self) -> None:
@@ -1675,6 +1706,8 @@ class BusinessRegistrationWorkspace(QWidget):
         QMessageBox.information(self, "Đã lưu", "Hồ sơ nháp đã được lưu vào danh sách.")
 
     def _export_documents(self) -> None:
+        if self._export_thread is not None and self._export_thread.isRunning():
+            return
         values = self.form_values()
         issues = self._validation_issues(values)
         if issues:
@@ -1682,33 +1715,59 @@ class BusinessRegistrationWorkspace(QWidget):
             return
 
         template_dir, export_root = self._template_and_export_dirs()
-        generator = DocxTemplateGenerator(template_dir=template_dir, export_root=export_root)
-        try:
-            template_issues = generator.validate_templates(values)
-        except Exception as exc:
-            QMessageBox.critical(self, "Lỗi kiểm tra mẫu Word", f"Không thể kiểm tra mẫu Word:\n{exc}")
-            return
-        if template_issues:
-            QMessageBox.warning(
-                self,
-                "Mẫu Word còn placeholder chưa hiểu",
-                self._format_template_issues(template_issues),
-            )
-            return
-
         case_export_dir = self._case_export_dir(export_root, values)
         version_number = self._next_export_version_number(case_export_dir)
         version_name = f"bản {version_number}"
         version_dir = case_export_dir / version_name
 
-        try:
-            result = generator.generate(
-                values,
-                values.get("company_name", "ho_so_thanh_lap"),
-                output_dir=version_dir,
-            )
-        except Exception as exc:
-            QMessageBox.critical(self, "Lỗi xuất Word", f"Không thể tạo hồ sơ:\n{exc}")
+        self._set_export_busy(True)
+        self._export_case_dir = case_export_dir
+        self._export_version_name = version_name
+        self._export_thread = QThread(self)
+        self._export_worker = DocxExportWorker(
+            template_dir,
+            export_root,
+            values,
+            values.get("company_name", "ho_so_thanh_lap"),
+            version_dir,
+        )
+        self._export_worker.moveToThread(self._export_thread)
+        self._export_thread.started.connect(self._export_worker.run)
+        self._export_worker.finished.connect(self._handle_export_finished)
+        self._export_worker.finished.connect(self._export_thread.quit)
+        self._export_thread.finished.connect(self._export_worker.deleteLater)
+        self._export_thread.finished.connect(self._export_thread.deleteLater)
+        self._export_thread.finished.connect(lambda: self._clear_export_worker())
+        self._export_thread.start()
+
+    def _set_export_busy(self, busy: bool) -> None:
+        self.setEnabled(not busy)
+        if busy:
+            self.ocr_status_label.setText("Đang kiểm tra và tạo bộ file Word...")
+
+    def _clear_export_worker(self) -> None:
+        self._export_worker = None
+        self._export_thread = None
+        self._set_export_busy(False)
+
+    @Slot(object)
+    def _handle_export_finished(self, payload: object) -> None:
+        if self._export_case_dir is None:
+            return
+        self._finish_export(payload, self._export_case_dir, self._export_version_name)
+
+    def _finish_export(self, payload: object, case_export_dir: Path, version_name: str) -> None:
+        data = payload if isinstance(payload, dict) else {}
+        if data.get("error"):
+            QMessageBox.critical(self, "Lỗi xuất Word", f"Không thể tạo hồ sơ:\n{data['error']}")
+            return
+        template_issues = data.get("template_issues")
+        if template_issues:
+            QMessageBox.warning(self, "Mẫu Word còn placeholder chưa hiểu", self._format_template_issues(template_issues))
+            return
+        result = data.get("result")
+        if result is None:
+            QMessageBox.critical(self, "Lỗi xuất Word", "Không nhận được kết quả tạo hồ sơ.")
             return
 
         self.last_export_dir = result.output_dir
@@ -1859,6 +1918,8 @@ class BusinessRegistrationWorkspace(QWidget):
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.last_export_dir)))
 
     def _refresh_preview(self) -> None:
+        if self._initializing:
+            return
         values = self.form_values()
         lines = []
         for key, label in FIELD_DEFINITIONS:
