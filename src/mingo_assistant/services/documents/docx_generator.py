@@ -191,6 +191,7 @@ class DocxTemplateGenerator:
         self._fix_contact_lines(document, values)
         self._apply_bold_uppercase_formatting(document, values)
         self._fix_signature_font_sizes(document, docx_path.name, values)
+        self._normalize_statute_signature_layout(document, docx_path.name, values)
         self._normalize_power_of_attorney_layout(document, docx_path.name, values)
         document.save(docx_path)
 
@@ -908,6 +909,42 @@ class DocxTemplateGenerator:
                         for run in paragraph.runs:
                             if run.text:
                                 run.font.size = Pt(13)
+
+    def _normalize_statute_signature_layout(
+        self, document: Document, template_name: str, values: dict[str, str]
+    ) -> None:
+        """Place the statute's owner/legal-representative block in the right half."""
+        if not template_name.startswith("2. "):
+            return
+
+        signer = str(values.get("legal_representative_full_name", "") or "").strip().upper()
+        if not signer:
+            return
+        folded_signer = self._fold(signer)
+        paragraphs = list(self._iter_paragraphs(document))
+        start_index = next(
+            (
+                index
+                for index, paragraph in enumerate(paragraphs)
+                if "chu so huu cong ty" in self._fold(paragraph.text)
+                and "nguoi dai dien theo phap luat" in self._fold(paragraph.text)
+            ),
+            None,
+        )
+        if start_index is None:
+            return
+
+        # The source template contains the signature block as consecutive
+        # paragraphs. Give all of them the same right-side text frame so the
+        # heading and the signer share one vertical axis.
+        for paragraph in paragraphs[start_index:]:
+            if paragraph.text.strip() or paragraph is paragraphs[start_index]:
+                paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                paragraph.paragraph_format.left_indent = Inches(3.6)
+                paragraph.paragraph_format.right_indent = Inches(0)
+                paragraph.paragraph_format.first_line_indent = Inches(0)
+            if folded_signer in self._fold(paragraph.text):
+                break
 
     def _normalize_power_of_attorney_layout(
         self, document: Document, template_name: str, values: dict[str, str]
