@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QDesktopServices
 
+from mingo_assistant.app.paths import AppPaths, get_app_paths
 from mingo_assistant.models.case import CaseSummary
 from mingo_assistant.repositories.case_repository import CaseRepository
 from mingo_assistant.services.business_lines.industry_lookup import IndustryCatalog, IndustryRow
@@ -59,19 +60,20 @@ class MainWindow(QMainWindow):
     CARD_WIDTH = 220
     CARD_GAP = 18
 
-    def __init__(self) -> None:
+    def __init__(self, app_paths: AppPaths | None = None) -> None:
         super().__init__()
+        self.app_paths = app_paths or get_app_paths()
         self.setWindowTitle("Mingo Assistant")
         self.resize(1280, 760)
         self.setMinimumSize(760, 520)
 
-        self.case_repository = CaseRepository()
+        self.case_repository = CaseRepository(self.app_paths.cases_file)
         self.cases: list[CaseSummary] = self.case_repository.list_cases()
         self.nav_buttons: dict[str, QPushButton] = {}
         self.stack = QStackedWidget()
         self.current_workspace: BusinessRegistrationWorkspace | None = None
         self.current_documents_view: BusinessRegistrationDocumentsView | None = None
-        self.authorized_person_path = Path("data/app/authorized_person.json")
+        self.authorized_person_path = self.app_paths.authorized_person_file
 
         self.search_input = QLineEdit()
         self.case_type_filter = NoWheelComboBox()
@@ -88,7 +90,7 @@ class MainWindow(QMainWindow):
         self.current_card_columns = 0
         self.trash_container = QWidget()
         self.trash_layout = QVBoxLayout(self.trash_container)
-        self.industry_catalog = IndustryCatalog.load_from_project(Path(__file__).resolve().parents[3])
+        self.industry_catalog = IndustryCatalog.load_from_project(self.app_paths.bundle_root)
         self.industry_search_input = QLineEdit()
         self.industry_table = QTableWidget()
         self.industry_status_label = QLabel()
@@ -186,7 +188,7 @@ class MainWindow(QMainWindow):
         title = QLabel("Hồ sơ thành lập doanh nghiệp")
         title.setObjectName("PageTitle")
         description = QLabel(
-            "Quản lý hồ sơ, kiểm tra dữ liệu OCR và tạo bộ Word cho hồ sơ thành lập doanh nghiệp."
+            "Quản lý hồ sơ, kiểm tra dữ liệu QR CCCD và tạo bộ Word cho hồ sơ thành lập doanh nghiệp."
         )
         description.setObjectName("PageDescription")
         description.setWordWrap(True)
@@ -745,7 +747,7 @@ class MainWindow(QMainWindow):
         self._open_new_business_case()
         return
         dialog = CreateCaseDialog(self)
-        if dialog.exec() == QDialog.Accepted:
+        if dialog.exec() == QDialog.DialogCode.Accepted:
             case = dialog.build_case()
             self.case_repository.save_case(case)
             self.cases = self.case_repository.list_cases()
@@ -953,7 +955,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(form_frame)
         layout.addWidget(buttons)
 
-        if dialog.exec() != QDialog.Accepted:
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return
 
         saved = read_form()
@@ -1056,6 +1058,8 @@ class MainWindow(QMainWindow):
             on_export=self._open_case_documents,
             authorized_person_defaults=self._load_authorized_person(),
             industry_catalog=self.industry_catalog,
+            bundle_root=self.app_paths.bundle_root,
+            default_export_root=self.app_paths.documents_root,
         )
         self.stack.addWidget(self.current_workspace)
         self.stack.setCurrentWidget(self.current_workspace)
@@ -1087,3 +1091,4 @@ class MainWindow(QMainWindow):
     def _save_case_from_workspace(self, case: CaseSummary) -> None:
         self.case_repository.save_case(case)
         self.cases = self.case_repository.list_cases()
+

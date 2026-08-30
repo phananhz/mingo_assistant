@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
@@ -7,7 +7,7 @@ from pathlib import Path
 from time import monotonic
 from uuid import uuid4
 
-from PySide6.QtCore import QObject, QThread, QUrl, Qt, Signal, Slot
+from PySide6.QtCore import QObject, QThread, QTimer, QUrl, Qt, Signal, Slot
 from PySide6.QtGui import QDesktopServices, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from mingo_assistant.app.paths import get_app_paths, save_settings
 from mingo_assistant.models.case import CaseSummary
 from mingo_assistant.services.documents.docx_generator import DocxTemplateGenerator
 from mingo_assistant.services.business_lines.industry_lookup import IndustryCatalog, IndustryRow
@@ -237,6 +238,8 @@ class BusinessRegistrationWorkspace(QWidget):
         on_export=None,
         authorized_person_defaults: dict[str, str] | None = None,
         industry_catalog: IndustryCatalog | None = None,
+        bundle_root: Path | None = None,
+        default_export_root: Path | None = None,
     ) -> None:
         super().__init__()
         self.on_back = on_back
@@ -244,10 +247,12 @@ class BusinessRegistrationWorkspace(QWidget):
         self.on_export = on_export
         self.case = case
         self.case_id = case.id if case else str(uuid4())
+        self.bundle_root = bundle_root or get_app_paths().bundle_root
+        self.default_export_root = default_export_root or get_app_paths().documents_root
         self.ocr_service = OcrService()
         self.id_parser = IdCardParser()
         self.address_parser = AddressParser()
-        self.industry_catalog = industry_catalog or IndustryCatalog.load_from_project(Path(__file__).resolve().parents[4])
+        self.industry_catalog = industry_catalog or IndustryCatalog.load_from_project(self.bundle_root)
         self.fields: dict[str, QLineEdit | QTextEdit] = {}
         self.ocr_card_fields: dict[str, QLineEdit | QTextEdit] = {}
         self.business_line_rows: list[BusinessLineRow] = []
@@ -261,8 +266,17 @@ class BusinessRegistrationWorkspace(QWidget):
         self.updating_capital = False
         self.syncing_person_fields = False
         self.syncing_address_fields = False
+        self._pending_address_sync_key = ""
+        self._address_sync_timer = QTimer(self)
+        self._address_sync_timer.setSingleShot(True)
+        self._address_sync_timer.setInterval(550)
+        self._address_sync_timer.timeout.connect(self._flush_pending_address_sync)
         self.last_export_dir: Path | None = None
-        self.selected_export_root: Path | None = Path(case.export_dir).parent if case and case.export_dir else None
+        self.selected_export_root: Path | None = (
+            Path(case.export_dir).parent
+            if case and case.export_dir
+            else self.default_export_root
+        )
         self.ocr_people: list[OcrPerson] = [OcrPerson("Người 1", role="legal_representative")]
         self.current_person_index = 0
         self._initializing = True
@@ -327,7 +341,7 @@ class BusinessRegistrationWorkspace(QWidget):
         text = QVBoxLayout()
         title = QLabel("Tạo hồ sơ thành lập công ty")
         title.setObjectName("PageTitle")
-        description = QLabel("OCR CCCD, chuẩn hóa địa chỉ, kiểm tra dữ liệu và xuất bộ mẫu Word.")
+        description = QLabel("Quét QR CCCD, chuẩn hóa địa chỉ, kiểm tra dữ liệu và xuất bộ mẫu Word.")
         description.setObjectName("PageDescription")
         description.setWordWrap(True)
         text.addWidget(title)
@@ -358,7 +372,7 @@ class BusinessRegistrationWorkspace(QWidget):
         return header
 
     def _build_ocr_section(self) -> QWidget:
-        group = QGroupBox("Chuyển đổi ảnh CCCD thành văn bản")
+        group = QGroupBox("Quét mã QR CCCD")
         layout = QVBoxLayout(group)
         layout.setSpacing(10)
 
@@ -387,11 +401,11 @@ class BusinessRegistrationWorkspace(QWidget):
         layout.addLayout(role_row)
 
         actions = QHBoxLayout()
-        self.ocr_engine_input.addItem("EasyOCR - ưu tiên tiếng Việt", "easyocr")
-        self.ocr_engine_input.addItem("PaddleOCR - dự phòng", "paddleocr")
+        self.ocr_engine_input.addItem("Quét mã QR CCCD", "qr")
+        self.ocr_engine_input.setVisible(False)
         actions.addWidget(self.ocr_engine_input)
 
-        run_button = QPushButton("Nhận diện ảnh")
+        run_button = QPushButton("Quét QR")
         run_button.setObjectName("PrimaryButton")
         run_button.clicked.connect(self._run_ocr)
 
@@ -427,7 +441,7 @@ class BusinessRegistrationWorkspace(QWidget):
         progress_layout.addWidget(self.ocr_eta_label)
         layout.addLayout(progress_layout)
 
-        self.raw_ocr_text.setPlaceholderText("Kết quả OCR sẽ hiển thị ở đây. Bạn cũng có thể dán văn bản OCR vào rồi bấm xử lý.")
+        self.raw_ocr_text.setPlaceholderText("Dữ liệu QR CCCD sẽ hiển thị ở đây để kiểm tra khi cần.")
         self.raw_ocr_text.setMinimumHeight(110)
 
         layout.addWidget(self._build_cccd_result_section())
@@ -607,7 +621,7 @@ class BusinessRegistrationWorkspace(QWidget):
             field.setFixedHeight(70)
             field.textChanged.connect(self._refresh_preview)
             if key in {"company_address", "legal_representative_permanent_address"}:
-                field.textChanged.connect(lambda selected=key: self._sync_address_parts(selected))
+                field.textChanged.connect(lambda selected=key: self._schedule_address_sync(selected))
             if key.startswith("legal_representative_"):
                 field.textChanged.connect(self._sync_director_from_legal_representative)
         else:
@@ -1128,6 +1142,18 @@ class BusinessRegistrationWorkspace(QWidget):
             return field.text().strip()
         return ""
 
+    def _schedule_address_sync(self, source_key: str) -> None:
+        """Delay expensive administrative-place matching until the user pauses typing."""
+        if self._initializing or self.syncing_address_fields:
+            return
+        self._pending_address_sync_key = source_key
+        self._address_sync_timer.start()
+
+    def _flush_pending_address_sync(self) -> None:
+        source_key = self._pending_address_sync_key
+        self._pending_address_sync_key = ""
+        if source_key:
+            self._sync_address_parts(source_key)
     def _sync_address_parts(self, source_key: str) -> None:
         if self.syncing_address_fields:
             return
@@ -1475,47 +1501,28 @@ class BusinessRegistrationWorkspace(QWidget):
         self._refresh_selected_person_images()
 
     def _run_ocr(self) -> None:
-        self.ocr_service.set_engine(self.ocr_engine_input.currentData() or "easyocr")
         person = self.ocr_people[self.current_person_index]
-        image_jobs = [("mặt trước", person.front_path)] if person.front_path else []
-        if not image_jobs:
-            QMessageBox.warning(self, "Chưa chọn ảnh mặt trước", "Bạn cần chọn ảnh mặt trước của CCCD để nhận diện thông tin cá nhân.")
+        if not person.front_path:
+            QMessageBox.warning(self, "Chưa chọn ảnh mặt trước", "Bạn cần chọn ảnh mặt trước của CCCD để quét mã QR.")
             return
 
         QApplication.setOverrideCursor(Qt.WaitCursor)
+        start = monotonic()
         try:
-            texts: list[str] = []
-            total = len(image_jobs)
-            start = monotonic()
-            self._update_ocr_progress(0, "Đang chuẩn bị OCR", "0 giây")
-            for index, (side_label, image_path) in enumerate(image_jobs, start=1):
-                self._update_ocr_progress(
-                    int(((index - 1) / total) * 100),
-                    f"Đang xử lý {side_label}",
-                    self._format_elapsed(start),
-                )
-                QApplication.processEvents()
-
-                extracted_text = self.ocr_service.extract_text(
-                    image_path,
-                    progress_callback=lambda percent, status: self._update_ocr_progress(percent, status, self._format_elapsed(start)),
-                )
-                texts.append(f"--- {person.name} - {side_label} ---\n{extracted_text}")
-
-                self._update_ocr_progress(
-                    int((index / total) * 100),
-                    f"Đã xử lý {side_label}",
-                    self._format_elapsed(start),
-                )
-                QApplication.processEvents()
+            self._update_ocr_progress(0, "Đang chuẩn bị quét QR", "0 giây")
+            QApplication.processEvents()
+            qr_text = self.ocr_service.scan_qr(
+                person.front_path,
+                progress_callback=lambda percent, status: self._update_ocr_progress(percent, status, self._format_elapsed(start)),
+            )
         except Exception as exc:
-            QMessageBox.critical(self, "Lỗi OCR", f"Không thể nhận diện ảnh:\n{exc}")
+            QMessageBox.critical(self, "Lỗi quét QR", f"Không thể quét mã QR từ ảnh CCCD:\n{exc}")
             return
         finally:
             QApplication.restoreOverrideCursor()
 
-        self._update_ocr_progress(100, "Hoàn thành OCR", self._format_elapsed(start))
-        self.raw_ocr_text.setPlainText("\n\n".join(texts))
+        self._update_ocr_progress(100, "Hoàn thành quét QR", self._format_elapsed(start))
+        self.raw_ocr_text.setPlainText(qr_text)
         self._parse_ocr_text()
 
     def _update_ocr_progress(self, percent: int, status: str, eta: str) -> None:
@@ -1556,7 +1563,7 @@ class BusinessRegistrationWorkspace(QWidget):
     def _apply_cccd_result_to_form(self) -> None:
         values = self._cccd_result_values()
         if not any(values.values()):
-            QMessageBox.warning(self, "Chưa có dữ liệu CCCD", "Bạn cần OCR ảnh hoặc nhập thông tin CCCD trước.")
+            QMessageBox.warning(self, "Chưa có dữ liệu CCCD", "Bạn cần quét QR hoặc nhập thông tin CCCD trước.")
             return
         self._apply_cccd_values_to_current_person(values)
 
@@ -1573,10 +1580,10 @@ class BusinessRegistrationWorkspace(QWidget):
     def _parse_ocr_text(self) -> None:
         text = self.raw_ocr_text.toPlainText().strip()
         if not text:
-            QMessageBox.warning(self, "Chưa có văn bản", "Bạn cần OCR ảnh hoặc dán văn bản OCR trước.")
+            QMessageBox.warning(self, "Chưa có dữ liệu QR", "Bạn cần quét QR CCCD trước.")
             return
 
-        card = self.id_parser.parse(text)
+        card = self.id_parser.parse_qr(text)
         card_values = card.to_form_values()
         self._update_cccd_result_fields(card_values)
         self._apply_cccd_values_to_current_person(card_values)
@@ -1821,10 +1828,9 @@ class BusinessRegistrationWorkspace(QWidget):
         QMessageBox.warning(self, "Mẫu Word cần kiểm tra", self._format_template_issues(template_issues))
 
     def _template_and_export_dirs(self) -> tuple[Path, Path]:
-        project_root = Path(__file__).resolve().parents[4]
         return (
-            project_root / "assets" / "templates" / "word" / "business_registration",
-            self.selected_export_root or project_root / "exports",
+            self.bundle_root / "assets" / "templates" / "word" / "business_registration",
+            self.selected_export_root or self.default_export_root,
         )
 
     def _format_template_issues(self, issues: dict[str, list[str]]) -> str:
@@ -1909,6 +1915,9 @@ class BusinessRegistrationWorkspace(QWidget):
         )
         if selected:
             self.selected_export_root = Path(selected)
+            paths = get_app_paths()
+            paths.documents_root = self.selected_export_root
+            save_settings(paths, {"export_root": str(self.selected_export_root)})
             QMessageBox.information(self, "Đã chọn nơi lưu", f"Hồ sơ sẽ được lưu tại:\n{self.selected_export_root}")
 
     def _open_last_export_dir(self) -> None:
@@ -2197,3 +2206,7 @@ class BusinessRegistrationWorkspace(QWidget):
             field.setPlainText(value)
         else:
             field.setText(value)
+
+
+
+

@@ -8,6 +8,8 @@ from difflib import SequenceMatcher
 from functools import lru_cache
 from pathlib import Path
 
+from mingo_assistant.app.paths import get_app_paths
+
 
 @dataclass(frozen=True)
 class PlaceCandidate:
@@ -429,7 +431,7 @@ class AdministrativePlaceMatcher:
         return " ".join(text.split())
 
     def _default_data_path(self) -> Path:
-        return Path(__file__).resolve().parents[4] / "assets" / "administrative_places" / "vietnam_admin_2025.json"
+        return get_app_paths().bundle_root / "assets" / "administrative_places" / "vietnam_admin_2025.json"
 
     @staticmethod
     @lru_cache(maxsize=4)

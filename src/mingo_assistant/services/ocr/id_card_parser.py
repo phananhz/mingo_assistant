@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import re
 import unicodedata
@@ -30,8 +30,11 @@ class ExtractedIdCard:
             "legal_representative_id_number": self.id_number,
             "legal_representative_date_of_birth": self.date_of_birth,
             "legal_representative_gender": self.gender,
+            "legal_representative_nationality": self.nationality,
             "legal_representative_permanent_address": self.permanent_address,
             "legal_representative_place_of_origin": self.place_of_origin,
+            "legal_representative_issue_date": self.issue_date,
+            "legal_representative_expiry_date": self.expiry_date,
         }
 
 
@@ -57,6 +60,41 @@ class IdCardParser:
         card.unknown_lines = lines
         return card
 
+    def parse_qr(self, qr_text: str) -> ExtractedIdCard:
+        parts = [part.strip() for part in re.split(r"\|+", qr_text.strip())]
+        parts = [part for part in parts if part]
+        card = ExtractedIdCard(raw_text=qr_text)
+
+        if len(parts) >= 7:
+            card.id_number = parts[0]
+            card.full_name = parts[2].upper()
+            card.date_of_birth = self._format_compact_date(parts[3])
+            card.gender = self._normalize_gender(parts[4]) or self._gender_from_id_number(card.id_number)
+            card.permanent_address = self.place_matcher.normalize_address(parts[5])
+            card.issue_date = self._format_compact_date(parts[6])
+        elif len(parts) >= 6:
+            card.id_number = parts[0]
+            card.full_name = parts[1].upper()
+            card.date_of_birth = self._format_compact_date(parts[2])
+            card.gender = self._normalize_gender(parts[3]) or self._gender_from_id_number(card.id_number)
+            card.permanent_address = self.place_matcher.normalize_address(parts[4])
+            card.issue_date = self._format_compact_date(parts[5])
+        else:
+            card.warnings.append("Mã QR CCCD không đúng định dạng dữ liệu cá nhân thường gặp.")
+            return card
+
+        card.nationality = "Việt Nam"
+        card.place_of_origin = self._origin_from_residence(card.permanent_address)
+        card.unknown_lines = parts
+        return card
+
+    def _origin_from_residence(self, residence: str) -> str:
+        if not residence:
+            return ""
+        parts = [part.strip(" ,.;") for part in residence.split(",") if part.strip(" ,.;")]
+        if len(parts) >= 3:
+            return ", ".join(parts[-3:])
+        return residence
     def _clean_line(self, line: str) -> str:
         return " ".join(line.replace(":", ": ").split())
 
@@ -594,3 +632,4 @@ class IdCardParser:
         if folded in {"m", "male", "nam"}:
             return "Nam"
         return value
+

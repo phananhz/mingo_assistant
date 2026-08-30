@@ -1,4 +1,4 @@
-import unittest
+﻿import unittest
 
 from mingo_assistant.services.normalization.administrative_place_matcher import AdministrativePlaceMatcher
 from mingo_assistant.services.normalization.address_parser import AddressParser
@@ -141,6 +141,17 @@ Nu"""
 
         self.assertEqual(card.date_of_birth, "01/04/1961")
 
+    def test_parser_reads_chip_id_card_qr_payload(self) -> None:
+        qr_text = "079308021854|123456789|NGUYEN HONG DUYEN|13052008|Nu|79/J4 Au Co, Phuong 14, Quan 11, TP Ho Chi Minh|13052023"
+
+        card = IdCardParser().parse_qr(qr_text)
+
+        self.assertEqual(card.id_number, "079308021854")
+        self.assertEqual(card.full_name, "NGUYEN HONG DUYEN")
+        self.assertEqual(card.date_of_birth, "13/05/2008")
+        self.assertEqual(card.gender, "Nữ")
+        self.assertIn("79/J4", card.permanent_address)
+        self.assertEqual(card.issue_date, "13/05/2023")
     def test_address_parser_uses_normalized_administrative_places(self) -> None:
         result = AddressParser().parse("79/J4, Au Co, Phuong 14, Quan 11, TP Ho Chi Mlnh")
 
@@ -151,3 +162,4 @@ Nu"""
 
 if __name__ == "__main__":
     unittest.main()
+

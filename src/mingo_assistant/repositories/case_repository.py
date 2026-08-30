@@ -6,12 +6,12 @@ from datetime import datetime
 from pathlib import Path
 
 from mingo_assistant.models.case import CaseSummary
+from mingo_assistant.app.paths import get_app_paths
 
 
 class CaseRepository:
     def __init__(self, data_file: Path | None = None) -> None:
-        project_root = Path(__file__).resolve().parents[3]
-        self.data_file = data_file or project_root / "data" / "app" / "cases.json"
+        self.data_file = data_file or get_app_paths().cases_file
 
     def list_cases(self) -> list[CaseSummary]:
         return [case for case in self._read_cases() if not case.is_deleted]

@@ -12,6 +12,7 @@ env/
 build/
 dist/
 *.spec
+!packaging/pyinstaller/*.spec
 
 # Local app data and sensitive files
 data/app/*
@@ -21,6 +22,7 @@ logs/*
 DataTrainCCCD/
 .tmp-*
 *.docx~
+~$*.docx
 !data/app/.gitkeep
 !data/temp/.gitkeep
 !exports/.gitkeep

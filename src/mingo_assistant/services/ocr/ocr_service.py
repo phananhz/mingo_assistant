@@ -1,72 +1,115 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
-import os
+import sys
 from pathlib import Path
 from typing import Any, Callable
 
 
 class OcrService:
-    """OCR wrapper with EasyOCR primary engine and PaddleOCR fallback."""
+    """Offline QR reader for Vietnamese citizen identity cards.
 
-    def __init__(self, lang: str = "vi", engine: str = "easyocr") -> None:
-        self.lang = lang
-        self.engine = engine
-        self._ocr: Any | None = None
-        self._easyocr_reader: Any | None = None
+    The class name is retained temporarily so existing UI code keeps working;
+    all OCR engines and image-to-text processing have been removed.
+    """
 
-    def extract_text(self, image_path: str | Path, progress_callback: Callable[[int, str], None] | None = None) -> str:
+    def __init__(self) -> None:
+        self._wechat_detector: Any | None = None
+        self._wechat_checked = False
+
+    def scan_qr(
+        self,
+        image_path: str | Path,
+        progress_callback: Callable[[int, str], None] | None = None,
+    ) -> str:
         path = Path(image_path)
         if not path.exists():
             raise FileNotFoundError(f"Không tìm thấy ảnh: {path}")
 
-        if self.engine == "easyocr":
-            lines = self._run_easyocr(path, progress_callback=progress_callback)
-        else:
-            if progress_callback:
-                progress_callback(20, "Dang khoi tao PaddleOCR")
-            ocr = self._get_ocr()
-            if progress_callback:
-                progress_callback(45, "Dang nhan dien van ban")
-            result = self._run_ocr(ocr, str(path))
-            lines = self._collect_text_lines(result)
-            if progress_callback:
-                progress_callback(90, "Dang tong hop ket qua")
-        return "\n".join(line for line in lines if line.strip())
-
-    def set_engine(self, engine: str) -> None:
-        if engine not in {"easyocr", "paddleocr"}:
-            raise ValueError(f"Unsupported OCR engine: {engine}")
-        self.engine = engine
-
-    def _run_easyocr(self, image_path: Path, progress_callback: Callable[[int, str], None] | None = None) -> list[str]:
-        reader = self._get_easyocr_reader()
-        image = self._read_image_for_cv(image_path)
-        lines: list[str] = []
-        sources = self._easyocr_sources(image) if image is not None else [str(image_path)]
-        total = max(1, len(sources))
         if progress_callback:
-            progress_callback(10, "Dang cat vung chu tren CCCD")
-        for index, source in enumerate(sources, start=1):
-            if progress_callback:
-                percent = 10 + int(((index - 1) / total) * 80)
-                progress_callback(percent, f"Dang nhan dien vung {index}/{total}")
-            results = reader.readtext(source, detail=1, paragraph=False)
-            for item in self._sort_ocr_results(results):
-                if len(item) >= 2 and isinstance(item[1], str):
-                    confidence = float(item[2]) if len(item) >= 3 and isinstance(item[2], (int, float)) else 1.0
-                    text = self._clean_ocr_line(item[1])
-                    if confidence < 0.18 and not self._is_high_value_cccd_line(text):
-                        continue
-                    if self._looks_like_text(text):
-                        lines.append(text)
-            if progress_callback:
-                percent = 10 + int((index / total) * 80)
-                progress_callback(percent, f"Da xu ly vung {index}/{total}")
-        if progress_callback:
-            progress_callback(92, "Dang gop ket qua OCR")
-        return self._dedupe_keep_order(lines)
+            progress_callback(10, "Đang đọc ảnh CCCD")
+        image = self._read_image_for_cv(path)
+        if image is None:
+            raise RuntimeError("Không thể đọc ảnh. Hãy kiểm tra định dạng file ảnh.")
 
-    def _easyocr_sources(self, image: Any) -> list[Any]:
+        candidates = self._qr_scan_candidates(image)
+        if progress_callback:
+            progress_callback(25, "Đang quét QR bằng bộ nhận diện nâng cao")
+        value = self._scan_qr_with_wechat([image, *candidates])
+        if value:
+            if progress_callback:
+                progress_callback(95, "Đã tìm thấy mã QR")
+            return value
+
+        if progress_callback:
+            progress_callback(65, "Đang thử bộ giải mã QR dự phòng")
+        value = self._scan_qr_with_zxing(candidates)
+        if value:
+            if progress_callback:
+                progress_callback(95, "Đã tìm thấy mã QR")
+            return value
+
+        if progress_callback:
+            progress_callback(72, "Đang thử bộ giải mã ZBar")
+        value = self._scan_qr_with_pyzbar(candidates)
+        if value:
+            if progress_callback:
+                progress_callback(95, "Đã tìm thấy mã QR")
+            return value
+
+        try:
+            import cv2
+        except Exception as exc:
+            raise RuntimeError("Máy chưa có OpenCV để quét QR.") from exc
+
+        detector = cv2.QRCodeDetectorAruco() if hasattr(cv2, "QRCodeDetectorAruco") else cv2.QRCodeDetector()
+        total = max(1, len(candidates))
+        for index, candidate in enumerate(candidates, start=1):
+            if progress_callback:
+                progress_callback(70 + int(((index - 1) / total) * 22), f"Đang quét QR {index}/{total}")
+            value = self._detect_qr_value(detector, candidate)
+            if value:
+                if progress_callback:
+                    progress_callback(95, "Đã tìm thấy mã QR")
+                return value
+
+        raise RuntimeError(
+            "Không tìm thấy mã QR có thể đọc được. Hãy dùng ảnh gốc, chụp rõ góc phải trên CCCD "
+            "và tránh ảnh chụp màn hình đã bị nén."
+        )
+
+    def _read_image_for_cv(self, image_path: Path) -> Any | None:
+        """Read image paths containing Vietnamese/Unicode characters on Windows."""
+        try:
+            import cv2
+            import numpy as np
+        except Exception:
+            return None
+
+        try:
+            image_bytes = np.fromfile(str(image_path), dtype=np.uint8)
+            if image_bytes.size:
+                image = cv2.imdecode(image_bytes, cv2.IMREAD_COLOR)
+                if image is not None:
+                    return image
+        except (OSError, ValueError):
+            pass
+
+        try:
+            from PySide6.QtGui import QImage, QImageReader
+
+            reader = QImageReader(str(image_path))
+            reader.setAutoTransform(True)
+            qt_image = reader.read()
+            if qt_image.isNull():
+                return None
+            qt_image = qt_image.convertToFormat(QImage.Format.Format_RGBA8888)
+            rgba = np.frombuffer(qt_image.bits(), dtype=np.uint8).reshape((qt_image.height(), qt_image.bytesPerLine()))
+            rgba = rgba[:, : qt_image.width() * 4].reshape((qt_image.height(), qt_image.width(), 4)).copy()
+            return cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGR)
+        except Exception:
+            return None
+
+    def _qr_scan_candidates(self, image: Any) -> list[Any]:
         try:
             import cv2
         except Exception:
@@ -79,171 +122,130 @@ class OcrService:
             base = cv2.resize(image, (int(width * scale), int(height * scale)), interpolation=cv2.INTER_CUBIC)
         base_height, base_width = base.shape[:2]
         crop_boxes = [
-            (0.28, 0.08, 0.92, 0.92),
-            (0.28, 0.18, 0.92, 0.72),
-            (0.28, 0.54, 0.92, 0.94),
+            (0.55, 0.00, 1.00, 0.45),
+            (0.68, 0.00, 1.00, 0.36),
+            (0.50, 0.00, 1.00, 0.60),
+            (0.00, 0.00, 1.00, 1.00),
         ]
         candidates: list[Any] = []
         for left, top, right, bottom in crop_boxes:
             crop = base[int(base_height * top) : int(base_height * bottom), int(base_width * left) : int(base_width * right)]
             if crop.size:
-                candidates.extend(self._crop_variants(crop))
-
+                candidates.extend(self._qr_variants(crop))
         return candidates or [base]
 
-    def _crop_variants(self, crop: Any) -> list[Any]:
+    def _qr_variants(self, image: Any) -> list[Any]:
         try:
             import cv2
         except Exception:
-            return [crop]
+            return [image]
 
-        variants = [crop]
-        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-        variants.append(cv2.createCLAHE(clipLimit=2.4, tileGridSize=(8, 8)).apply(gray))
-        return variants
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        return [
+            image,
+            gray,
+            cv2.createCLAHE(clipLimit=2.4, tileGridSize=(8, 8)).apply(gray),
+            cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1],
+        ]
 
-    def _sort_ocr_results(self, results: Any) -> list[Any]:
-        if not isinstance(results, list):
-            return []
+    def _scan_qr_with_wechat(self, candidates: list[Any]) -> str:
+        detector = self._get_wechat_detector()
+        if detector is None:
+            return ""
+        for candidate in candidates:
+            try:
+                values, _ = detector.detectAndDecode(candidate)
+            except Exception:
+                continue
+            for value in values:
+                if value:
+                    return str(value).strip()
+        return ""
 
-        def key(item: Any) -> tuple[int, int]:
-            if not isinstance(item, (list, tuple)) or not item:
-                return (0, 0)
-            box = item[0]
-            if not isinstance(box, (list, tuple)) or not box:
-                return (0, 0)
-            xs: list[float] = []
-            ys: list[float] = []
-            for point in box:
-                if isinstance(point, (list, tuple)) and len(point) >= 2:
-                    xs.append(float(point[0]))
-                    ys.append(float(point[1]))
-            return (int(min(ys) if ys else 0), int(min(xs) if xs else 0))
-
-        return sorted(results, key=key)
-
-    def _clean_ocr_line(self, text: str) -> str:
-        replacements = {
-            "Â«": "<",
-            "«": "<",
-            "»": "<",
-            "|": " ",
-        }
-        result = text.strip()
-        for source, target in replacements.items():
-            result = result.replace(source, target)
-        return " ".join(result.split())
-
-    def _is_high_value_cccd_line(self, text: str) -> bool:
-        folded = text.lower()
-        if any(marker in folded for marker in ["full name", "date of birth", "place of", "idvnm"]):
-            return True
-        return any(char.isdigit() for char in text)
-
-    def _get_easyocr_reader(self) -> Any:
-        if self._easyocr_reader is not None:
-            return self._easyocr_reader
-
-        import easyocr
-
-        self._easyocr_reader = easyocr.Reader(["vi", "en"], gpu=False, verbose=False)
-        return self._easyocr_reader
-
-    def _read_image_for_cv(self, image_path: Path) -> Any | None:
+    def _get_wechat_detector(self) -> Any | None:
+        if self._wechat_checked:
+            return self._wechat_detector
+        self._wechat_checked = True
         try:
             import cv2
-            import numpy as np
+            model_dir = self._resource_root() / "assets" / "qr_models" if getattr(sys, "frozen", False) else Path("assets") / "qr_models"
+            model_files = [
+                model_dir / "detect.prototxt",
+                model_dir / "detect.caffemodel",
+                model_dir / "sr.prototxt",
+                model_dir / "sr.caffemodel",
+            ]
+            if not all(path.exists() for path in model_files):
+                return None
+            self._wechat_detector = cv2.wechat_qrcode_WeChatQRCode(*(str(path) for path in model_files))
         except Exception:
-            return None
+            self._wechat_detector = None
+        return self._wechat_detector
 
+    def _resource_root(self) -> Path:
+        if getattr(sys, "frozen", False):
+            return Path(sys._MEIPASS)
+        return Path(__file__).resolve().parents[4]
+
+    def _scan_qr_with_zxing(self, candidates: list[Any]) -> str:
         try:
-            image_bytes = np.fromfile(str(image_path), dtype=np.uint8)
-            return cv2.imdecode(image_bytes, cv2.IMREAD_COLOR)
+            import zxingcpp
         except Exception:
-            return None
+            return ""
+        for candidate in candidates:
+            try:
+                codes = zxingcpp.read_barcodes(
+                    candidate,
+                    formats=zxingcpp.BarcodeFormat.QRCode,
+                    try_rotate=True,
+                    try_downscale=False,
+                )
+            except Exception:
+                continue
+            for code in codes:
+                value = getattr(code, "text", "")
+                if value:
+                    return str(value).strip()
+        return ""
 
-    def _get_ocr(self) -> Any:
-        if self._ocr is not None:
-            return self._ocr
-
-        # Paddle 3.x CPU on Windows can fail in oneDNN/PIR for OCR graphs.
-        # These flags must be set before importing PaddleOCR/Paddle.
-        os.environ.setdefault("FLAGS_use_mkldnn", "0")
-        os.environ.setdefault("FLAGS_use_onednn", "0")
-        os.environ.setdefault("FLAGS_enable_pir_api", "0")
-        os.environ.setdefault("OMP_NUM_THREADS", "1")
-
-        from paddleocr import PaddleOCR
-
-        options = {
-            "lang": self.lang,
-            "device": "cpu",
-            "enable_hpi": False,
-            "enable_mkldnn": False,
-            "cpu_threads": 4,
-            "use_doc_orientation_classify": False,
-            "use_doc_unwarping": False,
-            "use_textline_orientation": False,
-        }
+    def _scan_qr_with_pyzbar(self, candidates: list[Any]) -> str:
         try:
-            self._ocr = PaddleOCR(**options)
-        except TypeError:
-            self._ocr = PaddleOCR(use_angle_cls=True, lang=self.lang)
-        return self._ocr
+            from pyzbar.pyzbar import ZBarSymbol, decode
+        except Exception:
+            return ""
+        for candidate in candidates:
+            try:
+                codes = decode(candidate, symbols=[ZBarSymbol.QRCODE])
+            except Exception:
+                continue
+            for code in codes:
+                value = getattr(code, "data", b"")
+                if isinstance(value, bytes):
+                    value = value.decode("utf-8", errors="replace")
+                if value:
+                    return str(value).strip()
+        return ""
+    def _detect_qr_value(self, detector: Any, image: Any) -> str:
+        try:
+            value, _, _ = detector.detectAndDecode(image)
+            if value:
+                return value.strip()
+        except Exception:
+            pass
+        try:
+            value, _, _ = detector.detectAndDecodeCurved(image)
+            if value:
+                return value.strip()
+        except Exception:
+            pass
+        try:
+            ok, values, _, _ = detector.detectAndDecodeMulti(image)
+            if ok:
+                for value in values:
+                    if value:
+                        return str(value).strip()
+        except Exception:
+            pass
+        return ""
 
-    def _run_ocr(self, ocr: Any, image_path: str) -> Any:
-        if hasattr(ocr, "predict"):
-            return ocr.predict(image_path)
-        return ocr.ocr(image_path, cls=True)
 
-    def _collect_text_lines(self, result: Any) -> list[str]:
-        lines: list[str] = []
-        self._walk_result(result, lines)
-        return self._dedupe_keep_order(lines)
-
-    def _walk_result(self, value: Any, lines: list[str]) -> None:
-        if value is None:
-            return
-        if isinstance(value, str):
-            if self._looks_like_text(value):
-                lines.append(value.strip())
-            return
-        if isinstance(value, dict):
-            for key in ("rec_text", "text", "transcription"):
-                item = value.get(key)
-                if isinstance(item, str) and self._looks_like_text(item):
-                    lines.append(item.strip())
-            for key in ("rec_texts", "texts"):
-                items = value.get(key)
-                if isinstance(items, list):
-                    for item in items:
-                        if isinstance(item, str) and self._looks_like_text(item):
-                            lines.append(item.strip())
-            for item in value.values():
-                if isinstance(item, (dict, list, tuple)):
-                    self._walk_result(item, lines)
-            return
-        if isinstance(value, (list, tuple)):
-            if len(value) >= 2 and isinstance(value[1], (list, tuple)) and value[1]:
-                text = value[1][0]
-                if isinstance(text, str) and self._looks_like_text(text):
-                    lines.append(text.strip())
-            for item in value:
-                self._walk_result(item, lines)
-
-    def _looks_like_text(self, text: str) -> bool:
-        clean = text.strip()
-        if len(clean) < 2:
-            return False
-        return any(char.isalpha() or char.isdigit() for char in clean)
-
-    def _dedupe_keep_order(self, lines: list[str]) -> list[str]:
-        seen: set[str] = set()
-        result: list[str] = []
-        for line in lines:
-            normalized = " ".join(line.split())
-            key = normalized.lower()
-            if key not in seen:
-                seen.add(key)
-                result.append(normalized)
-        return result

@@ -485,10 +485,9 @@ class DocxTemplateGenerator:
             for element in list(tr_pr):
                 if element.tag in {qn("w:trHeight"), qn("w:cantSplit")}:
                     tr_pr.remove(element)
-        for cell in row_xml.findall(qn("w:tc")):
-            for child in list(cell):
-                if child.tag != qn("w:tcPr"):
-                    cell.remove(child)
+        # Keep the sample paragraphs in the cloned row. They carry the approved
+        # left/right indents and line spacing from the Word template; the writer
+        # below replaces only their text.
 
     def _remove_row_height_v2(self, row_xml) -> None:
         tr_pr = row_xml.find(qn("w:trPr"))
@@ -504,6 +503,7 @@ class DocxTemplateGenerator:
         self._write_business_line_cell_v2(row.cells[3], "X" if line["is_main"] else "", widths[3], "center", bold=bool(line["is_main"]))
 
     def _write_business_line_cell_v2(self, cell, value: str, width: int, alignment: str, bold: bool = False) -> None:
+        """Replace text while retaining the paragraph spacing from the template row."""
         tc = cell._tc
         tc_pr = tc.get_or_add_tcPr()
         tc_w = tc_pr.find(qn("w:tcW"))
@@ -517,29 +517,25 @@ class DocxTemplateGenerator:
             v_align = OxmlElement("w:vAlign")
             tc_pr.append(v_align)
         v_align.set(qn("w:val"), "center")
+
+        source_paragraph = next((child for child in tc if child.tag == qn("w:p")), None)
+        source_p_pr = deepcopy(source_paragraph.find(qn("w:pPr"))) if source_paragraph is not None else None
+        source_r_pr = None
+        if source_paragraph is not None:
+            source_run = source_paragraph.find(qn("w:r"))
+            if source_run is not None:
+                source_r_pr = deepcopy(source_run.find(qn("w:rPr")))
         for child in list(tc):
             if child.tag != qn("w:tcPr"):
                 tc.remove(child)
 
         paragraph = OxmlElement("w:p")
-        p_pr = OxmlElement("w:pPr")
-        p_style = OxmlElement("w:pStyle")
-        p_style.set(qn("w:val"), "TableParagraph")
-        p_pr.append(p_style)
-        spacing = OxmlElement("w:spacing")
-        spacing.set(qn("w:before"), "0")
-        spacing.set(qn("w:after"), "0")
-        spacing.set(qn("w:line"), "276")
-        spacing.set(qn("w:lineRule"), "auto")
-        p_pr.append(spacing)
-        indent = OxmlElement("w:ind")
-        indent.set(qn("w:left"), "0")
-        indent.set(qn("w:right"), "0")
-        indent.set(qn("w:firstLine"), "0")
-        p_pr.append(indent)
-        justification = OxmlElement("w:jc")
+        p_pr = source_p_pr or OxmlElement("w:pPr")
+        justification = p_pr.find(qn("w:jc"))
+        if justification is None:
+            justification = OxmlElement("w:jc")
+            p_pr.append(justification)
         justification.set(qn("w:val"), alignment)
-        p_pr.append(justification)
         paragraph.append(p_pr)
         for line_index, line in enumerate(str(value or "").splitlines() or [""]):
             if line_index:
@@ -547,13 +543,9 @@ class DocxTemplateGenerator:
                 break_run.append(OxmlElement("w:br"))
                 paragraph.append(break_run)
             run = OxmlElement("w:r")
-            r_pr = OxmlElement("w:rPr")
-            size = OxmlElement("w:sz")
-            size.set(qn("w:val"), "26")
-            r_pr.append(size)
-            size_cs = OxmlElement("w:szCs")
-            size_cs.set(qn("w:val"), "26")
-            r_pr.append(size_cs)
+            r_pr = deepcopy(source_r_pr) if source_r_pr is not None else OxmlElement("w:rPr")
+            for element in list(r_pr.findall(qn("w:b"))):
+                r_pr.remove(element)
             if bold:
                 r_pr.append(OxmlElement("w:b"))
             run.append(r_pr)
@@ -695,16 +687,10 @@ class DocxTemplateGenerator:
         if not template_name.startswith("1. "):
             return
 
-        for table in self._iter_tables(document):
-            if not table.rows:
-                continue
-            header_text = self._fold(" ".join(cell.text for cell in table.rows[0].cells))
-            if "loai nguon von" in header_text and "ty le" in header_text:
-                self._normalize_financial_table_geometry(table, [3300, 4700, 1353])
-                self._normalize_financial_table_cells(table, header_index=0, name_column=0)
-            elif "tai san gop von" in header_text and "ty le" in header_text:
-                self._normalize_financial_table_geometry(table, [800, 3900, 3300, 1353])
-                self._normalize_financial_table_cells(table, header_index=0, name_column=1)
+        # Sections 7 and 8 are legal-form tables. Their original column widths,
+        # cell margins and page-flow properties are part of the approved layout,
+        # so only cell values are replaced by _set_cell_text().
+        return
 
     def _normalize_financial_table_geometry(self, table, widths: list[int]) -> None:
         if len(table.rows[0].cells) != len(widths):
@@ -923,14 +909,39 @@ class DocxTemplateGenerator:
         return text
 
     def _set_cell_text(self, cell, value: str, bold: bool = False) -> None:
-        cell.text = ""
-        paragraph = cell.paragraphs[0]
-        lines = value.splitlines() or [""]
-        run = paragraph.add_run(lines[0])
-        run.bold = bold
-        for line in lines[1:]:
-            run.add_break()
-            run.add_text(line)
+        """Set cell content without discarding template paragraph margins/styles."""
+        tc = cell._tc
+        source_paragraph = next((child for child in tc if child.tag == qn("w:p")), None)
+        source_p_pr = deepcopy(source_paragraph.find(qn("w:pPr"))) if source_paragraph is not None else None
+        source_r_pr = None
+        if source_paragraph is not None:
+            source_run = source_paragraph.find(qn("w:r"))
+            if source_run is not None:
+                source_r_pr = deepcopy(source_run.find(qn("w:rPr")))
+        for child in list(tc):
+            if child.tag != qn("w:tcPr"):
+                tc.remove(child)
+        paragraph = OxmlElement("w:p")
+        paragraph.append(source_p_pr or OxmlElement("w:pPr"))
+        for line_index, line in enumerate(str(value or "").splitlines() or [""]):
+            if line_index:
+                break_run = OxmlElement("w:r")
+                break_run.append(OxmlElement("w:br"))
+                paragraph.append(break_run)
+            run = OxmlElement("w:r")
+            r_pr = deepcopy(source_r_pr) if source_r_pr is not None else OxmlElement("w:rPr")
+            for element in list(r_pr.findall(qn("w:b"))):
+                r_pr.remove(element)
+            if bold:
+                r_pr.append(OxmlElement("w:b"))
+            run.append(r_pr)
+            text_node = OxmlElement("w:t")
+            text_node.text = line
+            if line[:1].isspace() or line[-1:].isspace():
+                text_node.set(qn("xml:space"), "preserve")
+            run.append(text_node)
+            paragraph.append(run)
+        tc.append(paragraph)
 
     def _set_business_line_cell(self, cell, value: str, alignment, bold: bool = False) -> None:
         cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER

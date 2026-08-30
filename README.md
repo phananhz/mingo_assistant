@@ -1,35 +1,36 @@
-# Mingo Assistant
+﻿# Mingo Assistant
 
-Ứng dụng desktop Windows hỗ trợ tạo hồ sơ từ giấy tờ cá nhân: OCR ảnh/PDF, trích xuất dữ liệu có cấu trúc, kiểm tra dữ liệu, điền mẫu Word và xuất bộ hồ sơ.
+á»¨ng dá»¥ng desktop Windows há»— trá»£ táº¡o há»“ sÆ¡ tá»« giáº¥y tá» cÃ¡ nhÃ¢n: OCR áº£nh/PDF, trÃ­ch xuáº¥t dá»¯ liá»‡u cÃ³ cáº¥u trÃºc, kiá»ƒm tra dá»¯ liá»‡u, Ä‘iá»n máº«u Word vÃ  xuáº¥t bá»™ há»“ sÆ¡.
 
-Yêu cầu dự án đầy đủ nằm tại [YEU_CAU_PHAT_TRIEN_UNG_DUNG.md](YEU_CAU_PHAT_TRIEN_UNG_DUNG.md).
+YÃªu cáº§u dá»± Ã¡n Ä‘áº§y Ä‘á»§ náº±m táº¡i [YEU_CAU_PHAT_TRIEN_UNG_DUNG.md](YEU_CAU_PHAT_TRIEN_UNG_DUNG.md).
 
-## Cấu trúc chính
+## Cáº¥u trÃºc chÃ­nh
 
 ```text
-src/mingo_assistant/       Source ứng dụng
-docs/                      Tài liệu phân tích, kiến trúc, hướng dẫn
-assets/templates/word/     Mẫu Word .docx
-assets/samples/            Dữ liệu mẫu dùng test OCR và tạo hồ sơ
-data/                      Dữ liệu runtime local, không commit dữ liệu thật
-exports/                   Kết quả xuất hồ sơ, không commit
+src/mingo_assistant/       Source á»©ng dá»¥ng
+docs/                      TÃ i liá»‡u phÃ¢n tÃ­ch, kiáº¿n trÃºc, hÆ°á»›ng dáº«n
+assets/templates/word/     Máº«u Word .docx
+assets/samples/            Dá»¯ liá»‡u máº«u dÃ¹ng test OCR vÃ  táº¡o há»“ sÆ¡
+data/                      Dá»¯ liá»‡u runtime local, khÃ´ng commit dá»¯ liá»‡u tháº­t
+exports/                   Káº¿t quáº£ xuáº¥t há»“ sÆ¡, khÃ´ng commit
 tests/                     Unit test, integration test, fixtures
-scripts/                   Script hỗ trợ dev/build/import
-packaging/                 Cấu hình đóng gói Windows
+scripts/                   Script há»— trá»£ dev/build/import
+packaging/                 Cáº¥u hÃ¬nh Ä‘Ã³ng gÃ³i Windows
 ```
 
-Hiện tại mới dựng khung dự án, chưa có code nghiệp vụ.
+Hiá»‡n táº¡i má»›i dá»±ng khung dá»± Ã¡n, chÆ°a cÃ³ code nghiá»‡p vá»¥.
 
-## Chạy giao diện hiện tại
+## Cháº¡y giao diá»‡n hiá»‡n táº¡i
 
 ```powershell
 $env:PYTHONPATH = "src"
 python -m mingo_assistant
 ```
 
-Nếu terminal chưa nhận `python`, dùng trực tiếp Python 3.12:
+Náº¿u terminal chÆ°a nháº­n `python`, dÃ¹ng trá»±c tiáº¿p Python 3.12:
 
 ```powershell
 $env:PYTHONPATH = "src"
 & "C:\Users\duyle\AppData\Local\Programs\Python\Python312\python.exe" -m mingo_assistant
 ```
+
