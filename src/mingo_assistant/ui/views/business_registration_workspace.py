@@ -7,7 +7,7 @@ from pathlib import Path
 from time import monotonic
 from uuid import uuid4
 
-from PySide6.QtCore import QObject, QThread, QTimer, QUrl, Qt, Signal, Slot
+from PySide6.QtCore import QObject, QThread, QTimer, QUrl, Qt, Signal, Slot, QStringListModel
 from PySide6.QtGui import QDesktopServices, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
     QComboBox,
+    QCompleter,
     QFileDialog,
     QFrame,
     QGridLayout,
@@ -41,6 +42,7 @@ from mingo_assistant.services.business_lines.industry_lookup import IndustryCata
 from mingo_assistant.services.normalization.address_parser import AddressParser
 from mingo_assistant.services.ocr.id_card_parser import IdCardParser
 from mingo_assistant.services.ocr.ocr_service import OcrService
+from mingo_assistant.services.registration_offices import RegistrationOfficeCatalog
 from mingo_assistant.ui.widgets.combo_box import NoWheelComboBox
 
 PERSON_ROLES = [
@@ -253,6 +255,7 @@ class BusinessRegistrationWorkspace(QWidget):
         self.id_parser = IdCardParser()
         self.address_parser = AddressParser()
         self.industry_catalog = industry_catalog or IndustryCatalog.load_from_project(self.bundle_root)
+        self.registration_office_catalog = RegistrationOfficeCatalog.load_from_project(self.bundle_root)
         self.fields: dict[str, QLineEdit | QTextEdit] = {}
         self.ocr_card_fields: dict[str, QLineEdit | QTextEdit] = {}
         self.business_line_rows: list[BusinessLineRow] = []
@@ -260,6 +263,7 @@ class BusinessRegistrationWorkspace(QWidget):
         self.industry_search_input = QLineEdit()
         self.industry_results_table = QTableWidget()
         self.industry_detail = QTextEdit()
+        self.registration_office_completion_model = QStringListModel(self)
         self.form_sections: dict[str, QWidget] = {}
         self.person_fill_selectors: dict[str, QComboBox] = {}
         self.authorized_person_defaults = authorized_person_defaults or {}
@@ -629,10 +633,42 @@ class BusinessRegistrationWorkspace(QWidget):
             field.textChanged.connect(self._refresh_preview)
             if key == "charter_capital_number":
                 field.textChanged.connect(self._handle_capital_number_changed)
+            if key == "business_registration_office":
+                self._setup_registration_office_field(field)
+            if key == "company_province":
+                field.textChanged.connect(self._fill_registration_office_from_province)
             if key.startswith("legal_representative_"):
                 field.textChanged.connect(self._sync_director_from_legal_representative)
         self.fields[key] = field
         return field
+
+    def _setup_registration_office_field(self, field: QLineEdit) -> None:
+        field.setPlaceholderText("Nhập tỉnh/thành phố để chọn phòng đăng ký kinh doanh")
+        if not self.registration_office_catalog.is_available:
+            return
+        completer = QCompleter(self.registration_office_completion_model, field)
+        completer.setCaseSensitivity(Qt.CaseInsensitive)
+        completer.setCompletionMode(QCompleter.PopupCompletion)
+        completer.setFilterMode(Qt.MatchContains)
+        field.setCompleter(completer)
+        field.textEdited.connect(lambda text: self._refresh_registration_office_suggestions(field, text))
+        completer.activated[str].connect(lambda value: self._set_field("business_registration_office", value))
+
+    def _refresh_registration_office_suggestions(self, field: QLineEdit, text: str) -> None:
+        suggestions = self.registration_office_catalog.suggestions(text)
+        self.registration_office_completion_model.setStringList(suggestions)
+        if suggestions and field.completer():
+            field.completer().complete()
+
+    def _fill_registration_office_from_province(self) -> None:
+        if self._initializing:
+            return
+        office_field = self.fields.get("business_registration_office")
+        if not isinstance(office_field, QLineEdit) or office_field.text().strip():
+            return
+        office = self.registration_office_catalog.display_name_for_province(self._field_value("company_province"))
+        if office:
+            office_field.setText(office)
 
     def _build_business_lines_section(self) -> QWidget:
         section = QGroupBox("Ngành nghề kinh doanh")
@@ -1701,6 +1737,10 @@ class BusinessRegistrationWorkspace(QWidget):
         for key, value in mapping.items():
             if value:
                 self._set_field(key, value)
+        if target == "company_address" and result.province:
+            office = self.registration_office_catalog.display_name_for_province(result.province)
+            if office:
+                self._set_field_if_empty("business_registration_office", office)
 
     def _address_detail_from_result(self, result) -> str:
         parts = [result.street_line, result.village]
@@ -2206,7 +2246,4 @@ class BusinessRegistrationWorkspace(QWidget):
             field.setPlainText(value)
         else:
             field.setText(value)
-
-
-
 
