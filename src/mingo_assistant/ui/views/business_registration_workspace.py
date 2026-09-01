@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
@@ -46,6 +46,7 @@ from mingo_assistant.services.registration_offices import RegistrationOfficeCata
 from mingo_assistant.ui.widgets.combo_box import NoWheelComboBox
 
 PERSON_ROLES = [
+    ("beneficial_owner", "Chủ sở hữu"),
     ("legal_representative", "Đại diện pháp luật/Giám đốc"),
     ("member", "Thành viên/chủ sở hữu góp vốn"),
     ("applicant", "Người đăng ký/nộp hồ sơ"),
@@ -54,99 +55,16 @@ PERSON_ROLES = [
 
 
 FIELD_GROUPS = [
-    (
-        "Thông tin cơ quan tiếp nhận và thời gian ký",
-        [
-            ("business_registration_office", "Phòng đăng ký kinh doanh"),
-            ("document_place", "Nơi ký"),
-            ("document_day", "Ngày ký"),
-            ("document_month", "Tháng ký"),
-            ("document_year", "Năm ký"),
-            ("document_place_date", "Dòng địa điểm/ngày tháng"),
-        ],
-    ),
-    (
-        "Thông tin người đăng ký/nộp hồ sơ",
-        [
-            ("applicant_full_name", "Họ tên người đăng ký"),
-            ("applicant_date_of_birth", "Ngày sinh"),
-            ("applicant_gender", "Giới tính"),
-            ("applicant_id_number", "Số CCCD"),
-            ("applicant_address_detail", "Số nhà/đường/thôn"),
-            ("applicant_ward", "Xã/Phường"),
-            ("applicant_province", "Tỉnh/Thành phố"),
-        ],
-    ),
-    (
-        "Thông tin doanh nghiệp",
-        [
-            ("company_name", "Tên doanh nghiệp"),
-            ("company_english_name", "Tên tiếng Anh"),
-            ("company_short_name", "Tên viết tắt"),
-            ("company_address", "Địa chỉ trụ sở đầy đủ"),
-            ("company_address_detail", "Số nhà/đường/thôn"),
-            ("company_ward", "Xã/Phường"),
-            ("company_province", "Tỉnh/Thành phố"),
-            ("company_phone", "Số điện thoại công ty"),
-            ("company_email", "Email công ty"),
-        ],
-    ),
+    ("Thông tin cơ quan tiếp nhận và thời gian ký", [("business_registration_office", "Phòng đăng ký kinh doanh"), ("document_place", "Nơi ký"), ("document_day", "Ngày ký"), ("document_month", "Tháng ký"), ("document_year", "Năm ký"), ("document_place_date", "Dòng địa điểm/ngày tháng")]),
+    ("Thông tin người đăng ký/nộp hồ sơ", [("applicant_full_name", "Họ tên người đăng ký"), ("applicant_date_of_birth", "Ngày sinh"), ("applicant_gender", "Giới tính"), ("applicant_id_number", "Số CCCD"), ("applicant_address_detail", "Số nhà/đường/thôn"), ("applicant_ward", "Xã/Phường"), ("applicant_province", "Tỉnh/Thành phố"), ("applicant_phone", "Điện thoại"), ("applicant_email", "Thư điện tử (nếu có)")]),
+    ("Thông tin doanh nghiệp", [("company_name", "Tên doanh nghiệp"), ("company_english_name", "Tên tiếng Anh (nếu có)"), ("company_short_name", "Tên viết tắt (nếu có)"), ("company_address", "Địa chỉ trụ sở đầy đủ"), ("company_address_detail", "Số nhà/đường/thôn"), ("company_ward", "Xã/Phường"), ("company_province", "Tỉnh/Thành phố"), ("company_phone", "Số điện thoại công ty"), ("company_email", "Email công ty (nếu có)"), ("company_fax", "Số fax (nếu có)"), ("company_website", "Website (nếu có)"), ("company_land_use_certificate", "Có giấy chứng nhận quyền sử dụng đất thuộc khu vực quốc phòng, an ninh")]),
     ("Ngành nghề kinh doanh", []),
-    (
-        "Vốn điều lệ và vốn góp",
-        [
-            ("charter_capital_number", "Vốn điều lệ bằng số"),
-            ("charter_capital_text", "Vốn điều lệ bằng chữ"),
-            ("charter_capital_full_text", "Vốn điều lệ đầy đủ"),
-            ("cash_capital_text", "Vốn bằng tiền mặt"),
-            ("asset_capital_text", "Vốn bằng tài sản"),
-            ("member_capital_amount", "Vốn góp thành viên"),
-            ("member_capital_ratio", "Tỷ lệ góp vốn"),
-            ("capital_zero", "Giá trị 0 trong bảng vốn"),
-        ],
-    ),
-    (
-        "Thông tin người đại diện pháp luật",
-        [
-            ("legal_representative_full_name", "Họ tên"),
-            ("legal_representative_id_number", "Số CCCD"),
-            ("legal_representative_date_of_birth", "Ngày sinh"),
-            ("legal_representative_gender", "Giới tính"),
-            ("legal_representative_nationality", "Quốc tịch"),
-            ("legal_representative_permanent_address", "Địa chỉ thường trú đầy đủ"),
-            ("legal_representative_address_detail", "Số nhà/đường/thôn"),
-            ("legal_representative_ward", "Xã/Phường"),
-            ("legal_representative_province", "Tỉnh/Thành phố"),
-            ("legal_representative_contact_address", "Địa chỉ liên lạc"),
-            ("legal_representative_place_of_origin", "Quê quán"),
-            ("legal_representative_issue_date", "Ngày cấp"),
-            ("legal_representative_expiry_date", "Ngày hết hạn"),
-            ("legal_representative_position", "Chức danh"),
-        ],
-    ),
-    (
-        "Thông tin giám đốc/Tổng giám đốc",
-        [
-            ("director_full_name", "Họ tên giám đốc"),
-            ("director_date_of_birth", "Ngày sinh"),
-            ("director_gender", "Giới tính"),
-            ("director_id_number", "Số CCCD"),
-            ("director_phone", "Điện thoại"),
-            ("director_position", "Chức danh"),
-        ],
-    ),
-    (
-        "Thông tin người được ủy quyền",
-        [
-            ("authorized_person_full_name", "Họ tên"),
-            ("authorized_person_date_of_birth", "Ngày sinh"),
-            ("authorized_person_gender", "Giới tính"),
-            ("authorized_person_id_number", "Số CCCD"),
-            ("authorized_person_contact_address", "Địa chỉ liên lạc"),
-            ("authorized_person_phone", "Điện thoại"),
-            ("authorized_person_email", "Email"),
-        ],
-    ),
+    ("Thông tin chủ sở hữu", [("beneficial_owner_full_name", "Họ tên chủ sở hữu"), ("beneficial_owner_date_of_birth", "Ngày sinh"), ("beneficial_owner_gender", "Giới tính"), ("beneficial_owner_id_number", "Số CCCD"), ("beneficial_owner_issue_date", "Ngày cấp CCCD"), ("beneficial_owner_address", "Địa chỉ liên lạc")]),
+    ("Vốn điều lệ và vốn góp", [("charter_capital_number", "Vốn điều lệ bằng số"), ("charter_capital_text", "Vốn điều lệ bằng chữ"), ("charter_capital_full_text", "Vốn điều lệ đầy đủ"), ("cash_capital_text", "Vốn bằng tiền mặt"), ("asset_capital_text", "Vốn bằng tài sản"), ("member_capital_amount", "Vốn góp thành viên"), ("member_capital_ratio", "Tỷ lệ góp vốn"), ("capital_zero", "Giá trị 0 trong bảng vốn")]),
+    ("Thông tin người đại diện pháp luật", [("legal_representative_full_name", "Họ tên"), ("legal_representative_id_number", "Số CCCD"), ("legal_representative_date_of_birth", "Ngày sinh"), ("legal_representative_gender", "Giới tính"), ("legal_representative_nationality", "Quốc tịch"), ("legal_representative_permanent_address", "Địa chỉ thường trú đầy đủ"), ("legal_representative_address_detail", "Số nhà/đường/thôn"), ("legal_representative_ward", "Xã/Phường"), ("legal_representative_province", "Tỉnh/Thành phố"), ("legal_representative_contact_address", "Địa chỉ liên lạc"), ("legal_representative_place_of_origin", "Quê quán"), ("legal_representative_issue_date", "Ngày cấp"), ("legal_representative_expiry_date", "Ngày hết hạn"), ("legal_representative_position", "Chức danh"), ("legal_representative_phone", "Điện thoại"), ("legal_representative_email", "Thư điện tử (nếu có)"), ("legal_representative_issue_place", "Nơi cấp CCCD")]),
+    ("Thông tin giám đốc/Tổng giám đốc", [("director_full_name", "Họ tên giám đốc"), ("director_date_of_birth", "Ngày sinh"), ("director_gender", "Giới tính"), ("director_id_number", "Số CCCD"), ("director_phone", "Điện thoại"), ("director_position", "Chức danh")]),
+    ("Thông tin đăng ký thuế và bảo hiểm xã hội", [("tax_labor_count", "Tổng số lao động dự kiến"), ("tax_vat_method", "Phương pháp tính thuế GTGT"), ("tax_declaration_period", "Phương thức đóng bảo hiểm xã hội")]),
+    ("Thông tin người được ủy quyền", [("authorized_person_full_name", "Họ tên"), ("authorized_person_date_of_birth", "Ngày sinh"), ("authorized_person_gender", "Giới tính"), ("authorized_person_id_number", "Số CCCD"), ("authorized_person_issue_date", "Ngày cấp CCCD"), ("authorized_person_issue_place", "Nơi cấp CCCD"), ("authorized_person_contact_address", "Địa chỉ liên lạc"), ("authorized_person_phone", "Điện thoại"), ("authorized_person_email", "Email (nếu có)")]),
 ]
 
 BUSINESS_LINE_FIELD_DEFINITIONS = [
@@ -159,12 +77,7 @@ BUSINESS_LINE_FIELD_DEFINITIONS = [
 
 HIDDEN_FIELD_DEFINITIONS = [
     ("business_lines", "Ghi chú ngành nghề"),
-    ("beneficial_owner_full_name", "Họ tên chủ sở hữu hưởng lợi"),
-    ("beneficial_owner_date_of_birth", "Ngày sinh chủ sở hữu hưởng lợi"),
-    ("beneficial_owner_gender", "Giới tính chủ sở hữu hưởng lợi"),
-    ("beneficial_owner_id_number", "Số CCCD chủ sở hữu hưởng lợi"),
-    ("beneficial_owner_issue_date", "Ngày cấp chủ sở hữu hưởng lợi"),
-    ("beneficial_owner_address", "Địa chỉ chủ sở hữu hưởng lợi"),
+    ("signature_initial_note", "Ghi chú ký"),
 ]
 
 FIELD_DEFINITIONS = [field for _, fields in FIELD_GROUPS for field in fields] + BUSINESS_LINE_FIELD_DEFINITIONS + HIDDEN_FIELD_DEFINITIONS
@@ -196,6 +109,23 @@ class BusinessLineRow:
     main_checkbox: QCheckBox
     delete_button: QPushButton
     cells: list[QFrame]
+
+
+CAPITAL_SOURCE_LABELS = (
+    "Vốn ngân sách nhà nước",
+    "Vốn tư nhân",
+    "Vốn nước ngoài",
+    "Vốn khác",
+)
+ASSET_CONTRIBUTION_LABELS = (
+    "Đồng Việt Nam",
+    "Ngoại tệ tự do chuyển đổi",
+    "Vàng",
+    "Quyền sử dụng đất",
+    "Quyền sở hữu trí tuệ",
+    "Các tài sản khác",
+)
+POSITION_OPTIONS = ("Giám đốc", "Tổng giám đốc")
 
 
 class ClickableImageLabel(QLabel):
@@ -256,7 +186,7 @@ class BusinessRegistrationWorkspace(QWidget):
         self.address_parser = AddressParser()
         self.industry_catalog = industry_catalog or IndustryCatalog.load_from_project(self.bundle_root)
         self.registration_office_catalog = RegistrationOfficeCatalog.load_from_project(self.bundle_root)
-        self.fields: dict[str, QLineEdit | QTextEdit] = {}
+        self.fields: dict[str, QLineEdit | QTextEdit | QCheckBox | QComboBox] = {}
         self.ocr_card_fields: dict[str, QLineEdit | QTextEdit] = {}
         self.business_line_rows: list[BusinessLineRow] = []
         self.business_line_table: QFrame | None = None
@@ -265,8 +195,12 @@ class BusinessRegistrationWorkspace(QWidget):
         self.industry_detail = QTextEdit()
         self.registration_office_completion_model = QStringListModel(self)
         self.form_sections: dict[str, QWidget] = {}
+        self.form_nav_buttons: dict[str, QPushButton] = {}
+        self.form_nav_widget: QWidget | None = None
         self.person_fill_selectors: dict[str, QComboBox] = {}
         self.authorized_person_defaults = authorized_person_defaults or {}
+        # Personal profiles only exist while this case workspace stays open.
+        self.personal_profiles: list[dict[str, str]] = []
         self.updating_capital = False
         self.syncing_person_fields = False
         self.syncing_address_fields = False
@@ -275,13 +209,19 @@ class BusinessRegistrationWorkspace(QWidget):
         self._address_sync_timer.setSingleShot(True)
         self._address_sync_timer.setInterval(550)
         self._address_sync_timer.timeout.connect(self._flush_pending_address_sync)
+        self._preview_refresh_timer = QTimer(self)
+        self._preview_refresh_timer.setSingleShot(True)
+        self._preview_refresh_timer.setInterval(120)
+        self._preview_refresh_timer.timeout.connect(self._refresh_preview_now)
+        self._refreshing_preview = False
+        self._preview_refresh_pending = False
         self.last_export_dir: Path | None = None
         self.selected_export_root: Path | None = (
             Path(case.export_dir).parent
             if case and case.export_dir
             else self.default_export_root
         )
-        self.ocr_people: list[OcrPerson] = [OcrPerson("Người 1", role="legal_representative")]
+        self.ocr_people: list[OcrPerson] = [OcrPerson("Người 1", role="")]
         self.current_person_index = 0
         self._initializing = True
         self._export_thread: QThread | None = None
@@ -381,7 +321,7 @@ class BusinessRegistrationWorkspace(QWidget):
         layout.setSpacing(10)
 
         people_header = QHBoxLayout()
-        people_label = QLabel("Danh sách người")
+        people_label = QLabel("Danh sách người trong hồ sơ")
         people_label.setObjectName("FilterLabel")
         add_person_button = QPushButton("+ Thêm người")
         add_person_button.setObjectName("GhostButton")
@@ -392,17 +332,12 @@ class BusinessRegistrationWorkspace(QWidget):
         layout.addLayout(people_header)
         self._refresh_people_buttons()
 
-        role_row = QHBoxLayout()
-        role_label = QLabel("Vai trò người đang chọn")
-        role_label.setObjectName("FilterLabel")
+        self.person_role_input.clear()
         self.person_role_input.addItems([label for _, label in PERSON_ROLES])
         for index, (role_key, _) in enumerate(PERSON_ROLES):
             self.person_role_input.setItemData(index, role_key)
         self.person_role_input.currentIndexChanged.connect(self._sync_selected_person_role)
-        role_row.addWidget(role_label)
-        role_row.addWidget(self.person_role_input, 1)
-        role_row.addStretch(1)
-        layout.addLayout(role_row)
+        self.person_role_input.setVisible(False)
 
         actions = QHBoxLayout()
         self.ocr_engine_input.addItem("Quét mã QR CCCD", "qr")
@@ -481,9 +416,9 @@ class BusinessRegistrationWorkspace(QWidget):
             layout.addWidget(label, row, column)
             layout.addWidget(field, row, column + 1)
 
-        apply_button = QPushButton("Đưa thông tin CCCD vào form")
+        apply_button = QPushButton("Lưu dữ liệu cá nhân")
         apply_button.setObjectName("PrimaryButton")
-        apply_button.clicked.connect(self._apply_cccd_result_to_form)
+        apply_button.clicked.connect(self._save_cccd_personal_profile)
         layout.addWidget(apply_button, (len(fields) + 1) // 2, 0, 1, 4, Qt.AlignRight)
         return group
 
@@ -524,6 +459,7 @@ class BusinessRegistrationWorkspace(QWidget):
 
         nav_widget = QWidget()
         nav_widget.setLayout(self.form_nav_layout)
+        self.form_nav_widget = nav_widget
         nav_scroll = QScrollArea()
         nav_scroll.setWidgetResizable(True)
         nav_scroll.setFrameShape(QFrame.NoFrame)
@@ -533,7 +469,8 @@ class BusinessRegistrationWorkspace(QWidget):
         nav_scroll.setWidget(nav_widget)
 
         layout.addWidget(nav_scroll)
-        layout.addWidget(self.form_stack)
+        self.form_stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        layout.addWidget(self.form_stack, 0, Qt.AlignTop)
 
         for index, (title, fields) in enumerate(FIELD_GROUPS):
             button = QPushButton(title)
@@ -542,19 +479,26 @@ class BusinessRegistrationWorkspace(QWidget):
             button.setChecked(index == 0)
             button.clicked.connect(lambda checked=False, selected=index: self._select_form_section(selected))
             self.form_button_group.addButton(button, index)
+            self.form_nav_buttons[title] = button
             self.form_nav_layout.addWidget(button)
 
             if title == "Ngành nghề kinh doanh":
                 section = self._build_business_lines_section()
+            elif title == "Vốn điều lệ và vốn góp":
+                section = self._build_capital_section()
             else:
                 section = self._build_regular_form_section(title, fields)
             self.form_sections[title] = section
             self.form_stack.addWidget(section)
         self.form_nav_layout.addStretch(1)
+        self._select_form_section(0)
         return group
 
     def _select_form_section(self, index: int) -> None:
         self.form_stack.setCurrentIndex(index)
+        current = self.form_stack.currentWidget()
+        if current is not None:
+            self.form_stack.setFixedHeight(max(250, current.sizeHint().height() + 10))
         for button in self.form_button_group.buttons():
             button.setObjectName("PrimaryButton" if self.form_button_group.id(button) == index else "GhostButton")
             button.style().unpolish(button)
@@ -565,12 +509,20 @@ class BusinessRegistrationWorkspace(QWidget):
         section_grid = QGridLayout(section)
         section_grid.setHorizontalSpacing(18)
         section_grid.setVerticalSpacing(10)
+        section_grid.setAlignment(Qt.AlignTop)
+        section_grid.setColumnStretch(1, 1)
+        section_grid.setColumnStretch(3, 1)
 
         first_field_row = 0
         person_target = self._person_fill_target_for_section(title)
         if person_target:
             selector = self._build_person_fill_selector(person_target, title)
             section_grid.addWidget(selector, 0, 0, 1, 4)
+            first_field_row = 1
+        elif title == "Thông tin giám đốc/Tổng giám đốc":
+            hint = QLabel("Tự động đồng bộ từ Người đại diện pháp luật")
+            hint.setObjectName("FilterLabel")
+            section_grid.addWidget(hint, 0, 0, 1, 4)
             first_field_row = 1
 
         for index, (key, label_text) in enumerate(fields):
@@ -579,6 +531,8 @@ class BusinessRegistrationWorkspace(QWidget):
             label = QLabel(label_text)
             label.setObjectName("FilterLabel")
             field = self._create_field(key)
+            if title == "Thông tin giám đốc/Tổng giám đốc" and isinstance(field, QLineEdit):
+                field.setReadOnly(True)
             section_grid.addWidget(label, row, column)
             section_grid.addWidget(field, row, column + 1)
 
@@ -593,10 +547,11 @@ class BusinessRegistrationWorkspace(QWidget):
 
     def _person_fill_target_for_section(self, title: str) -> str:
         targets = {
+            "Thông tin chủ sở hữu": "beneficial_owner",
             "Thông tin người đại diện pháp luật": "legal_representative",
-            "Thông tin giám đốc/Tổng giám đốc": "director",
             "Thông tin người đăng ký/nộp hồ sơ": "applicant",
             "Thông tin người được ủy quyền": "authorized_person",
+            "Thông tin doanh nghiệp": "company_address",
         }
         return targets.get(title, "")
 
@@ -606,7 +561,7 @@ class BusinessRegistrationWorkspace(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
 
-        label_text = "Chọn profile" if target == "authorized_person" else "Chọn thành viên"
+        label_text = "Chọn profile cá nhân"
         label = QLabel(label_text)
         label.setObjectName("FilterLabel")
 
@@ -619,8 +574,25 @@ class BusinessRegistrationWorkspace(QWidget):
         layout.addWidget(selector, 1)
         return wrapper
 
-    def _create_field(self, key: str) -> QLineEdit | QTextEdit:
-        if key in MULTILINE_FIELDS:
+    def _create_field(self, key: str) -> QLineEdit | QTextEdit | QCheckBox | QComboBox:
+        if key == "company_land_use_certificate":
+            field = QCheckBox("Tích X vào ô Có")
+            field.setToolTip("Đánh dấu khi doanh nghiệp có giấy chứng nhận quyền sử dụng đất thuộc khu vực nêu trong mẫu")
+            field.stateChanged.connect(self._refresh_preview)
+        elif key == "legal_representative_position":
+            field = NoWheelComboBox()
+            field.addItems(POSITION_OPTIONS)
+            field.currentTextChanged.connect(self._refresh_preview)
+            field.currentTextChanged.connect(self._sync_director_from_legal_representative)
+        elif key == "tax_vat_method":
+            field = NoWheelComboBox()
+            field.addItems(("Khấu trừ", "Trực tiếp trên GTGT", "Trực tiếp trên doanh số", "Không phải nộp thuế GTGT"))
+            field.currentTextChanged.connect(self._refresh_preview)
+        elif key == "tax_declaration_period":
+            field = NoWheelComboBox()
+            field.addItems(("Hàng tháng", "03 tháng một lần", "06 tháng một lần"))
+            field.currentTextChanged.connect(self._refresh_preview)
+        elif key in MULTILINE_FIELDS:
             field = QTextEdit()
             field.setFixedHeight(70)
             field.textChanged.connect(self._refresh_preview)
@@ -635,13 +607,21 @@ class BusinessRegistrationWorkspace(QWidget):
                 field.textChanged.connect(self._handle_capital_number_changed)
             if key == "business_registration_office":
                 self._setup_registration_office_field(field)
+                field.textChanged.connect(self._sync_document_place_from_registration_office)
+            if key in {"document_day", "document_month", "document_year"}:
+                field.textChanged.connect(self._sync_document_place_date)
+            if key in {"document_place", "document_place_date"}:
+                field.setReadOnly(True)
+            if key == "company_email":
+                field.setPlaceholderText("Để trống sẽ xuất ..................")
             if key == "company_province":
                 field.textChanged.connect(self._fill_registration_office_from_province)
+            if key == "company_phone":
+                field.textChanged.connect(self._sync_company_phone_to_tax_registration)
             if key.startswith("legal_representative_"):
                 field.textChanged.connect(self._sync_director_from_legal_representative)
         self.fields[key] = field
         return field
-
     def _setup_registration_office_field(self, field: QLineEdit) -> None:
         field.setPlaceholderText("Nhập tỉnh/thành phố để chọn phòng đăng ký kinh doanh")
         if not self.registration_office_catalog.is_available:
@@ -660,6 +640,25 @@ class BusinessRegistrationWorkspace(QWidget):
         if suggestions and field.completer():
             field.completer().complete()
 
+    def _signing_place_for_office(self, office_name: str) -> str:
+        place = self.registration_office_catalog.province_for_office(office_name).strip()
+        return re.sub(r"^(?:Th\u00e0nh ph\u1ed1|T\u1ec9nh)\s+", "", place, flags=re.IGNORECASE).strip()
+
+    def _sync_document_place_from_registration_office(self) -> None:
+        place = self._signing_place_for_office(self._field_value("business_registration_office"))
+        if place:
+            self._set_field("document_place", place)
+        self._sync_document_place_date()
+
+    def _sync_document_place_date(self) -> None:
+        day = self._field_value("document_day")
+        month = self._field_value("document_month")
+        year = self._field_value("document_year")
+        if not (day and month and year):
+            return
+        place = self._field_value("document_place")
+        date_text = f"ngày {day} tháng {month} năm {year}"
+        self._set_field("document_place_date", f"{place}, {date_text}" if place else date_text)
     def _fill_registration_office_from_province(self) -> None:
         if self._initializing:
             return
@@ -670,6 +669,103 @@ class BusinessRegistrationWorkspace(QWidget):
         if office:
             office_field.setText(office)
 
+    def _build_capital_section(self) -> QWidget:
+        section = QGroupBox("Vốn điều lệ và vốn góp")
+        layout = QVBoxLayout(section)
+        layout.setSpacing(12)
+
+        summary = QGridLayout()
+        summary.setHorizontalSpacing(18)
+        summary.setVerticalSpacing(10)
+        for index, (key, label_text) in enumerate((
+            ("charter_capital_number", "Vốn điều lệ (VNĐ)"),
+            ("charter_capital_text", "Vốn điều lệ bằng chữ"),
+            ("cash_capital_text", "Vốn bằng tiền mặt"),
+            ("asset_capital_text", "Vốn bằng tài sản"),
+        )):
+            label = QLabel(label_text)
+            label.setObjectName("FilterLabel")
+            field = self._create_field(key)
+            if key != "charter_capital_number":
+                field.setReadOnly(True)
+            summary.addWidget(label, index // 2, (index % 2) * 2)
+            summary.addWidget(field, index // 2, (index % 2) * 2 + 1)
+        layout.addLayout(summary)
+        layout.addWidget(self._build_capital_breakdown_table("Nguồn vốn điều lệ", CAPITAL_SOURCE_LABELS, "capital_source"))
+        layout.addWidget(self._build_capital_breakdown_table("Tài sản góp vốn", ASSET_CONTRIBUTION_LABELS, "asset_contribution"))
+        return section
+
+    def _build_capital_breakdown_table(self, title: str, labels: tuple[str, ...], prefix: str) -> QWidget:
+        group = QGroupBox(title)
+        grid = QGridLayout(group)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(6)
+        for column, heading in enumerate(("STT", "Nội dung", "Giá trị (VNĐ)", "Tỷ lệ (%)")):
+            label = QLabel(heading)
+            label.setObjectName("TableHeader")
+            label.setAlignment(Qt.AlignCenter)
+            grid.addWidget(label, 0, column)
+        for index, label_text in enumerate(labels, start=1):
+            index_label = QLabel(str(index))
+            index_label.setAlignment(Qt.AlignCenter)
+            name_label = QLabel(label_text)
+            name_label.setWordWrap(True)
+            amount = self._create_field(f"{prefix}_{index}_amount")
+            ratio = self._create_field(f"{prefix}_{index}_ratio")
+            if isinstance(ratio, QLineEdit):
+                ratio.setReadOnly(True)
+                ratio.setAlignment(Qt.AlignCenter)
+            if isinstance(amount, QLineEdit):
+                amount.setAlignment(Qt.AlignRight)
+                amount.textChanged.connect(self._recalculate_capital_breakdowns)
+            grid.addWidget(index_label, index, 0)
+            grid.addWidget(name_label, index, 1)
+            grid.addWidget(amount, index, 2)
+            grid.addWidget(ratio, index, 3)
+        total_row = len(labels) + 1
+        total_label = QLabel("Tổng số")
+        total_label.setObjectName("TableHeader")
+        total_amount = self._create_field(f"{prefix}_total_amount")
+        total_ratio = self._create_field(f"{prefix}_total_ratio")
+        for field in (total_amount, total_ratio):
+            if isinstance(field, QLineEdit):
+                field.setReadOnly(True)
+                field.setAlignment(Qt.AlignCenter)
+        grid.addWidget(total_label, total_row, 0, 1, 2)
+        grid.addWidget(total_amount, total_row, 2)
+        grid.addWidget(total_ratio, total_row, 3)
+        grid.setColumnStretch(1, 4)
+        grid.setColumnStretch(2, 2)
+        return group
+
+    def _recalculate_capital_breakdowns(self) -> None:
+        if self.updating_capital:
+            return
+        self.updating_capital = True
+        try:
+            asset_total = self._refresh_capital_breakdown("asset_contribution", len(ASSET_CONTRIBUTION_LABELS))
+            self._refresh_capital_breakdown("capital_source", len(CAPITAL_SOURCE_LABELS))
+            if asset_total:
+                formatted = self._format_money(str(asset_total))
+                charter = self.fields.get("charter_capital_number")
+                if isinstance(charter, QLineEdit) and charter.text() != formatted:
+                    charter.setText(formatted)
+                self._set_field("charter_capital_text", self._number_to_vietnamese_words(asset_total).capitalize() + " đồng")
+                self._set_field("charter_capital_full_text", f"{formatted} đồng ({self._number_to_vietnamese_words(asset_total).capitalize()} đồng)")
+                self._set_field("cash_capital_text", f"{formatted} đồng ({self._number_to_vietnamese_words(asset_total).capitalize()} đồng)")
+        finally:
+            self.updating_capital = False
+        self._refresh_preview()
+
+    def _refresh_capital_breakdown(self, prefix: str, count: int) -> int:
+        amounts = [self._money_digits(self._field_value(f"{prefix}_{index}_amount")) for index in range(1, count + 1)]
+        total = sum(int(amount or "0") for amount in amounts)
+        for index, amount in enumerate(amounts, start=1):
+            ratio = (int(amount or "0") * 100 / total) if total else 0
+            self._set_field(f"{prefix}_{index}_ratio", f"{ratio:.2f}".rstrip("0").rstrip("."))
+        self._set_field(f"{prefix}_total_amount", self._format_money(str(total)) if total else "0")
+        self._set_field(f"{prefix}_total_ratio", "100" if total else "0")
+        return total
     def _build_business_lines_section(self) -> QWidget:
         section = QGroupBox("Ngành nghề kinh doanh")
         layout = QVBoxLayout(section)
@@ -1009,7 +1105,7 @@ class BusinessRegistrationWorkspace(QWidget):
             if isinstance(profiles, list) and profiles:
                 for index, profile in enumerate(profiles):
                     if isinstance(profile, dict):
-                        name = profile.get("authorized_person_full_name") or f"Profile người ủy quyền {index + 1}"
+                        name = profile.get("authorized_person_full_name") or f"Người được ủy quyền {index + 1}"
                         selector.addItem(str(name), f"authorized_profile:{index}")
             else:
                 name = self.authorized_person_defaults.get("authorized_person_full_name") or "Profile người ủy quyền đã lưu"
@@ -1023,7 +1119,7 @@ class BusinessRegistrationWorkspace(QWidget):
         selector.blockSignals(False)
 
     def _person_display_name(self, index: int, person: OcrPerson) -> str:
-        role_label = dict(PERSON_ROLES).get(person.role, "Thành viên")
+        role_label = dict(PERSON_ROLES).get(person.role, "Chưa phân vai trò")
         return f"{index + 1}. {person.name} - {role_label}"
 
     def _fill_section_from_selector(self, target: str) -> None:
@@ -1065,7 +1161,33 @@ class BusinessRegistrationWorkspace(QWidget):
                 self._set_field(str(key), str(value))
         self._refresh_preview()
 
+    def _assign_core_role(self, target: str, person: OcrPerson) -> bool:
+        role_by_target = {
+            "beneficial_owner": "beneficial_owner",
+            "legal_representative": "legal_representative",
+        }
+        selected_role = role_by_target.get(target)
+        if not selected_role:
+            return True
+        opposite_role = "legal_representative" if selected_role == "beneficial_owner" else "beneficial_owner"
+        if person.role == opposite_role:
+            QMessageBox.warning(
+                self,
+                "Vai trò không hợp lệ",
+                "Chủ sở hữu và Người đại diện pháp luật phải được chọn từ hai người khác nhau.",
+            )
+            return False
+        for other in self.ocr_people:
+            if other is not person and other.role == selected_role:
+                other.role = ""
+        person.role = selected_role
+        self._refresh_people_buttons()
+        self._refresh_person_fill_selectors()
+        return True
+
     def _fill_section_from_person(self, target: str, person: OcrPerson) -> None:
+        if not self._assign_core_role(target, person):
+            return
         data = self._person_data_for_fill(person)
         full_name = data.get("legal_representative_full_name", "")
         id_number = data.get("legal_representative_id_number", "")
@@ -1074,27 +1196,33 @@ class BusinessRegistrationWorkspace(QWidget):
         permanent_address = data.get("legal_representative_permanent_address", "")
 
         if target == "legal_representative":
-            mapping = {
-                "legal_representative_full_name": full_name,
-                "legal_representative_id_number": id_number,
-                "legal_representative_date_of_birth": date_of_birth,
-                "legal_representative_gender": gender,
-                "legal_representative_nationality": data.get("legal_representative_nationality", ""),
-                "legal_representative_permanent_address": permanent_address,
-                "legal_representative_place_of_origin": data.get("legal_representative_place_of_origin", ""),
-                "legal_representative_issue_date": data.get("legal_representative_issue_date", ""),
-                "legal_representative_expiry_date": data.get("legal_representative_expiry_date", ""),
-            }
-            self._set_fields_from_mapping(mapping)
-            self._sync_address_parts("legal_representative_permanent_address")
-            self._sync_director_from_legal_representative()
-        elif target == "director":
             self._set_fields_from_mapping(
                 {
-                    "director_full_name": full_name,
-                    "director_date_of_birth": date_of_birth,
-                    "director_gender": gender,
-                    "director_id_number": id_number,
+                    "legal_representative_full_name": full_name,
+                    "legal_representative_id_number": id_number,
+                    "legal_representative_date_of_birth": date_of_birth,
+                    "legal_representative_gender": gender,
+                    "legal_representative_nationality": data.get("legal_representative_nationality", ""),
+                    "legal_representative_permanent_address": permanent_address,
+                    "legal_representative_place_of_origin": data.get("legal_representative_place_of_origin", ""),
+                    "legal_representative_issue_date": data.get("legal_representative_issue_date", ""),
+                    "legal_representative_expiry_date": data.get("legal_representative_expiry_date", ""),
+                    "legal_representative_issue_place": data.get("legal_representative_issue_place", ""),
+                    "legal_representative_phone": data.get("personal_phone", ""),
+                    "legal_representative_email": data.get("personal_email", ""),
+                }
+            )
+            self._sync_address_parts("legal_representative_permanent_address")
+            self._sync_director_from_legal_representative()
+        elif target == "beneficial_owner":
+            self._set_fields_from_mapping(
+                {
+                    "beneficial_owner_full_name": full_name,
+                    "beneficial_owner_date_of_birth": date_of_birth,
+                    "beneficial_owner_gender": gender,
+                    "beneficial_owner_id_number": id_number,
+                    "beneficial_owner_issue_date": data.get("legal_representative_issue_date", ""),
+                    "beneficial_owner_address": permanent_address,
                 }
             )
         elif target == "applicant":
@@ -1108,6 +1236,8 @@ class BusinessRegistrationWorkspace(QWidget):
                     "applicant_address_detail": parsed.street_line or parsed.village,
                     "applicant_ward": parsed.ward,
                     "applicant_province": parsed.province,
+                    "applicant_phone": data.get("personal_phone", ""),
+                    "applicant_email": data.get("personal_email", ""),
                 }
             )
         elif target == "authorized_person":
@@ -1117,9 +1247,16 @@ class BusinessRegistrationWorkspace(QWidget):
                     "authorized_person_date_of_birth": date_of_birth,
                     "authorized_person_gender": gender,
                     "authorized_person_id_number": id_number,
+                    "authorized_person_issue_date": data.get("legal_representative_issue_date", ""),
+                    "authorized_person_issue_place": data.get("legal_representative_issue_place", ""),
                     "authorized_person_contact_address": permanent_address,
+                    "authorized_person_phone": data.get("personal_phone", ""),
+                    "authorized_person_email": data.get("personal_email", ""),
                 }
             )
+        elif target == "company_address":
+            self._set_field("company_address", permanent_address)
+            self._sync_address_parts("company_address")
         self._refresh_preview()
 
     def _person_data_for_fill(self, person: OcrPerson) -> dict[str, str]:
@@ -1137,6 +1274,9 @@ class BusinessRegistrationWorkspace(QWidget):
                 "legal_representative_place_of_origin": values.get("legal_representative_place_of_origin", ""),
                 "legal_representative_issue_date": values.get("legal_representative_issue_date", ""),
                 "legal_representative_expiry_date": values.get("legal_representative_expiry_date", ""),
+                "legal_representative_issue_place": values.get("legal_representative_issue_place", ""),
+                "personal_phone": values.get("legal_representative_phone", ""),
+                "personal_email": values.get("legal_representative_email", ""),
             }
         return {}
 
@@ -1144,6 +1284,13 @@ class BusinessRegistrationWorkspace(QWidget):
         for key, value in mapping.items():
             if value:
                 self._set_field(key, value)
+
+    def _sync_company_phone_to_tax_registration(self) -> None:
+        """Use the company phone consistently for the mandatory tax declarations."""
+        phone = self._field_value("company_phone")
+        if phone:
+            self._set_field("director_phone", phone)
+        self._refresh_preview()
 
     def _sync_director_from_legal_representative(self) -> None:
         if self.syncing_person_fields:
@@ -1155,17 +1302,10 @@ class BusinessRegistrationWorkspace(QWidget):
                 "director_date_of_birth": "legal_representative_date_of_birth",
                 "director_gender": "legal_representative_gender",
                 "director_id_number": "legal_representative_id_number",
-                "beneficial_owner_full_name": "legal_representative_full_name",
-                "beneficial_owner_date_of_birth": "legal_representative_date_of_birth",
-                "beneficial_owner_gender": "legal_representative_gender",
-                "beneficial_owner_id_number": "legal_representative_id_number",
-                "beneficial_owner_issue_date": "legal_representative_issue_date",
-                "beneficial_owner_address": "legal_representative_permanent_address",
+                "director_position": "legal_representative_position",
             }
             for target, source in pairs.items():
-                source_value = self._field_value(source)
-                if source_value:
-                    self._set_field(target, source_value)
+                self._set_field(target, self._field_value(source))
         finally:
             self.syncing_person_fields = False
         self._refresh_preview()
@@ -1176,6 +1316,10 @@ class BusinessRegistrationWorkspace(QWidget):
             return field.toPlainText().strip()
         if isinstance(field, QLineEdit):
             return field.text().strip()
+        if isinstance(field, QComboBox):
+            return field.currentText().strip()
+        if isinstance(field, QCheckBox):
+            return "X" if field.isChecked() else ""
         return ""
 
     def _schedule_address_sync(self, source_key: str) -> None:
@@ -1247,7 +1391,24 @@ class BusinessRegistrationWorkspace(QWidget):
             self._set_field("member_capital_ratio", "100%")
         finally:
             self.updating_capital = False
+        self._sync_capital_breakdowns_from_charter(formatted)
         self._refresh_preview()
+
+    def _sync_capital_breakdowns_from_charter(self, formatted: str) -> None:
+        if "asset_contribution_1_amount" not in self.fields:
+            return
+        source_other = any(self._money_digits(self._field_value(f"capital_source_{index}_amount")) for index in (1, 3, 4))
+        asset_other = any(self._money_digits(self._field_value(f"asset_contribution_{index}_amount")) for index in range(2, 7))
+        self.updating_capital = True
+        try:
+            if not source_other:
+                self._set_field("capital_source_2_amount", formatted)
+            if not asset_other:
+                self._set_field("asset_contribution_1_amount", formatted)
+            self._refresh_capital_breakdown("capital_source", len(CAPITAL_SOURCE_LABELS))
+            self._refresh_capital_breakdown("asset_contribution", len(ASSET_CONTRIBUTION_LABELS))
+        finally:
+            self.updating_capital = False
 
     def _money_digits(self, value: str) -> str:
         return re.sub(r"\D", "", value)
@@ -1337,6 +1498,10 @@ class BusinessRegistrationWorkspace(QWidget):
             "legal_representative_position": "Giám đốc",
             "director_position": "Giám đốc",
             "authorized_person_gender": "Nữ",
+            "tax_labor_count": "1",
+            "tax_vat_method": "Khấu trừ",
+            "tax_declaration_period": "Hàng tháng",
+            "signature_initial_note": "KHÔNG KÝ NHÁY",
             "member_capital_ratio": "100%",
             "capital_zero": "0",
             "asset_capital_text": "(không có)",
@@ -1366,21 +1531,17 @@ class BusinessRegistrationWorkspace(QWidget):
         for index in range(1, count + 1):
             person = OcrPerson(
                 name=values.get(f"person_{index}_name") or f"Người {index}",
-                role=values.get(f"person_{index}_role") or ("legal_representative" if index == 1 else "member"),
+                role=values.get(f"person_{index}_role", ""),
                 front_path=values.get(f"person_{index}_front_path", ""),
                 back_path=values.get(f"person_{index}_back_path", ""),
             )
             person.data = {
                 key: values.get(f"person_{index}_{key}", "")
                 for key in [
-                    "legal_representative_full_name",
-                    "legal_representative_id_number",
-                    "legal_representative_date_of_birth",
-                    "legal_representative_gender",
-                    "legal_representative_nationality",
-                    "legal_representative_permanent_address",
-                    "legal_representative_place_of_origin",
-                    "legal_representative_issue_date",
+                    "legal_representative_full_name", "legal_representative_id_number",
+                    "legal_representative_date_of_birth", "legal_representative_gender",
+                    "legal_representative_nationality", "legal_representative_permanent_address",
+                    "legal_representative_place_of_origin", "legal_representative_issue_date",
                     "legal_representative_expiry_date",
                 ]
                 if values.get(f"person_{index}_{key}", "")
@@ -1407,7 +1568,7 @@ class BusinessRegistrationWorkspace(QWidget):
                 row.main_checkbox.setChecked(True)
 
     def _add_ocr_person(self) -> None:
-        self.ocr_people.append(OcrPerson(f"Người {len(self.ocr_people) + 1}", role="member"))
+        self.ocr_people.append(OcrPerson(f"Người {len(self.ocr_people) + 1}", role=""))
         self.current_person_index = len(self.ocr_people) - 1
         self._refresh_people_buttons()
         self._refresh_selected_person_images()
@@ -1425,7 +1586,8 @@ class BusinessRegistrationWorkspace(QWidget):
                 widget.deleteLater()
 
         for index, person in enumerate(self.ocr_people):
-            button = QPushButton(person.name)
+            role_label = dict(PERSON_ROLES).get(person.role, "Chưa phân vai trò")
+            button = QPushButton(f"{person.name} - {role_label}")
             button.setObjectName("PrimaryButton" if index == self.current_person_index else "GhostButton")
             button.clicked.connect(lambda checked=False, selected=index: self._select_ocr_person(selected))
             self.people_list_layout.addWidget(button)
@@ -1603,6 +1765,30 @@ class BusinessRegistrationWorkspace(QWidget):
             return
         self._apply_cccd_values_to_current_person(values)
 
+    def _save_cccd_personal_profile(self) -> None:
+        values = self._cccd_result_values()
+        if not any(values.values()):
+            QMessageBox.warning(self, "Chưa có dữ liệu CCCD", "Bạn cần quét QR hoặc nhập thông tin CCCD trước.")
+            return
+        full_name = values.get("legal_representative_full_name", "").strip()
+        id_number = values.get("legal_representative_id_number", "").strip()
+        if not full_name or not id_number:
+            QMessageBox.warning(self, "Không thể lưu dữ liệu", "Cần có họ tên và số CCCD để lưu profile trong hồ sơ này.")
+            return
+        values["personal_phone"] = self._field_value("legal_representative_phone") or self._field_value("applicant_phone")
+        values["personal_email"] = self._field_value("legal_representative_email") or self._field_value("applicant_email")
+        saved = dict(values)
+        existing = next((profile for profile in self.personal_profiles if profile.get("legal_representative_id_number") == id_number), None)
+        if existing is None:
+            saved["id"] = str(uuid4())
+            self.personal_profiles.append(saved)
+        else:
+            existing.update(saved)
+            saved = existing
+        self._refresh_person_fill_selectors()
+        self._apply_cccd_values_to_current_person(saved)
+        QMessageBox.information(self, "Đã lưu dữ liệu cá nhân", f"Đã lưu profile {full_name} cho hồ sơ hiện tại.")
+
     def _apply_cccd_values_to_current_person(self, card_values: dict[str, str]) -> None:
         person = self.ocr_people[self.current_person_index]
         person.data = {key: value for key, value in card_values.items() if value}
@@ -1610,7 +1796,8 @@ class BusinessRegistrationWorkspace(QWidget):
         if full_name:
             person.name = f"Người {self.current_person_index + 1} - {full_name}"
             self._refresh_people_buttons()
-        self._apply_person_data_to_role(card_values, person.role, self.current_person_index + 1, overwrite=True)
+        if person.role in {"legal_representative", "member", "applicant", "authorized_person", "beneficial_owner"}:
+            self._apply_person_data_to_role(card_values, person.role, self.current_person_index + 1, overwrite=True)
         self._refresh_preview()
 
     def _parse_ocr_text(self) -> None:
@@ -1634,6 +1821,7 @@ class BusinessRegistrationWorkspace(QWidget):
             "applicant": "applicant",
             "authorized_person": "authorized_person",
             "member": f"member_{person_number}",
+            "beneficial_owner": "beneficial_owner",
         }
         prefix = role_prefix_map.get(role, "legal_representative")
         source_map = {
@@ -1643,6 +1831,9 @@ class BusinessRegistrationWorkspace(QWidget):
             "gender": "legal_representative_gender",
             "permanent_address": "legal_representative_permanent_address",
             "place_of_origin": "legal_representative_place_of_origin",
+            "nationality": "legal_representative_nationality",
+            "issue_date": "legal_representative_issue_date",
+            "expiry_date": "legal_representative_expiry_date",
         }
         target_suffixes = {
             "full_name": "full_name",
@@ -1651,6 +1842,9 @@ class BusinessRegistrationWorkspace(QWidget):
             "gender": "gender",
             "permanent_address": "permanent_address",
             "place_of_origin": "place_of_origin",
+            "nationality": "nationality",
+            "issue_date": "issue_date",
+            "expiry_date": "expiry_date",
         }
         for suffix, source_key in source_map.items():
             value = card_values.get(source_key, "")
@@ -1668,6 +1862,8 @@ class BusinessRegistrationWorkspace(QWidget):
                     self._set_field_if_empty("applicant_province", parsed.province)
                 continue
             target_key = f"{prefix}_{target_suffixes[suffix]}"
+            if role == "beneficial_owner" and suffix == "permanent_address":
+                target_key = "beneficial_owner_address"
             if overwrite:
                 self._set_field(target_key, value)
             else:
@@ -1698,8 +1894,6 @@ class BusinessRegistrationWorkspace(QWidget):
         if not date_match:
             return
         place = " ".join(date_match.group(1).split()).strip(" ,.-")
-        if place:
-            self._set_field_if_empty("document_place", place)
         self._set_field_if_empty("document_day", date_match.group(2).zfill(2))
         self._set_field_if_empty("document_month", date_match.group(3).zfill(2))
         self._set_field_if_empty("document_year", date_match.group(4))
@@ -1967,25 +2161,68 @@ class BusinessRegistrationWorkspace(QWidget):
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.last_export_dir)))
 
     def _refresh_preview(self) -> None:
+        """Coalesce UI updates so typing never blocks the event loop."""
         if self._initializing:
             return
-        values = self.form_values()
-        lines = []
-        for key, label in FIELD_DEFINITIONS:
-            if key.startswith("beneficial_owner_"):
-                continue
-            value = values.get(key, "").strip()
-            if value:
-                lines.append(f"{label}: {value}")
-        self.preview_text.setPlainText("\n".join(lines) if lines else "Chưa có dữ liệu để xem trước.")
+        self._preview_refresh_pending = True
+        if self._refreshing_preview or self._preview_refresh_timer.isActive():
+            return
+        self._preview_refresh_timer.start()
+
+    def _refresh_preview_now(self) -> None:
+        if self._initializing or self._refreshing_preview or not self._preview_refresh_pending:
+            return
+        self._preview_refresh_pending = False
+        self._refreshing_preview = True
+        try:
+            values = self.form_values()
+            lines = []
+            for key, label in FIELD_DEFINITIONS:
+                if key.startswith("beneficial_owner_"):
+                    continue
+                value = values.get(key, "").strip()
+                if value:
+                    lines.append(f"{label}: {value}")
+            preview = "\n".join(lines) if lines else "Chưa có dữ liệu để xem trước."
+            if self.preview_text.toPlainText() != preview:
+                self.preview_text.setPlainText(preview)
+            self._refresh_form_completion(values)
+        finally:
+            self._refreshing_preview = False
+        if self._preview_refresh_pending:
+            self._preview_refresh_timer.start()
+
+    def _refresh_form_completion(self, values: dict[str, str]) -> None:
+        requirements = {
+            "Thông tin cơ quan tiếp nhận và thời gian ký": ("business_registration_office", "document_day", "document_month", "document_year"),
+            "Thông tin người đăng ký/nộp hồ sơ": ("applicant_full_name", "applicant_id_number", "applicant_phone"),
+            "Thông tin doanh nghiệp": ("company_name", "company_address", "company_phone"),
+            "Thông tin chủ sở hữu": ("beneficial_owner_full_name", "beneficial_owner_id_number", "beneficial_owner_address"),
+            "Vốn điều lệ và vốn góp": ("charter_capital_number",),
+            "Thông tin người đại diện pháp luật": ("legal_representative_full_name", "legal_representative_id_number", "legal_representative_permanent_address", "legal_representative_position"),
+            "Thông tin giám đốc/Tổng giám đốc": ("director_full_name", "director_id_number", "director_position"),
+            "Thông tin đăng ký thuế và bảo hiểm xã hội": ("tax_labor_count", "tax_vat_method", "tax_declaration_period"),
+            "Thông tin người được ủy quyền": ("authorized_person_full_name", "authorized_person_id_number"),
+        }
+        completed_prefix = chr(0x2713) + " "
+        for title, button in self.form_nav_buttons.items():
+            if title == "Ngành nghề kinh doanh":
+                complete = any(values.get(f"business_line_{index}_name", "").strip() and values.get(f"business_line_{index}_code", "").strip() for index in range(1, 11))
+            else:
+                fields = requirements.get(title, ())
+                complete = bool(fields) and all(values.get(field, "").strip() for field in fields)
+            button_text = completed_prefix + title if complete else title
+            if button.text() != button_text:
+                button.setText(button_text)
+            tooltip = "Đã nhập đủ thông tin chính" if complete else "Chưa nhập đủ thông tin chính"
+            if button.toolTip() != tooltip:
+                button.setToolTip(tooltip)
+
 
     def form_values(self) -> dict[str, str]:
         values: dict[str, str] = {}
-        for key, field in self.fields.items():
-            if isinstance(field, QTextEdit):
-                values[key] = field.toPlainText().strip()
-            else:
-                values[key] = field.text().strip()
+        for key in self.fields:
+            values[key] = self._field_value(key)
         for index, row in enumerate(self.business_line_rows, start=1):
             values[f"business_line_{index}_name"] = row.name_field.toPlainText().strip()
             values[f"business_line_{index}_code"] = row.code_field.text().strip()
@@ -1996,7 +2233,6 @@ class BusinessRegistrationWorkspace(QWidget):
 
     def _store_people_values(self, values: dict[str, str]) -> None:
         values["people_count"] = str(len(self.ocr_people))
-        member_index = 0
         for index, person in enumerate(self.ocr_people, start=1):
             values[f"person_{index}_name"] = person.name
             values[f"person_{index}_role"] = person.role
@@ -2004,15 +2240,14 @@ class BusinessRegistrationWorkspace(QWidget):
             values[f"person_{index}_back_path"] = person.back_path
             for key, value in person.data.items():
                 values[f"person_{index}_{key}"] = value
-            if person.role in {"legal_representative", "member"}:
-                member_index += 1
-                self._copy_person_to_member_values(values, member_index, person)
-        if member_index == 0 and values.get("legal_representative_full_name"):
-            values["member_1_full_name"] = values.get("legal_representative_full_name", "")
-            values["member_1_id_number"] = values.get("legal_representative_id_number", "")
-            values["member_1_date_of_birth"] = values.get("legal_representative_date_of_birth", "")
-            values["member_1_gender"] = values.get("legal_representative_gender", "")
-            values["member_1_permanent_address"] = values.get("legal_representative_permanent_address", "")
+
+        owner_prefix = "beneficial_owner" if values.get("beneficial_owner_full_name", "").strip() else "legal_representative"
+        values["member_1_full_name"] = values.get(f"{owner_prefix}_full_name", "")
+        values["member_1_id_number"] = values.get(f"{owner_prefix}_id_number", "")
+        values["member_1_date_of_birth"] = values.get(f"{owner_prefix}_date_of_birth", "")
+        values["member_1_gender"] = values.get(f"{owner_prefix}_gender", "")
+        address_key = "beneficial_owner_address" if owner_prefix == "beneficial_owner" else "legal_representative_permanent_address"
+        values["member_1_permanent_address"] = values.get(address_key, "")
 
     def _copy_person_to_member_values(self, values: dict[str, str], member_index: int, person: OcrPerson) -> None:
         data = person.data
@@ -2039,8 +2274,12 @@ class BusinessRegistrationWorkspace(QWidget):
         document_month = values.get("document_month", "").strip()
         document_year = values.get("document_year", "").strip()
 
-        if not values.get("document_place_date") and document_day and document_month and document_year:
-            values["document_place_date"] = f"ngày {document_day} tháng {document_month} năm {document_year}"
+        signing_place = self._signing_place_for_office(values.get("business_registration_office", ""))
+        if signing_place:
+            values["document_place"] = signing_place
+        if document_day and document_month and document_year:
+            date_text = f"ngày {document_day} tháng {document_month} năm {document_year}"
+            values["document_place_date"] = f"{values.get('document_place', '').strip()}, {date_text}".strip(", ")
 
         self._fill_composed_address(
             values,
@@ -2054,34 +2293,50 @@ class BusinessRegistrationWorkspace(QWidget):
         )
         self._fill_if_missing(values, "legal_representative_contact_address", "legal_representative_permanent_address")
         self._fill_if_missing(values, "company_province", "document_place")
+        owner_address = values.get("beneficial_owner_address", "").strip()
+        if owner_address:
+            parsed_owner_address = self.address_parser.parse(owner_address)
+            values.setdefault("beneficial_owner_address_detail", parsed_owner_address.street_line or parsed_owner_address.village)
+            values.setdefault("beneficial_owner_ward", parsed_owner_address.ward)
+            values.setdefault("beneficial_owner_province", parsed_owner_address.province)
+        values.setdefault("beneficial_owner_nationality", "Việt Nam")
 
         representative_aliases = {
             "director_full_name": "legal_representative_full_name",
             "director_date_of_birth": "legal_representative_date_of_birth",
             "director_gender": "legal_representative_gender",
             "director_id_number": "legal_representative_id_number",
+            "director_position": "legal_representative_position",
             "director_phone": "company_phone",
-            "beneficial_owner_full_name": "legal_representative_full_name",
-            "beneficial_owner_date_of_birth": "legal_representative_date_of_birth",
-            "beneficial_owner_gender": "legal_representative_gender",
-            "beneficial_owner_id_number": "legal_representative_id_number",
-            "beneficial_owner_issue_date": "legal_representative_issue_date",
-            "beneficial_owner_address": "legal_representative_permanent_address",
         }
-        if self._company_member_count() <= 1:
-            representative_aliases.update(
-                {
-                    "applicant_full_name": "legal_representative_full_name",
-                    "applicant_date_of_birth": "legal_representative_date_of_birth",
-                    "applicant_gender": "legal_representative_gender",
-                    "applicant_id_number": "legal_representative_id_number",
-                    "applicant_address_detail": "legal_representative_address_detail",
-                    "applicant_ward": "legal_representative_ward",
-                    "applicant_province": "legal_representative_province",
-                }
-            )
+        applicant_prefix = "authorized_person" if values.get("authorized_person_full_name", "").strip() else "legal_representative"
+        representative_aliases.update(
+            {
+                "applicant_full_name": f"{applicant_prefix}_full_name",
+                "applicant_date_of_birth": f"{applicant_prefix}_date_of_birth",
+                "applicant_gender": f"{applicant_prefix}_gender",
+                "applicant_id_number": f"{applicant_prefix}_id_number",
+                "applicant_address_detail": f"{applicant_prefix}_address_detail",
+                "applicant_ward": f"{applicant_prefix}_ward",
+                "applicant_province": f"{applicant_prefix}_province",
+                "applicant_phone": f"{applicant_prefix}_phone",
+                "applicant_email": f"{applicant_prefix}_email",
+            }
+        )
         for target, source in representative_aliases.items():
             self._fill_if_missing(values, target, source)
+
+        for target, source in {
+            "director_full_name": "legal_representative_full_name",
+            "director_date_of_birth": "legal_representative_date_of_birth",
+            "director_gender": "legal_representative_gender",
+            "director_id_number": "legal_representative_id_number",
+            "director_position": "legal_representative_position",
+        }.items():
+            values[target] = values.get(source, "").strip()
+
+        # Muc 3 la nguon duy nhat cua so dien thoai dung trong thong tin thue.
+        values["director_phone"] = values.get("company_phone", "").strip()
 
         self._fill_if_missing(values, "member_capital_amount", "charter_capital_number")
         self._fill_if_missing(values, "cash_capital_text", "charter_capital_full_text")
@@ -2104,6 +2359,7 @@ class BusinessRegistrationWorkspace(QWidget):
             values["cash_capital_text"] = values.get("charter_capital_full_text", "")
         values.setdefault("capital_zero", "0")
         values.setdefault("asset_capital_text", "(không có)")
+        self._normalize_capital_breakdown_values(values)
         member_count = self._company_member_count()
         values["company_member_count"] = str(member_count)
         values["company_type_label"] = self._case_type_for_members(member_count)
@@ -2125,7 +2381,25 @@ class BusinessRegistrationWorkspace(QWidget):
                 f"member_{index}_capital_ratio",
                 default_ratio,
             )
+        values.setdefault("tax_labor_count", "1")
         values["business_lines"] = self._business_lines_summary(values)
+
+    def _normalize_capital_breakdown_values(self, values: dict[str, str]) -> None:
+        """Word templates require every source and contributed-asset amount to be explicit."""
+        for prefix, count in (("capital_source", len(CAPITAL_SOURCE_LABELS)), ("asset_contribution", len(ASSET_CONTRIBUTION_LABELS))):
+            total = 0
+            amounts: list[int] = []
+            for index in range(1, count + 1):
+                digits = self._money_digits(values.get(f"{prefix}_{index}_amount", ""))
+                amount = int(digits or "0")
+                amounts.append(amount)
+                total += amount
+                values[f"{prefix}_{index}_amount"] = self._format_money(str(amount)) if amount else "0"
+            for index, amount in enumerate(amounts, start=1):
+                ratio = amount * 100 / total if total else 0
+                values[f"{prefix}_{index}_ratio"] = f"{ratio:.2f}".rstrip("0").rstrip(".")
+            values[f"{prefix}_total_amount"] = self._format_money(str(total)) if total else "0"
+            values[f"{prefix}_total_ratio"] = "100" if total else "0"
 
     def _business_lines_summary(self, values: dict[str, str]) -> str:
         lines = []
@@ -2174,7 +2448,7 @@ class BusinessRegistrationWorkspace(QWidget):
             id=self.case_id,
             company_name=values.get("company_name") or "Hồ sơ thành lập doanh nghiệp mới",
             case_type=self._case_type_for_members(member_count),
-            owner=values.get("legal_representative_full_name") or "Chưa nhập",
+            owner=values.get("beneficial_owner_full_name") or "Chưa nhập",
             updated_at=datetime.now().strftime("%d/%m/%Y"),
             status=status,
             condition=condition,
@@ -2189,9 +2463,7 @@ class BusinessRegistrationWorkspace(QWidget):
         )
 
     def _company_member_count(self) -> int:
-        counted_roles = {"legal_representative", "member"}
-        count = sum(1 for person in self.ocr_people if person.role in counted_roles)
-        return max(1, count)
+        return 1
 
     def _case_type_for_members(self, member_count: int) -> str:
         if member_count <= 1:
@@ -2200,8 +2472,12 @@ class BusinessRegistrationWorkspace(QWidget):
 
     def _missing_required_fields(self, values: dict[str, str]) -> list[str]:
         required = {
+            "beneficial_owner_full_name": "Họ tên chủ sở hữu",
+            "beneficial_owner_id_number": "Số CCCD chủ sở hữu",
+            "beneficial_owner_address": "Địa chỉ liên lạc của chủ sở hữu",
             "company_name": "Tên doanh nghiệp",
             "company_address": "Địa chỉ trụ sở",
+            "company_phone": "Số điện thoại công ty (dùng cho thông tin đăng ký thuế)",
             "charter_capital_number": "Vốn điều lệ",
             "legal_representative_full_name": "Họ tên cá nhân/đại diện",
             "legal_representative_id_number": "Số CCCD",
@@ -2220,12 +2496,8 @@ class BusinessRegistrationWorkspace(QWidget):
             code = values.get(f"business_line_{index}_code", "").strip()
             if name and not code:
                 issues.append(f"Mã ngành nghề của ngành {index}")
-        if self._company_member_count() > 1:
-            if not values.get("applicant_full_name", "").strip():
-                issues.append("Người đăng ký/nộp hồ sơ phải tách riêng với đại diện pháp luật trong hồ sơ nhiều thành viên")
-            if values.get("applicant_full_name") and values.get("applicant_full_name") == values.get("legal_representative_full_name"):
-                issues.append("Người đăng ký/nộp hồ sơ đang trùng đại diện pháp luật; hãy kiểm tra lại vai trò")
         return issues
+
 
     def _set_field_if_empty(self, key: str, value: str) -> None:
         field = self.fields.get(key)
@@ -2242,8 +2514,16 @@ class BusinessRegistrationWorkspace(QWidget):
         field = self.fields.get(key)
         if field is None:
             return
+        text_value = str(value or "")
         if isinstance(field, QTextEdit):
-            field.setPlainText(value)
-        else:
-            field.setText(value)
-
+            if field.toPlainText() != text_value:
+                field.setPlainText(text_value)
+        elif isinstance(field, QComboBox):
+            if field.currentText() != text_value:
+                field.setCurrentText(text_value)
+        elif isinstance(field, QCheckBox):
+            checked = text_value.strip().lower() in {"x", "1", "true", "có", "co", "yes"}
+            if field.isChecked() != checked:
+                field.setChecked(checked)
+        elif field.text() != text_value:
+            field.setText(text_value)

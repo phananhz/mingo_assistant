@@ -31,6 +31,10 @@ class AppPaths:
         return self.user_data_root / "authorized_person.json"
 
     @property
+    def personal_profiles_file(self) -> Path:
+        return self.user_data_root / "personal_profiles.json"
+
+    @property
     def template_dir(self) -> Path:
         return self.bundle_root / "assets" / "templates" / "word" / "business_registration"
 

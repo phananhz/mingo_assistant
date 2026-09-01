@@ -21,6 +21,12 @@ exports/*
 logs/*
 DataTrainCCCD/
 .tmp-*
+tmp/
+releases/
+_template_eval/
+_template_eval_output/
+_ui_test_*.png
+Templates04/
 *.docx~
 ~$*.docx
 !data/app/.gitkeep

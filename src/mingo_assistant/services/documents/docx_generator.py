@@ -13,7 +13,7 @@ from pathlib import Path
 
 from docx import Document
 from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
-from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_COLOR_INDEX
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Inches, Pt
@@ -183,16 +183,23 @@ class DocxTemplateGenerator:
         self._replace_bookmarked_fields_in_package(docx_path, values)
         self._replace_split_placeholders_in_package(docx_path, values)
         document = Document(docx_path)
+        uses_highlighted_fields = self._replace_highlighted_runs(document, docx_path.name, values)
         self._replace_manifest_plain_text(document, docx_path.name, values)
-        self._replace_case_type_text(document, values)
+        self._apply_beneficial_owner_template_rules(document, docx_path.name, values)
+        self._apply_company_contact_fields(document, docx_path.name, values)
+        self._apply_document_place_date(document, docx_path.name, values)
+        self._normalize_legal_representative_signature(document, docx_path.name, values)
+        if not uses_highlighted_fields:
+            self._replace_case_type_text(document, values)
         self._replace_business_lines_tables_v2(document, values)
         self._replace_asset_contribution_tables(document, values)
         self._normalize_file1_financial_tables(document, docx_path.name)
-        self._fix_registration_office_lines(document, values)
-        self._fix_contact_lines(document, values)
-        self._apply_bold_uppercase_formatting(document, values)
-        self._fix_signature_font_sizes(document, docx_path.name, values)
-        self._normalize_power_of_attorney_layout(document, docx_path.name, values)
+        if not uses_highlighted_fields:
+            self._fix_registration_office_lines(document, values)
+            self._fix_contact_lines(document, values)
+            self._apply_bold_uppercase_formatting(document, values)
+            self._fix_signature_font_sizes(document, docx_path.name, values)
+            self._normalize_power_of_attorney_layout(document, docx_path.name, values)
         document.save(docx_path)
 
     def _replace_case_type_text(self, document: Document, values: dict[str, str]) -> None:
@@ -269,6 +276,33 @@ class DocxTemplateGenerator:
         part_manifest = template_manifest.get(part_name, {})
         return part_manifest if isinstance(part_manifest, dict) else {}
 
+    def _replace_highlighted_runs(self, document: Document, template_name: str, values: dict[str, str]) -> bool:
+        part_manifest = self._template_part_manifest(template_name, "word/document.xml")
+        field_map = part_manifest.get("highlighted_fields", {})
+        if not isinstance(field_map, dict) or not field_map:
+            return False
+
+        highlighted_index = 0
+        for paragraph in self._iter_paragraphs(document):
+            for run in paragraph.runs:
+                if run.font.highlight_color != WD_COLOR_INDEX.YELLOW:
+                    continue
+                target = field_map.get(str(highlighted_index))
+                if target is not None:
+                    replacement = self._value_for_template_target(str(target), values)
+                    if run._r.findall(qn("w:sym")):
+                        self._set_symbol_checkbox_value(run, replacement)
+                    else:
+                        run.text = replacement
+                highlighted_index += 1
+        return True
+
+    def _set_symbol_checkbox_value(self, run, value: str) -> None:
+        """Preserve a Word symbol checkbox while selecting or clearing it."""
+        checkbox_code = "F053" if str(value or "").strip() else "F052"
+        for symbol in run._r.findall(qn("w:sym")):
+            symbol.set(qn("w:char"), checkbox_code)
+
     def _replace_manifest_plain_text(self, document: Document, template_name: str, values: dict[str, str]) -> None:
         part_manifest = self._template_part_manifest(template_name, "word/document.xml")
         plain_replacements = part_manifest.get("plain_replacements", [])
@@ -288,7 +322,150 @@ class DocxTemplateGenerator:
             return
         self._replace_plain_text_in_container(document, replacements)
 
+    def _apply_beneficial_owner_template_rules(self, document: Document, template_name: str, values: dict[str, str]) -> None:
+        """Keep the owner record independent and leave columns 9 through 18 blank."""
+        if not template_name.startswith("3."):
+            return
+        gender = str(values.get("beneficial_owner_gender", "") or "").strip()
+        for table in self._iter_tables(document):
+            numbering_row_index = next(
+                (
+                    index
+                    for index, row in enumerate(table.rows)
+                    if len(row.cells) >= 18
+                    and row.cells[0].text.strip() == "1"
+                    and row.cells[17].text.strip() == "18"
+                ),
+                None,
+            )
+            if numbering_row_index is None:
+                continue
+            for row in table.rows[numbering_row_index + 1:]:
+                if len(row.cells) < 18:
+                    continue
+                self._replace_table_cell_text(row.cells[3], gender)
+                for cell in row.cells[8:18]:
+                    self._replace_table_cell_text(cell, "")
+
+    def _replace_table_cell_text(self, cell, text: str) -> None:
+        paragraphs = list(cell.paragraphs)
+        if not paragraphs:
+            paragraphs = [cell.add_paragraph()]
+        for paragraph in paragraphs:
+            for run in paragraph.runs:
+                run.text = ""
+        first = paragraphs[0]
+        if first.runs:
+            first.runs[0].text = text
+        else:
+            first.add_run(text)
+    def _apply_company_contact_fields(self, document: Document, template_name: str, values: dict[str, str]) -> None:
+        if not template_name.startswith("1."):
+            return
+        email = str(values.get("company_email", "") or "").strip() or ".................."
+        website = str(values.get("company_website", "") or "").strip() or ".................."
+        for paragraph in self._iter_paragraphs(document):
+            folded = self._fold(paragraph.text)
+            if "thu dien tu" not in folded or "website" not in folded or "4@gmail.com" not in paragraph.text:
+                continue
+            self._replace_paragraph_text(
+                paragraph,
+                f"Thư điện tử (nếu có): {email}\tWebsite (nếu có): {website}",
+            )
+            try:
+                paragraph.paragraph_format.tab_stops.add_tab_stop(Inches(4.1))
+            except Exception:
+                pass
+        self._replace_plain_text_in_container(document, {"4@gmail.com": email})
+
+    def _apply_document_place_date(self, document: Document, template_name: str, values: dict[str, str]) -> None:
+        place = str(values.get("document_place", "") or "").strip()
+        day = str(values.get("document_day", "") or "").strip()
+        month = str(values.get("document_month", "") or "").strip()
+        year = str(values.get("document_year", "") or "").strip()
+        if not (place and day and month and year):
+            return
+        date_line = f"{place}, ngày {day} tháng {month} năm {year}"
+        for paragraph in self._iter_paragraphs(document):
+            folded = self._fold(paragraph.text)
+            if not (folded.startswith(("thanh pho ", "tinh ")) and "ngay" in folded and "thang" in folded and "nam" in folded):
+                continue
+            self._replace_paragraph_text(paragraph, date_line)
+
+    def _normalize_legal_representative_signature(
+        self, document: Document, template_name: str, values: dict[str, str]
+    ) -> None:
+        if not template_name.startswith(("1.", "3.")):
+            return
+        signer = str(values.get("legal_representative_full_name", "") or "").strip().upper()
+        if not signer:
+            return
+        folded_signer = self._fold(signer)
+        for table in self._iter_tables(document):
+            for row in table.rows:
+                for cell in row.cells:
+                    paragraphs = list(cell.paragraphs)
+                    signer_indexes = [
+                        index for index, paragraph in enumerate(paragraphs)
+                        if folded_signer in self._fold(paragraph.text)
+                    ]
+                    if not signer_indexes:
+                        continue
+                    signer_index = signer_indexes[-1]
+                    signature_context = " ".join(
+                        paragraph.text for paragraph in paragraphs[max(0, signer_index - 8) : signer_index]
+                    )
+                    if "ky va ghi ho ten" not in self._fold(signature_context):
+                        continue
+                    tr_pr = row._tr.get_or_add_trPr()
+                    for flag in tr_pr.findall(qn("w:cantSplit")):
+                        tr_pr.remove(flag)
+                    for paragraph in paragraphs:
+                        paragraph.paragraph_format.keep_together = False
+                        paragraph.paragraph_format.keep_with_next = False
+                    signer_paragraph = paragraphs[signer_index]
+                    signer_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    signer_paragraph.paragraph_format.space_before = Pt(0)
+                    signer_paragraph.paragraph_format.space_after = Pt(0)
+                    for run in signer_paragraph.runs:
+                        if run.text:
+                            run.bold = True
+                            run.italic = False
+                            run.font.size = Pt(13)
+
     def _value_for_template_target(self, target: str, values: dict[str, str]) -> str:
+        if target == "__clear":
+            return ""
+        if target.endswith("_date_of_birth_day"):
+            return self._date_component(values.get(target.removesuffix("_day"), ""), 0)
+        if target.endswith("_date_of_birth_month"):
+            return self._date_component(values.get(target.removesuffix("_month"), ""), 1)
+        if target.endswith("_date_of_birth_year"):
+            return self._date_component(values.get(target.removesuffix("_year"), ""), 2)
+        if target == "document_year_with_prefix":
+            year = str(values.get("document_year", "") or "").strip()
+            return f" năm {year}" if year else ""
+        if target == "company_province_with_nationality":
+            province = self._value_for_template_target("company_province", values)
+            return f"{province}, Việt Nam" if province else ""
+        if target == "legal_representative_province_with_nationality":
+            province = self._value_for_template_target("legal_representative_province", values)
+            return f"{province}, Việt Nam" if province else ""
+        if target == "charter_capital_words_without_currency":
+            return re.sub(r"\s*đồng\s*$", "", str(values.get("charter_capital_text", "") or ""), flags=re.IGNORECASE).strip()
+        if target == "legal_representative_full_name_title":
+            return str(values.get("legal_representative_full_name", "") or "").title()
+        if target in {"legal_representative_address_without_province", "beneficial_owner_address_without_province"}:
+            source = "legal_representative_permanent_address" if target.startswith("legal_representative_") else "beneficial_owner_address"
+            parts = [part.strip() for part in str(values.get(source, "") or "").split(",") if part.strip()]
+            return ", ".join(parts[:-1]) if len(parts) > 1 else ""
+        if target == "beneficial_owner_province":
+            parts = [part.strip() for part in str(values.get("beneficial_owner_address", "") or "").split(",") if part.strip()]
+            return parts[-1] if parts else ""
+        if target == "tax_vat_method_x":
+            return "X" if values.get("tax_vat_method") == "Khấu trừ" else ""
+        if target == "tax_declaration_period_x":
+            return "X" if values.get("tax_declaration_period") == "Hàng tháng" else ""
         if target == "document_date_only":
             day = str(values.get("document_day", "") or "").strip()
             month = str(values.get("document_month", "") or "").strip()
@@ -323,6 +500,13 @@ class DocxTemplateGenerator:
             return raw.upper()
         return raw
 
+    def _date_component(self, value: object, component: int) -> str:
+        parts = re.findall(r"\d+", str(value or ""))
+        if len(parts) != 3:
+            return ""
+        if component in (0, 1):
+            return parts[component].zfill(2)
+        return parts[component]
     def _company_address_part(self, values: dict[str, str], part: str) -> str:
         full = str(values.get("company_address", "") or "").strip()
         detail = str(values.get("company_address_detail", "") or "").strip()
@@ -447,9 +631,14 @@ class DocxTemplateGenerator:
         header = table.rows[header_index]
         self._remove_row_height_v2(header._tr)
         self._unmark_repeating_table_header_v2(header)
-        header_texts = ["STT", "Tên ngành", "Mã ngành", "Ngành, nghề\nkinh doanh\nchính"]
-        for cell, text, width in zip(header.cells[:4], header_texts, widths):
-            self._write_business_line_cell_v2(cell, text, width, "center", bold=True)
+        # The heading is legally prescribed in the supplied template. Only body
+        # rows are regenerated, so its full wording and layout stay untouched.
+        for cell, width in zip(header.cells[:4], widths):
+            tc_pr = cell._tc.get_or_add_tcPr()
+            tc_w = tc_pr.find(qn("w:tcW"))
+            if tc_w is not None:
+                tc_w.set(qn("w:w"), str(width))
+                tc_w.set(qn("w:type"), "dxa")
 
     def _unmark_repeating_table_header_v2(self, row) -> None:
         """Keep the industry table header on the first page only.
@@ -530,12 +719,15 @@ class DocxTemplateGenerator:
                 tc.remove(child)
 
         paragraph = OxmlElement("w:p")
-        p_pr = source_p_pr or OxmlElement("w:pPr")
-        justification = p_pr.find(qn("w:jc"))
-        if justification is None:
-            justification = OxmlElement("w:jc")
-            p_pr.append(justification)
+        p_pr = source_p_pr if source_p_pr is not None else OxmlElement("w:pPr")
+        for justification in p_pr.findall(qn("w:jc")):
+            p_pr.remove(justification)
+        if alignment == "left":
+            for indentation in p_pr.findall(qn("w:ind")):
+                p_pr.remove(indentation)
+        justification = OxmlElement("w:jc")
         justification.set(qn("w:val"), alignment)
+        p_pr.append(justification)
         paragraph.append(p_pr)
         for line_index, line in enumerate(str(value or "").splitlines() or [""]):
             if line_index:
@@ -548,6 +740,21 @@ class DocxTemplateGenerator:
                 r_pr.remove(element)
             if bold:
                 r_pr.append(OxmlElement("w:b"))
+
+            # The registration-industry table is a formal Word table: keep all rows
+            # in one font/size regardless of the exemplar row used by the template.
+            fonts = r_pr.find(qn("w:rFonts"))
+            if fonts is None:
+                fonts = OxmlElement("w:rFonts")
+                r_pr.insert(0, fonts)
+            for font_name in ("w:ascii", "w:hAnsi", "w:eastAsia", "w:cs"):
+                fonts.set(qn(font_name), "Times New Roman")
+            for tag in ("w:sz", "w:szCs"):
+                for element in list(r_pr.findall(qn(tag))):
+                    r_pr.remove(element)
+                size = OxmlElement(tag)
+                size.set(qn("w:val"), "24")
+                r_pr.append(size)
             run.append(r_pr)
             text_node = OxmlElement("w:t")
             text_node.text = line
@@ -857,11 +1064,10 @@ class DocxTemplateGenerator:
         return assets
 
     def _has_manual_asset_contributions(self, values: dict[str, str]) -> bool:
+        # Zero is the required display value for an omitted asset, not an actual
+        # contribution that should suppress the automatic VND allocation.
         for index in range(1, 11):
-            if any(
-                str(values.get(f"asset_contribution_{index}_{field}", "") or "").strip()
-                for field in ("name", "amount", "ratio")
-            ):
+            if self._money_number(values.get(f"asset_contribution_{index}_amount", "")):
                 return True
         return False
 
@@ -922,7 +1128,7 @@ class DocxTemplateGenerator:
             if child.tag != qn("w:tcPr"):
                 tc.remove(child)
         paragraph = OxmlElement("w:p")
-        paragraph.append(source_p_pr or OxmlElement("w:pPr"))
+        paragraph.append(source_p_pr if source_p_pr is not None else OxmlElement("w:pPr"))
         for line_index, line in enumerate(str(value or "").splitlines() or [""]):
             if line_index:
                 break_run = OxmlElement("w:r")
@@ -934,6 +1140,21 @@ class DocxTemplateGenerator:
                 r_pr.remove(element)
             if bold:
                 r_pr.append(OxmlElement("w:b"))
+
+            # The registration-industry table is a formal Word table: keep all rows
+            # in one font/size regardless of the exemplar row used by the template.
+            fonts = r_pr.find(qn("w:rFonts"))
+            if fonts is None:
+                fonts = OxmlElement("w:rFonts")
+                r_pr.insert(0, fonts)
+            for font_name in ("w:ascii", "w:hAnsi", "w:eastAsia", "w:cs"):
+                fonts.set(qn(font_name), "Times New Roman")
+            for tag in ("w:sz", "w:szCs"):
+                for element in list(r_pr.findall(qn(tag))):
+                    r_pr.remove(element)
+                size = OxmlElement(tag)
+                size.set(qn("w:val"), "24")
+                r_pr.append(size)
             run.append(r_pr)
             text_node = OxmlElement("w:t")
             text_node.text = line
@@ -1142,7 +1363,12 @@ class DocxTemplateGenerator:
             yield from self._iter_paragraphs(section.footer)
 
     def _replace_paragraph_text(self, paragraph, text: str) -> None:
-        self._clear_paragraph_runs(paragraph)
+        # A template paragraph can hold text in hyperlinks as well as runs.
+        # Remove every inline child so sample text cannot survive replacement.
+        p_element = paragraph._p
+        for child in list(p_element):
+            if child.tag != qn("w:pPr"):
+                p_element.remove(child)
         paragraph.add_run(text)
 
     def _clear_paragraph_runs(self, paragraph) -> None:

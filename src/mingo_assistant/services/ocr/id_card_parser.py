@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import re
 import unicodedata
@@ -66,14 +66,14 @@ class IdCardParser:
         card = ExtractedIdCard(raw_text=qr_text)
 
         if len(parts) >= 7:
-            card.id_number = parts[0]
+            card.id_number = self._cccd_number(parts[0])
             card.full_name = parts[2].upper()
             card.date_of_birth = self._format_compact_date(parts[3])
             card.gender = self._normalize_gender(parts[4]) or self._gender_from_id_number(card.id_number)
             card.permanent_address = self.place_matcher.normalize_address(parts[5])
             card.issue_date = self._format_compact_date(parts[6])
         elif len(parts) >= 6:
-            card.id_number = parts[0]
+            card.id_number = self._cccd_number(parts[0])
             card.full_name = parts[1].upper()
             card.date_of_birth = self._format_compact_date(parts[2])
             card.gender = self._normalize_gender(parts[3]) or self._gender_from_id_number(card.id_number)
@@ -83,6 +83,10 @@ class IdCardParser:
             card.warnings.append("Mã QR CCCD không đúng định dạng dữ liệu cá nhân thường gặp.")
             return card
 
+        if not card.id_number:
+            card.warnings.append("Mã QR không có số CCCD 12 số; thông tin CMND cũ đã được bỏ qua.")
+        if not card.id_number:
+            card.warnings.append("Mã QR không có số CCCD 12 số; thông tin CMND cũ đã được bỏ qua.")
         card.nationality = "Việt Nam"
         card.place_of_origin = self._origin_from_residence(card.permanent_address)
         card.unknown_lines = parts
@@ -108,10 +112,12 @@ class IdCardParser:
         return SequenceMatcher(None, left, right).ratio()
 
     def _find_id_number(self, text: str) -> str:
-        matches = re.findall(r"\b\d{9,12}\b", text)
-        if not matches:
-            return ""
-        return max(matches, key=len)
+        matches = re.findall(r"\b\d{12}\b", text)
+        return matches[0] if matches else ""
+
+    def _cccd_number(self, value: str) -> str:
+        digits = re.sub(r"\D", "", value or "")
+        return digits if re.fullmatch(r"\d{12}", digits) else ""
 
     def _find_first_date(self, text: str) -> str:
         dates = self._collect_dates(text)

@@ -74,6 +74,14 @@ class RegistrationOfficeCatalog:
         matches.sort(key=lambda office: self._rank(office, folded_query))
         return [office.display_name for office in matches[:limit]]
 
+    def province_for_office(self, office_name: str) -> str:
+        folded_office = self._fold(office_name)
+        if not folded_office:
+            return ""
+        for office in self.offices:
+            if folded_office in {self._fold(office.display_name), self._fold(office.office_name)}:
+                return office.province
+        return ""
     def display_name_for_province(self, province: str) -> str:
         folded_province = self._fold(province)
         if not folded_province:
