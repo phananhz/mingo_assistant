@@ -185,6 +185,7 @@ class DocxTemplateGenerator:
         document = Document(docx_path)
         uses_highlighted_fields = self._replace_highlighted_runs(document, docx_path.name, values)
         self._replace_manifest_plain_text(document, docx_path.name, values)
+        self._apply_charter_legal_representative_gender(document, docx_path.name, values)
         self._apply_beneficial_owner_template_rules(document, docx_path.name, values)
         self._apply_company_contact_fields(document, docx_path.name, values)
         self._remove_file1_owner_name_spacer(document, docx_path.name)
@@ -325,30 +326,51 @@ class DocxTemplateGenerator:
             return
         self._replace_plain_text_in_container(document, replacements)
 
+    def _apply_charter_legal_representative_gender(
+        self, document: Document, template_name: str, values: dict[str, str]
+    ) -> None:
+        """Fill the unhighlighted gender sample with stable spacing after a long name."""
+        if not template_name.startswith("2."):
+            return
+        gender = str(values.get("legal_representative_gender", "") or "").strip()
+        for paragraph in self._iter_paragraphs(document):
+            if "ho va ten nguoi dai dien theo phap luat" not in self._fold(paragraph.text):
+                continue
+            runs = list(paragraph.runs)
+            label_index = next(
+                (index for index, run in enumerate(runs) if "gioi tinh" in self._fold(run.text)),
+                None,
+            )
+            if label_index is None:
+                continue
+            value_index = label_index + 1
+            if label_index and "\t" in runs[label_index - 1].text:
+                runs[label_index - 1].text = "     "
+            if value_index < len(runs):
+                runs[value_index].text = gender
+                for run in runs[value_index + 1 :]:
+                    run.text = ""
+            else:
+                paragraph.add_run(gender)
+            return
+
     def _apply_beneficial_owner_template_rules(self, document: Document, template_name: str, values: dict[str, str]) -> None:
-        """Keep the owner record independent and leave columns 9 through 18 blank."""
+        """Fill the existing beneficial-owner row while preserving the template table geometry."""
         if not template_name.startswith("3."):
             return
         gender = str(values.get("beneficial_owner_gender", "") or "").strip()
+        column_values = [str(values.get(key, "") or "").strip() for key in ("beneficial_owner_list_capital_direct", "beneficial_owner_list_capital_indirect", "beneficial_owner_list_capital_total", "beneficial_owner_list_voting_direct", "beneficial_owner_list_voting_indirect", "beneficial_owner_list_voting_total", "beneficial_owner_list_general_partner", "beneficial_owner_list_related_group", "beneficial_owner_list_control", "beneficial_owner_list_manager")]
         for table in self._iter_tables(document):
-            numbering_row_index = next(
-                (
-                    index
-                    for index, row in enumerate(table.rows)
-                    if len(row.cells) >= 18
-                    and row.cells[0].text.strip() == "1"
-                    and row.cells[17].text.strip() == "18"
-                ),
-                None,
-            )
+            numbering_row_index = next((index for index, row in enumerate(table.rows) if len(row.cells) >= 18 and row.cells[0].text.strip() == "1" and row.cells[17].text.strip() == "18"), None)
             if numbering_row_index is None:
                 continue
             for row in table.rows[numbering_row_index + 1:]:
                 if len(row.cells) < 18:
                     continue
                 self._replace_table_cell_text(row.cells[3], gender)
-                for cell in row.cells[8:18]:
-                    self._replace_table_cell_text(cell, "")
+                self._replace_table_cell_text(row.cells[5], str(values.get("beneficial_owner_nationality", "") or "").strip())
+                for cell, value in zip(row.cells[8:18], column_values, strict=True):
+                    self._replace_table_cell_text(cell, value)
 
     def _replace_table_cell_text(self, cell, text: str) -> None:
         paragraphs = list(cell.paragraphs)
@@ -1362,7 +1384,7 @@ class DocxTemplateGenerator:
             name = self._normalize_business_line_text(values.get(f"business_line_{index}_name", ""))
             detail = self._normalize_business_line_text(values.get(f"business_line_{index}_detail", ""))
             if detail:
-                name = f"{name}\nChi tiết: {detail}" if name else f"Chi tiết: {detail}"
+                name = f"{name}\n{detail}" if name else detail
             code = re.sub(r"\D", "", values.get(f"business_line_{index}_code", ""))[:4]
             is_main = bool(values.get(f"business_line_{index}_is_main", "").strip())
             if name or code or is_main:
@@ -1955,7 +1977,6 @@ class DocxTemplateGenerator:
             "legal_representative_ward",
             "legal_representative_province",
             "legal_representative_contact_address",
-            "legal_representative_place_of_origin",
             "legal_representative_issue_date",
             "legal_representative_expiry_date",
             "legal_representative_position",
@@ -2037,7 +2058,7 @@ class DocxTemplateGenerator:
             "gioi_tinh": "legal_representative_gender",
             "quoc_tich": "legal_representative_nationality",
             "dia_chi_thuong_tru": "legal_representative_permanent_address",
-            "que_quan": "legal_representative_place_of_origin",
+            "que_quan": "legal_representative_permanent_address",
             "ngay_cap": "legal_representative_issue_date",
             "ngay_het_han": "legal_representative_expiry_date",
             "chuc_danh": "legal_representative_position",

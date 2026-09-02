@@ -32,7 +32,6 @@ class ExtractedIdCard:
             "legal_representative_gender": self.gender,
             "legal_representative_nationality": self.nationality,
             "legal_representative_permanent_address": self.permanent_address,
-            "legal_representative_place_of_origin": self.place_of_origin,
             "legal_representative_issue_date": self.issue_date,
             "legal_representative_expiry_date": self.expiry_date,
         }

@@ -12,7 +12,7 @@ from docx import Document
 
 EXPECTED_COUNTS = {1: 22, 2: 87, 3: 259, 4: 495, 5: 743}
 OUTPUT_PATH = Path("assets/business_lines/vsic_2025.json")
-DEFAULT_SOURCE_PATH = Path(r"e:\36_2025_QD-TTg_675010.docx")
+DEFAULT_SOURCE_PATH = Path("Templates04/36_2025_QD-TTg_675010.docx")
 SOURCE_TITLE = "Hệ thống ngành kinh tế Việt Nam 2025 - Quyết định 36/2025/QĐ-TTg"
 
 
@@ -36,7 +36,7 @@ def main() -> int:
     nodes = _catalog_tree(catalog_rows)
     details_by_code = _details_by_code(document)
     _apply_details(nodes, details_by_code)
-    display_rows = _display_rows(catalog_rows, details_by_code)
+    display_rows = _level4_display_rows(catalog_rows, details_by_code)
 
     flat_rows = _flatten(nodes)
     counts = _counts_by_level(flat_rows)
@@ -47,10 +47,13 @@ def main() -> int:
     payload = {
         "source_title": SOURCE_TITLE,
         "source_file": str(docx_path),
-        "expected_counts": {str(key): value for key, value in EXPECTED_COUNTS.items()},
-        "actual_counts": {str(key): value for key, value in counts.items()},
+        "expected_counts": {"4": EXPECTED_COUNTS[4]},
+        "actual_counts": {"4": len(display_rows)},
         "display_rows": display_rows,
-        "items": [asdict(node) for node in nodes],
+        "items": [
+            asdict(Node(code=str(row["levels"][3]), name=str(row["name"]), detail=str(row["detail"])))
+            for row in display_rows
+        ],
     }
 
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -132,6 +135,28 @@ def _catalog_tree(catalog_rows: list[list[str]]) -> list[Node]:
                 last_by_level.pop(deeper_level, None)
 
     return roots
+
+
+def _level4_display_rows(catalog_rows: list[list[str]], details_by_code: dict[str, str]) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for cells in catalog_rows:
+        code = cells[3] if len(cells) > 3 else ""
+        if not _code_pattern(4).fullmatch(code):
+            continue
+        if code in seen:
+            raise RuntimeError(f"Duplicate level 4 industry code: {code}")
+        seen.add(code)
+        rows.append(
+            {
+                "levels": ["", "", "", code, ""],
+                "name": cells[5],
+                "detail": details_by_code.get(code, ""),
+            }
+        )
+    if len(rows) != EXPECTED_COUNTS[4]:
+        raise RuntimeError(f"Expected {EXPECTED_COUNTS[4]} level 4 rows, found {len(rows)}.")
+    return rows
 
 
 def _display_rows(catalog_rows: list[list[str]], details_by_code: dict[str, str]) -> list[dict[str, object]]:

@@ -36,7 +36,7 @@ class CreateCaseDialog(QDialog):
         )
 
         self.owner_input = QLineEdit()
-        self.owner_input.setPlaceholderText("Người phụ trách hồ sơ")
+        self.owner_input.setPlaceholderText("Người ủy quyền hồ sơ")
 
         self.members_input = QSpinBox()
         self.members_input.setRange(1, 200)
@@ -52,7 +52,7 @@ class CreateCaseDialog(QDialog):
         form.setSpacing(12)
         form.addRow("Tên doanh nghiệp", self.company_name_input)
         form.addRow("Loại hình", self.case_type_input)
-        form.addRow("Người phụ trách", self.owner_input)
+        form.addRow("Người ủy quyền", self.owner_input)
         form.addRow("Số thành viên", self.members_input)
         form.addRow("Vốn điều lệ", self.capital_input)
         form.addRow("Trạng thái", self.status_input)
@@ -90,7 +90,7 @@ class CreateCaseDialog(QDialog):
             QMessageBox.warning(self, "Thiếu thông tin", "Bạn cần nhập tên doanh nghiệp.")
             return
         if not self.owner_input.text().strip():
-            QMessageBox.warning(self, "Thiếu thông tin", "Bạn cần nhập người phụ trách hồ sơ.")
+            QMessageBox.warning(self, "Thiếu thông tin", "Bạn cần nhập người ủy quyền hồ sơ.")
             return
         if not self.capital_input.text().strip():
             QMessageBox.warning(self, "Thiếu thông tin", "Bạn cần nhập vốn điều lệ.")

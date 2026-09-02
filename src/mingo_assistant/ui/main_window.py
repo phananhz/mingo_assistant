@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from uuid import uuid4
 
@@ -29,7 +30,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QDesktopServices, QFontMetrics
 
 from mingo_assistant.app.paths import AppPaths, get_app_paths
 from mingo_assistant.models.case import CaseSummary
@@ -54,6 +55,40 @@ NAV_ITEMS = [
 ]
 
 
+BUILT_IN_AUTHORIZED_PERSON_PROFILES: tuple[dict[str, str], ...] = (
+    {
+        "id": "builtin-duong-hong-ngoc",
+        "authorized_person_full_name": "D\u01b0\u01a1ng H\u1ed3ng Ng\u1ecdc",
+        "authorized_person_id_number": "068303008330",
+        "authorized_person_issue_date": "12/06/2021",
+        "authorized_person_issue_place": "C\u1ee5c C\u1ea3nh s\u00e1t Qu\u1ea3n l\u00fd H\u00e0nh ch\u00ednh v\u1ec1 Tr\u1eadt t\u1ef1 X\u00e3 h\u1ed9i",
+        "authorized_person_contact_address": "S\u1ed1 43-45 \u0110\u01b0\u1eddng s\u1ed1 7, Khu Ph\u1ed1 1, Ph\u01b0\u1eddng Hi\u1ec7p B\u00ecnh, Th\u00e0nh ph\u1ed1 H\u1ed3 Ch\u00ed Minh",
+        "authorized_person_phone": "0986602511",
+        "authorized_person_email": "ngocduonghong21@gmail.com",
+    },
+    {
+        "id": "builtin-mai-xuan-luong",
+        "authorized_person_full_name": "Mai Xu\u00e2n L\u01b0\u01a1ng",
+        "authorized_person_gender": "Nam",
+        "authorized_person_id_number": "040095033863",
+        "authorized_person_issue_date": "25/09/2022",
+        "authorized_person_issue_place": "C\u1ee5c C\u1ea3nh s\u00e1t Qu\u1ea3n l\u00fd H\u00e0nh ch\u00ednh v\u1ec1 Tr\u1eadt t\u1ef1 X\u00e3 h\u1ed9i",
+        "authorized_person_phone": "0973584275",
+        "authorized_person_email": "luongmx1710@gmail.com",
+    },
+    {
+        "id": "builtin-nguyen-thi-minh-ngoc",
+        "authorized_person_full_name": "Nguy\u1ec5n Th\u1ecb Minh Ng\u1ecdc",
+        "authorized_person_id_number": "031199001726",
+        "authorized_person_issue_date": "09/12/2024",
+        "authorized_person_issue_place": "B\u1ed9 C\u00f4ng an",
+        "authorized_person_contact_address": "43-45 \u0110\u01b0\u1eddng s\u1ed1 7, Khu ph\u1ed1 1, Ph\u01b0\u1eddng Hi\u1ec7p B\u00ecnh, TP. H\u1ed3 Ch\u00ed Minh",
+        "authorized_person_phone": "0879247679",
+        "authorized_person_email": "minhhngoc0304.huynh@gmail.com",
+    },
+)
+
+
 class MainWindow(QMainWindow):
     SIDEBAR_WIDTH = 220
     PAGE_HORIZONTAL_MARGIN = 48
@@ -74,6 +109,11 @@ class MainWindow(QMainWindow):
         self.current_workspace: BusinessRegistrationWorkspace | None = None
         self.current_documents_view: BusinessRegistrationDocumentsView | None = None
         self.authorized_person_path = self.app_paths.authorized_person_file
+        self.authorized_person_profiles: list[dict[str, str]] = []
+        self.authorized_person_selected_id = ""
+        self.authorized_person_fields: dict[str, QLineEdit | QTextEdit] = {}
+        self.authorized_person_cards_layout: QGridLayout | None = None
+        self.authorized_person_save_button: QPushButton | None = None
 
         self.search_input = QLineEdit()
         self.case_type_filter = NoWheelComboBox()
@@ -148,11 +188,13 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
 
         self.business_page = self._build_business_registration_page()
+        self.authorized_person_page = self._build_authorized_person_page()
         self.industry_lookup_page = self._build_industry_lookup_page()
         self.trash_page = self._build_trash_page()
         self.coming_soon_page = self._build_coming_soon_page()
 
         self.stack.addWidget(self.business_page)
+        self.stack.addWidget(self.authorized_person_page)
         self.stack.addWidget(self.industry_lookup_page)
         self.stack.addWidget(self.trash_page)
         self.stack.addWidget(self.coming_soon_page)
@@ -203,7 +245,7 @@ class MainWindow(QMainWindow):
         authorized_person_button = QPushButton("Thông tin người ủy quyền")
         authorized_person_button.setObjectName("GhostButton")
         authorized_person_button.setCursor(Qt.PointingHandCursor)
-        authorized_person_button.clicked.connect(self._open_authorized_person_dialog)
+        authorized_person_button.clicked.connect(self._open_authorized_person_manager)
 
         header.addLayout(header_text, 1)
         header.addWidget(authorized_person_button, 0, Qt.AlignTop)
@@ -410,7 +452,7 @@ class MainWindow(QMainWindow):
         layout.setHorizontalSpacing(16)
         layout.setVerticalSpacing(6)
 
-        self.search_input.setPlaceholderText("Tìm theo tên công ty, người phụ trách...")
+        self.search_input.setPlaceholderText("Tìm theo tên công ty, người ủy quyền...")
         self.case_type_filter.addItems(
             ["Tất cả loại hình", "TNHH hai thành viên trở lên", "TNHH một thành viên", "Công ty cổ phần"]
         )
@@ -492,6 +534,61 @@ class MainWindow(QMainWindow):
     def _content_width(self) -> int:
         return max(1, self.width() - self.SIDEBAR_WIDTH - self.PAGE_HORIZONTAL_MARGIN)
 
+    def _authorized_person_name(self, case: CaseSummary) -> str:
+        name = str(case.form_values.get("authorized_person_full_name", "") or "").strip()
+        return name or case.owner or "Chưa chọn"
+
+    def _display_company_name(self, company_name: str) -> str:
+        text = " ".join(str(company_name or "").split())
+        if not text:
+            return ""
+        legal_form_patterns = [
+            r"\bcông\s+ty\b",
+            r"\bcong\s+ty\b",
+            r"\bcty\b",
+            r"\btnhh\b",
+            r"\btrách\s+nhiệm\s+hữu\s+hạn\b",
+            r"\btrach\s+nhiem\s+huu\s+han\b",
+            r"\bmột\s+thành\s+viên\b",
+            r"\bmot\s+thanh\s+vien\b",
+            r"\bhai\s+thành\s+viên\s+trở\s+lên\b",
+            r"\bhai\s+thanh\s+vien\s+tro\s+len\b",
+            r"\bmtv\b",
+            r"\bctcp\b",
+            r"\btmcp\b",
+            r"\bcp\b",
+            r"\bcổ\s+phần\b",
+            r"\bco\s+phan\b",
+            r"\bdntn\b",
+            r"\bdoanh\s+nghiệp\s+tư\s+nhân\b",
+            r"\bdoanh\s+nghiep\s+tu\s+nhan\b",
+        ]
+        for pattern in legal_form_patterns:
+            text = re.sub(pattern, " ", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s+", " ", text).strip(" -,")
+        return text or company_name
+
+    def _card_title_text(self, title: str, metrics: QFontMetrics, width: int, max_lines: int = 3) -> str:
+        words = title.split()
+        if not words:
+            return ""
+        lines: list[str] = []
+        index = 0
+        while index < len(words) and len(lines) < max_lines:
+            line = words[index]
+            index += 1
+            while index < len(words) and metrics.horizontalAdvance(f"{line} {words[index]}") <= width:
+                line = f"{line} {words[index]}"
+                index += 1
+            lines.append(line)
+        if index < len(words):
+            remaining = f"{lines[-1]} {' '.join(words[index:])}".rstrip()
+            suffix = "..."
+            while remaining and metrics.horizontalAdvance(f"{remaining}{suffix}") > width:
+                remaining = remaining[:-1].rstrip()
+            lines[-1] = f"{remaining}{suffix}"
+        return "\n".join(lines)
+
     def _filtered_cases(self) -> list[CaseSummary]:
         search_text = self.search_input.text().strip().lower()
         case_type = self.case_type_filter.currentText()
@@ -500,7 +597,7 @@ class MainWindow(QMainWindow):
 
         result = []
         for case in self.cases:
-            haystack = f"{case.company_name} {case.owner} {case.case_type} {case.status}".lower()
+            haystack = f"{case.company_name} {self._authorized_person_name(case)} {case.case_type} {case.status}".lower()
             if search_text and search_text not in haystack:
                 continue
             if case_type != "Tất cả loại hình" and case.case_type != case_type:
@@ -563,7 +660,7 @@ class MainWindow(QMainWindow):
         title = QLabel(case.company_name)
         title.setObjectName("CardTitle")
         title.setWordWrap(True)
-        meta = QLabel(f"{case.case_type} | Người phụ trách: {case.owner} | Đã xóa: {case.deleted_at or 'Không rõ'}")
+        meta = QLabel(f"{case.case_type} | Người ủy quyền: {self._authorized_person_name(case)} | Đã xóa: {case.deleted_at or 'Không rõ'}")
         meta.setObjectName("MetaText")
         meta.setWordWrap(True)
         info.addWidget(title)
@@ -660,9 +757,13 @@ class MainWindow(QMainWindow):
         body.setContentsMargins(14, 14, 14, 0)
         body.setSpacing(8)
 
-        title = QLabel(case.name)
+        display_name = self._display_company_name(case.name)
+        title = QLabel()
         title.setObjectName("CardTitle")
-        title.setWordWrap(True)
+        title.setToolTip(case.name)
+        title.setText(self._card_title_text(display_name, title.fontMetrics(), self.CARD_WIDTH - 28))
+        title.setWordWrap(False)
+        title.setMinimumHeight(title.fontMetrics().lineSpacing() * 3)
         body.addWidget(title)
 
         subtitle = QLabel(case.case_type.upper())
@@ -671,7 +772,7 @@ class MainWindow(QMainWindow):
         body.addWidget(subtitle)
 
         body.addSpacing(4)
-        body.addWidget(self._meta_row("Người phụ trách", case.owner))
+        body.addWidget(self._meta_row("Người ủy quyền", self._authorized_person_name(case)))
         body.addWidget(self._meta_row("Thành viên", str(case.members)))
         body.addWidget(self._meta_row("Vốn điều lệ", case.capital))
         body.addWidget(self._meta_row("Cập nhật", case.updated_at))
@@ -760,7 +861,7 @@ class MainWindow(QMainWindow):
             (
                 f"Tên doanh nghiệp: {case.company_name}\n"
                 f"Loại hình: {case.case_type}\n"
-                f"Người phụ trách: {case.owner}\n"
+                f"Người ủy quyền: {self._authorized_person_name(case)}\n"
                 f"Số thành viên: {case.members}\n"
                 f"Vốn điều lệ: {case.capital}\n"
                 f"Trạng thái: {case.status}"
@@ -791,182 +892,209 @@ class MainWindow(QMainWindow):
     def _open_new_business_case(self) -> None:
         self._open_case_workspace(None)
 
-    def _open_authorized_person_dialog(self) -> None:
-        payload = self._load_authorized_person_profiles()
-        profiles = payload["profiles"]
-        selected_profile_id = str(payload.get("selected_profile_id", ""))
-        values = self._authorized_profile_by_id(profiles, selected_profile_id) or (profiles[0] if profiles else {})
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Quản lý thông tin người ủy quyền")
-        dialog.setMinimumSize(920, 620)
-
-        layout = QVBoxLayout(dialog)
-        layout.setSpacing(14)
+    def _build_authorized_person_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(24, 22, 24, 22)
+        layout.setSpacing(16)
 
         header = QHBoxLayout()
-        title_box = QVBoxLayout()
-        title = QLabel("Thông tin người ủy quyền")
+        back_button = QPushButton("Quay l\u1ea1i h\u1ed3 s\u01a1")
+        back_button.setObjectName("GhostButton")
+        back_button.setCursor(Qt.PointingHandCursor)
+        back_button.clicked.connect(self._return_to_business_list)
+        heading = QVBoxLayout()
+        title = QLabel("Qu\u1ea3n l\u00fd th\u00f4ng tin ng\u01b0\u1eddi \u1ee7y quy\u1ec1n")
         title.setObjectName("PageTitle")
-        description = QLabel("Lưu nhiều profile người được ủy quyền để chọn nhanh khi tạo hồ sơ.")
+        description = QLabel("Ch\u1ecdn nhanh ng\u01b0\u1eddi \u1ee7y quy\u1ec1n khi t\u1ea1o h\u1ed3 s\u01a1. Profile m\u1eb7c \u0111\u1ecbnh lu\u00f4n \u0111\u01b0\u1ee3c gi\u1eef nguy\u00ean.")
         description.setObjectName("PageDescription")
         description.setWordWrap(True)
-        title_box.addWidget(title)
-        title_box.addWidget(description)
-        add_profile_button = QPushButton("+ Tạo profile mới")
-        add_profile_button.setObjectName("PrimaryButton")
-        header.addLayout(title_box, 1)
-        header.addWidget(add_profile_button, 0, Qt.AlignTop)
+        heading.addWidget(title)
+        heading.addWidget(description)
+        new_button = QPushButton("+ T\u1ea1o profile m\u1edbi")
+        new_button.setObjectName("PrimaryButton")
+        new_button.setCursor(Qt.PointingHandCursor)
+        new_button.clicked.connect(self._new_authorized_person_profile)
+        header.addWidget(back_button, 0, Qt.AlignTop)
+        header.addLayout(heading, 1)
+        header.addWidget(new_button, 0, Qt.AlignTop)
         layout.addLayout(header)
 
-        cards_scroll = QScrollArea()
-        cards_scroll.setWidgetResizable(True)
-        cards_scroll.setFrameShape(QFrame.NoFrame)
-        cards_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        cards_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        cards_scroll.setFixedHeight(210)
-        cards_container = QWidget()
-        cards_layout = QGridLayout(cards_container)
-        cards_layout.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        container = QWidget()
+        container_layout = QVBoxLayout(container)
+        container_layout.setContentsMargins(0, 0, 0, 0)
+        container_layout.setSpacing(16)
+
+        cards_frame = QFrame()
+        cards_frame.setObjectName("Card")
+        cards_layout = QGridLayout(cards_frame)
+        cards_layout.setContentsMargins(16, 14, 16, 14)
         cards_layout.setHorizontalSpacing(14)
         cards_layout.setVerticalSpacing(14)
-        cards_scroll.setWidget(cards_container)
-        layout.addWidget(cards_scroll)
-
-        form = QFormLayout()
-        form.setHorizontalSpacing(14)
-        form.setVerticalSpacing(10)
-
-        fields: dict[str, QLineEdit | QTextEdit] = {}
-        definitions = [
-            ("authorized_person_full_name", "Họ tên"),
-            ("authorized_person_date_of_birth", "Ngày sinh"),
-            ("authorized_person_gender", "Giới tính"),
-            ("authorized_person_id_number", "Số CCCD"),
-            ("authorized_person_contact_address", "Địa chỉ liên lạc"),
-            ("authorized_person_phone", "Điện thoại"),
-            ("authorized_person_email", "Email"),
-        ]
-        for key, label_text in definitions:
-            if key == "authorized_person_contact_address":
-                field = QTextEdit()
-                field.setFixedHeight(84)
-                field.setPlainText(values.get(key, ""))
-            else:
-                field = QLineEdit(values.get(key, ""))
-            fields[key] = field
-            form.addRow(label_text, field)
+        self.authorized_person_cards_layout = cards_layout
+        container_layout.addWidget(cards_frame)
 
         form_frame = QFrame()
         form_frame.setObjectName("Card")
         form_layout = QVBoxLayout(form_frame)
         form_layout.setContentsMargins(16, 14, 16, 14)
-        form_title = QLabel("Thông tin profile đang sửa")
+        form_layout.setSpacing(12)
+        form_title = QLabel("Th\u00f4ng tin profile \u0111ang ch\u1ec9nh s\u1eeda")
         form_title.setObjectName("SectionTitle")
         form_layout.addWidget(form_title)
+
+        form = QFormLayout()
+        form.setHorizontalSpacing(14)
+        form.setVerticalSpacing(10)
+        definitions = [
+            ("authorized_person_full_name", "H\u1ecd t\u00ean"),
+            ("authorized_person_date_of_birth", "Ng\u00e0y sinh"),
+            ("authorized_person_gender", "Gi\u1edbi t\u00ednh"),
+            ("authorized_person_id_number", "S\u1ed1 CCCD"),
+            ("authorized_person_issue_date", "Ng\u00e0y c\u1ea5p"),
+            ("authorized_person_issue_place", "N\u01a1i c\u1ea5p"),
+            ("authorized_person_contact_address", "\u0110\u1ecba ch\u1ec9 li\u00ean l\u1ea1c"),
+            ("authorized_person_phone", "\u0110i\u1ec7n tho\u1ea1i"),
+            ("authorized_person_email", "Email"),
+        ]
+        for key, label_text in definitions:
+            if key == "authorized_person_contact_address":
+                field: QLineEdit | QTextEdit = QTextEdit()
+                field.setFixedHeight(84)
+            else:
+                field = QLineEdit()
+            self.authorized_person_fields[key] = field
+            form.addRow(label_text, field)
         form_layout.addLayout(form)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
-        buttons.accepted.connect(dialog.accept)
-        buttons.rejected.connect(dialog.reject)
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        reset_button = QPushButton("H\u1ee7y thay \u0111\u1ed5i")
+        reset_button.setObjectName("GhostButton")
+        reset_button.clicked.connect(self._reload_authorized_person_manager)
+        save_button = QPushButton("L\u01b0u profile")
+        save_button.setObjectName("PrimaryButton")
+        save_button.clicked.connect(self._save_authorized_person_manager)
+        self.authorized_person_save_button = save_button
+        buttons.addWidget(reset_button)
+        buttons.addWidget(save_button)
+        form_layout.addLayout(buttons)
+        container_layout.addWidget(form_frame)
+        container_layout.addStretch(1)
+        scroll.setWidget(container)
+        layout.addWidget(scroll, 1)
+        return page
 
-        editing_profile_id = {"value": str(values.get("id", "")) or str(uuid4())}
+    def _open_authorized_person_manager(self) -> None:
+        self._reload_authorized_person_manager()
+        self.stack.setCurrentWidget(self.authorized_person_page)
 
-        def read_form() -> dict[str, str]:
-            saved: dict[str, str] = {"id": editing_profile_id["value"] or str(uuid4())}
-            for key, field in fields.items():
-                if isinstance(field, QTextEdit):
-                    saved[key] = field.toPlainText().strip()
-                else:
-                    saved[key] = field.text().strip()
-            return saved
+    def _reload_authorized_person_manager(self) -> None:
+        payload = self._load_authorized_person_profiles()
+        self.authorized_person_profiles = [dict(profile) for profile in payload["profiles"]]
+        self.authorized_person_selected_id = str(payload.get("selected_profile_id", ""))
+        profile = self._authorized_profile_by_id(
+            self.authorized_person_profiles, self.authorized_person_selected_id
+        )
+        self._write_authorized_person_form(profile or {})
+        self._refresh_authorized_person_cards()
 
-        def write_form(profile: dict[str, str]) -> None:
-            editing_profile_id["value"] = str(profile.get("id", "")) or str(uuid4())
-            for key, field in fields.items():
-                value = str(profile.get(key, ""))
-                if isinstance(field, QTextEdit):
-                    field.setPlainText(value)
-                else:
-                    field.setText(value)
+    def _write_authorized_person_form(self, profile: dict[str, str]) -> None:
+        for key, field in self.authorized_person_fields.items():
+            value = str(profile.get(key, ""))
+            if isinstance(field, QTextEdit):
+                field.setPlainText(value)
+            else:
+                field.setText(value)
+            field.setReadOnly(False)
+        if self.authorized_person_save_button is not None:
+            self.authorized_person_save_button.setEnabled(True)
 
-        def clear_form() -> None:
-            editing_profile_id["value"] = str(uuid4())
-            for field in fields.values():
-                if isinstance(field, QTextEdit):
-                    field.clear()
-                else:
-                    field.clear()
-            gender_field = fields.get("authorized_person_gender")
-            if isinstance(gender_field, QLineEdit):
-                gender_field.setText("Nữ")
-            refresh_cards()
+    def _read_authorized_person_form(self) -> dict[str, str]:
+        profile = {"id": self.authorized_person_selected_id or str(uuid4())}
+        for key, field in self.authorized_person_fields.items():
+            profile[key] = field.toPlainText().strip() if isinstance(field, QTextEdit) else field.text().strip()
+        return profile
 
-        def edit_profile(profile_id: str) -> None:
-            profile = self._authorized_profile_by_id(profiles, profile_id)
-            if profile:
-                write_form(profile)
-                refresh_cards()
+    def _new_authorized_person_profile(self) -> None:
+        self.authorized_person_selected_id = str(uuid4())
+        self._write_authorized_person_form({"authorized_person_gender": "N\u1eef"})
+        self._refresh_authorized_person_cards()
 
-        def delete_profile(profile_id: str) -> None:
-            profile = self._authorized_profile_by_id(profiles, profile_id)
-            name = profile.get("authorized_person_full_name", "profile này") if profile else "profile này"
-            answer = QMessageBox.question(
-                dialog,
-                "Xóa profile",
-                f"Bạn có muốn xóa {name} khỏi danh sách người ủy quyền không?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
-            )
-            if answer != QMessageBox.Yes:
-                return
-            profiles[:] = [item for item in profiles if str(item.get("id", "")) != profile_id]
-            if editing_profile_id["value"] == profile_id:
-                clear_form()
-            refresh_cards()
-
-        def refresh_cards() -> None:
-            while cards_layout.count():
-                item = cards_layout.takeAt(0)
-                widget = item.widget()
-                if widget is not None:
-                    widget.deleteLater()
-            if not profiles:
-                empty = QLabel("Chưa có profile người ủy quyền. Bấm '+ Tạo profile mới' rồi nhập thông tin bên dưới.")
-                empty.setObjectName("EmptyDescription")
-                empty.setWordWrap(True)
-                cards_layout.addWidget(empty, 0, 0)
-                return
-            for index, profile in enumerate(profiles):
-                cards_layout.addWidget(
-                    self._build_authorized_profile_card(
-                        profile,
-                        str(profile.get("id", "")) == editing_profile_id["value"],
-                        edit_profile,
-                        delete_profile,
-                    ),
-                    index // 3,
-                    index % 3,
-                )
-
-        add_profile_button.clicked.connect(clear_form)
-        write_form(values)
-        refresh_cards()
-
-        layout.addWidget(form_frame)
-        layout.addWidget(buttons)
-
-        if dialog.exec() != QDialog.DialogCode.Accepted:
+    def _edit_authorized_person_profile(self, profile_id: str) -> None:
+        profile = self._authorized_profile_by_id(self.authorized_person_profiles, profile_id)
+        if profile is None:
             return
+        self.authorized_person_selected_id = profile_id
+        self._write_authorized_person_form(profile)
+        self._refresh_authorized_person_cards()
 
-        saved = read_form()
-        profiles[:] = [item for item in profiles if str(item.get("id", "")) != saved["id"]]
-        profiles.append(saved)
-        self._save_authorized_person_profiles({"selected_profile_id": saved["id"], "profiles": profiles})
-        QMessageBox.information(self, "Đã lưu", "Profile người ủy quyền đã được lưu trên máy.")
+    def _delete_authorized_person_profile(self, profile_id: str) -> None:
+        if self._is_builtin_authorized_person_profile(profile_id):
+            return
+        profile = self._authorized_profile_by_id(self.authorized_person_profiles, profile_id)
+        if profile is None:
+            return
+        name = profile.get("authorized_person_full_name", "profile n\u00e0y")
+        answer = QMessageBox.question(
+            self,
+            "X\u00f3a profile",
+            f"B\u1ea1n c\u00f3 mu\u1ed1n x\u00f3a {name} kh\u1ecfi danh s\u00e1ch ng\u01b0\u1eddi \u1ee7y quy\u1ec1n kh\u00f4ng?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        self.authorized_person_profiles = [
+            item for item in self.authorized_person_profiles if str(item.get("id", "")) != profile_id
+        ]
+        if self.authorized_person_selected_id == profile_id:
+            self.authorized_person_selected_id = ""
+        self._save_authorized_person_profiles(
+            {"selected_profile_id": self.authorized_person_selected_id, "profiles": self.authorized_person_profiles}
+        )
+        self._reload_authorized_person_manager()
+
+    def _save_authorized_person_manager(self) -> None:
+        profile = self._read_authorized_person_form()
+        self.authorized_person_profiles = [
+            item for item in self.authorized_person_profiles if str(item.get("id", "")) != profile["id"]
+        ]
+        self.authorized_person_profiles.append(profile)
+        self.authorized_person_selected_id = profile["id"]
+        self._save_authorized_person_profiles(
+            {"selected_profile_id": profile["id"], "profiles": self.authorized_person_profiles}
+        )
+        self._reload_authorized_person_manager()
+        QMessageBox.information(self, "\u0110\u00e3 l\u01b0u", "Profile ng\u01b0\u1eddi \u1ee7y quy\u1ec1n \u0111\u00e3 \u0111\u01b0\u1ee3c l\u01b0u tr\u00ean m\u00e1y.")
+
+    def _refresh_authorized_person_cards(self) -> None:
+        if self.authorized_person_cards_layout is None:
+            return
+        while self.authorized_person_cards_layout.count():
+            item = self.authorized_person_cards_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        for index, profile in enumerate(self.authorized_person_profiles):
+            self.authorized_person_cards_layout.addWidget(
+                self._build_authorized_profile_card(
+                    profile,
+                    str(profile.get("id", "")) == self.authorized_person_selected_id,
+                    self._edit_authorized_person_profile,
+                    self._delete_authorized_person_profile,
+                ),
+                index // 3,
+                index % 3,
+            )
 
     def _build_authorized_profile_card(self, profile: dict[str, str], active: bool, on_edit, on_delete) -> QWidget:
         card = QFrame()
         card.setObjectName("Card")
+        card.setCursor(Qt.PointingHandCursor)
         card.setFixedSize(260, 178)
 
         layout = QVBoxLayout(card)
@@ -974,11 +1102,13 @@ class MainWindow(QMainWindow):
         layout.setSpacing(8)
 
         top = QHBoxLayout()
-        badge = QLabel("Đang chọn" if active else "Profile")
-        badge.setObjectName("StatusBadge")
-        delete_button = QPushButton("Xóa")
-        delete_button.setObjectName("HeaderDeleteButton")
         profile_id = str(profile.get("id", ""))
+        is_builtin = self._is_builtin_authorized_person_profile(profile_id)
+        badge = QLabel("M\u1eb7c \u0111\u1ecbnh" if is_builtin else ("\u0110ang ch\u1ecdn" if active else "Profile"))
+        badge.setObjectName("StatusBadge")
+        delete_button = QPushButton("X\u00f3a")
+        delete_button.setObjectName("HeaderDeleteButton")
+        delete_button.setEnabled(not is_builtin)
         delete_button.clicked.connect(lambda checked=False, selected=profile_id: on_delete(selected))
         top.addWidget(badge)
         top.addStretch(1)
@@ -993,10 +1123,17 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._meta_row("Điện thoại", profile.get("authorized_person_phone", "Chưa nhập")))
         layout.addStretch(1)
 
-        edit_button = QPushButton("Sửa")
+        edit_button = QPushButton("Ch\u1ecdn / s\u1eeda")
         edit_button.setObjectName("GhostButton")
         edit_button.clicked.connect(lambda checked=False, selected=profile_id: on_edit(selected))
         layout.addWidget(edit_button)
+
+        def select_profile(event, selected=profile_id) -> None:
+            if event.button() == Qt.LeftButton:
+                on_edit(selected)
+                event.accept()
+
+        card.mousePressEvent = select_profile
         return card
 
     def _load_authorized_person(self) -> dict[str, str]:
@@ -1007,23 +1144,45 @@ class MainWindow(QMainWindow):
         result["__profiles"] = payload["profiles"]
         return result
 
+    @staticmethod
+    def _builtin_authorized_person_profiles() -> list[dict[str, str]]:
+        return [dict(profile) for profile in BUILT_IN_AUTHORIZED_PERSON_PROFILES]
+
+    @staticmethod
+    def _is_builtin_authorized_person_profile(profile_id: str) -> bool:
+        return any(profile_id == profile["id"] for profile in BUILT_IN_AUTHORIZED_PERSON_PROFILES)
+
+    def _merge_authorized_person_profiles(
+        self, selected_profile_id: str, profiles: list[dict[str, str]]
+    ) -> dict[str, object]:
+        built_in_profiles = self._builtin_authorized_person_profiles()
+        saved_profiles = {str(profile.get("id", "")): profile for profile in profiles}
+        for profile in built_in_profiles:
+            saved_profile = saved_profiles.pop(profile["id"], None)
+            if saved_profile is not None:
+                profile.update({str(key): str(value) for key, value in saved_profile.items()})
+        merged_profiles = built_in_profiles + list(saved_profiles.values())
+        if not self._authorized_profile_by_id(merged_profiles, selected_profile_id):
+            selected_profile_id = built_in_profiles[0]["id"]
+        return {"selected_profile_id": selected_profile_id, "profiles": merged_profiles}
+
     def _load_authorized_person_profiles(self) -> dict[str, object]:
-        if not self.authorized_person_path.exists():
-            return {"selected_profile_id": "", "profiles": []}
-        try:
-            raw = json.loads(self.authorized_person_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return {"selected_profile_id": "", "profiles": []}
-        if isinstance(raw, dict) and isinstance(raw.get("profiles"), list):
-            return {
-                "selected_profile_id": str(raw.get("selected_profile_id", "")),
-                "profiles": [item for item in raw["profiles"] if isinstance(item, dict)],
-            }
-        if isinstance(raw, dict) and any(str(key).startswith("authorized_person_") for key in raw):
-            profile = {str(key): str(value) for key, value in raw.items()}
-            profile.setdefault("id", str(uuid4()))
-            return {"selected_profile_id": profile["id"], "profiles": [profile]}
-        return {"selected_profile_id": "", "profiles": []}
+        selected_profile_id = ""
+        profiles: list[dict[str, str]] = []
+        if self.authorized_person_path.exists():
+            try:
+                raw = json.loads(self.authorized_person_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                raw = {}
+            if isinstance(raw, dict) and isinstance(raw.get("profiles"), list):
+                selected_profile_id = str(raw.get("selected_profile_id", ""))
+                profiles = [item for item in raw["profiles"] if isinstance(item, dict)]
+            elif isinstance(raw, dict) and any(str(key).startswith("authorized_person_") for key in raw):
+                profile = {str(key): str(value) for key, value in raw.items()}
+                profile.setdefault("id", str(uuid4()))
+                selected_profile_id = profile["id"]
+                profiles = [profile]
+        return self._merge_authorized_person_profiles(selected_profile_id, profiles)
 
     def _authorized_profile_by_id(self, profiles: list[dict[str, str]], profile_id: str) -> dict[str, str] | None:
         for profile in profiles:
@@ -1032,8 +1191,17 @@ class MainWindow(QMainWindow):
         return None
 
     def _save_authorized_person_profiles(self, payload: dict[str, object]) -> None:
+        selected_profile_id = str(payload.get("selected_profile_id", ""))
+        profiles = [profile for profile in payload.get("profiles", []) if isinstance(profile, dict)]
         self.authorized_person_path.parent.mkdir(parents=True, exist_ok=True)
-        self.authorized_person_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.authorized_person_path.write_text(
+            json.dumps(
+                {"selected_profile_id": selected_profile_id, "profiles": profiles},
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
 
     def _save_authorized_person(self, values: dict[str, str]) -> None:
         values.setdefault("id", str(uuid4()))
@@ -1091,4 +1259,3 @@ class MainWindow(QMainWindow):
     def _save_case_from_workspace(self, case: CaseSummary) -> None:
         self.case_repository.save_case(case)
         self.cases = self.case_repository.list_cases()
-

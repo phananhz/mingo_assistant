@@ -14,7 +14,6 @@ PERSONAL_PROFILE_FIELDS = (
     "legal_representative_gender",
     "legal_representative_nationality",
     "legal_representative_permanent_address",
-    "legal_representative_place_of_origin",
     "legal_representative_issue_date",
     "legal_representative_expiry_date",
     "legal_representative_issue_place",

@@ -55,6 +55,9 @@ class StartupSplash(QSplashScreen):
 
 def show_startup_splash(app: QApplication, window) -> None:
     splash = StartupSplash()
+    screen = app.primaryScreen()
+    if screen is not None:
+        splash.move(screen.availableGeometry().center() - splash.rect().center())
     splash.show()
     app.processEvents()
     splash.set_status("Đang tải dữ liệu và mẫu hồ sơ")
@@ -65,7 +68,7 @@ def show_startup_splash(app: QApplication, window) -> None:
     app.processEvents()
 
     animation = QPropertyAnimation(splash, b"windowOpacity")
-    animation.setDuration(420)
+    animation.setDuration(2000)
     animation.setStartValue(1.0)
     animation.setEndValue(0.0)
     loop = QEventLoop()

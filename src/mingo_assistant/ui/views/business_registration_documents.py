@@ -114,7 +114,7 @@ class BusinessRegistrationDocumentsView(QWidget):
         grid.setVerticalSpacing(14)
         items = [
             ("Tên doanh nghiệp", self.case.company_name),
-            ("Người phụ trách", self.case.owner),
+            ("Người ủy quyền", self._authorized_person_name()),
             ("Vốn điều lệ", self.case.capital),
             ("Thời gian xuất", self.case.exported_at or "Chưa xuất hồ sơ"),
             ("Thư mục lưu hồ sơ", self.case.export_dir or "Chưa có thư mục xuất"),
@@ -138,6 +138,11 @@ class BusinessRegistrationDocumentsView(QWidget):
                 grid.setColumnStretch(index, 1)
         layout.addLayout(grid)
         return card
+
+
+    def _authorized_person_name(self) -> str:
+        name = str(self.case.form_values.get("authorized_person_full_name", "") or "").strip()
+        return name or self.case.owner or "Chưa chọn"
 
     def _build_documents_v2(self) -> QWidget:
         wrapper = QFrame()
@@ -281,7 +286,7 @@ class BusinessRegistrationDocumentsView(QWidget):
 
         items = [
             ("Tên doanh nghiệp", self.case.company_name),
-            ("Người phụ trách", self.case.owner),
+            ("Người ủy quyền", self._authorized_person_name()),
             ("Vốn điều lệ", self.case.capital),
             ("Trạng thái", self.case.status),
             ("Thời gian xuất", self.case.exported_at or "Chưa xuất hồ sơ"),
