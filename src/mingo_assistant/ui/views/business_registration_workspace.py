@@ -7,8 +7,8 @@ from pathlib import Path
 from time import monotonic
 from uuid import uuid4
 
-from PySide6.QtCore import QObject, QThread, QTimer, QUrl, Qt, Signal, Slot, QStringListModel
-from PySide6.QtGui import QDesktopServices, QPixmap
+from PySide6.QtCore import QObject, QRegularExpression, QThread, QTimer, QUrl, Qt, Signal, Slot, QStringListModel
+from PySide6.QtGui import QDesktopServices, QPixmap, QRegularExpressionValidator
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -63,7 +63,7 @@ FIELD_GROUPS = [
     ("Vốn điều lệ và vốn góp", [("charter_capital_number", "Vốn điều lệ bằng số"), ("charter_capital_text", "Vốn điều lệ bằng chữ"), ("charter_capital_full_text", "Vốn điều lệ đầy đủ"), ("cash_capital_text", "Vốn bằng tiền mặt"), ("asset_capital_text", "Vốn bằng tài sản"), ("member_capital_amount", "Vốn góp thành viên"), ("member_capital_ratio", "Tỷ lệ góp vốn"), ("capital_zero", "Giá trị 0 trong bảng vốn")]),
     ("Thông tin người đại diện pháp luật", [("legal_representative_full_name", "Họ tên"), ("legal_representative_id_number", "Số CCCD"), ("legal_representative_date_of_birth", "Ngày sinh"), ("legal_representative_gender", "Giới tính"), ("legal_representative_nationality", "Quốc tịch"), ("legal_representative_permanent_address", "Địa chỉ thường trú đầy đủ"), ("legal_representative_address_detail", "Số nhà/đường/thôn"), ("legal_representative_ward", "Xã/Phường"), ("legal_representative_province", "Tỉnh/Thành phố"), ("legal_representative_contact_address", "Địa chỉ liên lạc"), ("legal_representative_place_of_origin", "Quê quán"), ("legal_representative_issue_date", "Ngày cấp"), ("legal_representative_expiry_date", "Ngày hết hạn"), ("legal_representative_position", "Chức danh"), ("legal_representative_phone", "Điện thoại"), ("legal_representative_email", "Thư điện tử (nếu có)"), ("legal_representative_issue_place", "Nơi cấp CCCD")]),
     ("Thông tin giám đốc/Tổng giám đốc", [("director_full_name", "Họ tên giám đốc"), ("director_date_of_birth", "Ngày sinh"), ("director_gender", "Giới tính"), ("director_id_number", "Số CCCD"), ("director_phone", "Điện thoại"), ("director_position", "Chức danh")]),
-    ("Thông tin đăng ký thuế và bảo hiểm xã hội", [("tax_labor_count", "Tổng số lao động dự kiến"), ("tax_vat_method", "Phương pháp tính thuế GTGT"), ("tax_declaration_period", "Phương thức đóng bảo hiểm xã hội")]),
+    ("Thông tin đăng ký thuế và bảo hiểm xã hội", [("tax_accounting_method", "Hình thức hạch toán"), ("tax_consolidated_financial_statement", "Có báo cáo tài chính hợp nhất"), ("tax_fiscal_year_start", "Năm tài chính bắt đầu (ngày/tháng)"), ("tax_fiscal_year_end", "Năm tài chính kết thúc (ngày/tháng)"), ("tax_labor_count", "Tổng số lao động dự kiến"), ("tax_bot_project", "Hoạt động theo dự án BOT/BTO/BT/BOO, BLT, BTL, O&M"), ("tax_vat_method", "Phương pháp tính thuế GTGT"), ("tax_declaration_period", "Phương thức đóng bảo hiểm xã hội")]),
     ("Thông tin người được ủy quyền", [("authorized_person_full_name", "Họ tên"), ("authorized_person_date_of_birth", "Ngày sinh"), ("authorized_person_gender", "Giới tính"), ("authorized_person_id_number", "Số CCCD"), ("authorized_person_issue_date", "Ngày cấp CCCD"), ("authorized_person_issue_place", "Nơi cấp CCCD"), ("authorized_person_contact_address", "Địa chỉ liên lạc"), ("authorized_person_phone", "Điện thoại"), ("authorized_person_email", "Email (nếu có)")]),
 ]
 
@@ -73,6 +73,8 @@ BUSINESS_LINE_FIELD_DEFINITIONS = [
     (f"business_line_{index}_code", f"Mã ngành {index}") for index in range(1, 11)
 ] + [
     (f"business_line_{index}_is_main", f"Ngành chính {index}") for index in range(1, 11)
+] + [
+    (f"business_line_{index}_detail", f"Mô tả chi tiết ngành {index}") for index in range(1, 11)
 ]
 
 HIDDEN_FIELD_DEFINITIONS = [
@@ -104,7 +106,8 @@ class OcrPerson:
 
 @dataclass
 class BusinessLineRow:
-    name_field: QTextEdit
+    name_field: QLineEdit
+    detail_field: QTextEdit
     code_field: QLineEdit
     main_checkbox: QCheckBox
     delete_button: QPushButton
@@ -496,14 +499,16 @@ class BusinessRegistrationWorkspace(QWidget):
 
     def _select_form_section(self, index: int) -> None:
         self.form_stack.setCurrentIndex(index)
-        current = self.form_stack.currentWidget()
-        if current is not None:
-            self.form_stack.setFixedHeight(max(250, current.sizeHint().height() + 10))
+        self._sync_form_stack_height()
         for button in self.form_button_group.buttons():
             button.setObjectName("PrimaryButton" if self.form_button_group.id(button) == index else "GhostButton")
             button.style().unpolish(button)
             button.style().polish(button)
 
+    def _sync_form_stack_height(self) -> None:
+        current = self.form_stack.currentWidget()
+        if current is not None:
+            self.form_stack.setFixedHeight(max(250, current.sizeHint().height() + 10))
     def _build_regular_form_section(self, title: str, fields: list[tuple[str, str]]) -> QWidget:
         section = QGroupBox(title)
         section_grid = QGridLayout(section)
@@ -584,6 +589,14 @@ class BusinessRegistrationWorkspace(QWidget):
             field.addItems(POSITION_OPTIONS)
             field.currentTextChanged.connect(self._refresh_preview)
             field.currentTextChanged.connect(self._sync_director_from_legal_representative)
+        elif key in {"tax_consolidated_financial_statement", "tax_bot_project"}:
+            field = QCheckBox("Tích chọn")
+            field.setToolTip("Tích để xuất dấu X vào ô vuông tương ứng trong mẫu Word")
+            field.stateChanged.connect(self._refresh_preview)
+        elif key == "tax_accounting_method":
+            field = NoWheelComboBox()
+            field.addItems(("Hạch toán độc lập", "Hạch toán phụ thuộc"))
+            field.currentTextChanged.connect(self._refresh_preview)
         elif key == "tax_vat_method":
             field = NoWheelComboBox()
             field.addItems(("Khấu trừ", "Trực tiếp trên GTGT", "Trực tiếp trên doanh số", "Không phải nộp thuế GTGT"))
@@ -937,7 +950,8 @@ class BusinessRegistrationWorkspace(QWidget):
             return
         business_row = self.business_line_rows[target_index - 1]
         code = self._industry_row_code(row)
-        business_row.name_field.setPlainText(self._industry_row_form_text(row))
+        business_row.name_field.setText(self._industry_row_form_text(row))
+        business_row.detail_field.clear()
         business_row.code_field.setText(code)
         self._set_business_line_row_visible(target_index, True)
         if not any(item.main_checkbox.isChecked() for item in self.business_line_rows):
@@ -948,21 +962,24 @@ class BusinessRegistrationWorkspace(QWidget):
         for index, row in enumerate(self.business_line_rows, start=1):
             if not row.cells[0].isVisible():
                 return index
-            if not row.name_field.toPlainText().strip() and not row.code_field.text().strip():
+            if not row.name_field.text().strip() and not row.detail_field.toPlainText().strip() and not row.code_field.text().strip():
                 return index
         return None
 
     def _industry_row_code(self, row: IndustryRow) -> str:
+        # Ho so dang ky doanh nghiep chi su dung ma nganh cap 4.
         for level in reversed(row.levels):
-            if level.strip():
-                return level.strip()
+            code = re.sub(r"\D", "", level or "")
+            if len(code) == 4:
+                return code
+        for level in row.levels:
+            code = re.sub(r"\D", "", level or "")
+            if len(code) >= 4:
+                return code[:4]
         return ""
 
     def _industry_row_form_text(self, row: IndustryRow) -> str:
-        text = row.name.strip()
-        if row.detail:
-            text = f"{text}\nChi tiết: {row.detail.strip()}"
-        return text
+        return row.name.strip()
 
     def _compact_text(self, value: str, limit: int) -> str:
         text = " ".join((value or "").split())
@@ -971,49 +988,64 @@ class BusinessRegistrationWorkspace(QWidget):
         return text[: limit - 3].rstrip() + "..."
 
     def _add_business_line_row(self, parent_layout: QGridLayout, index: int, visible: bool) -> None:
-        name_field = QTextEdit()
-        name_field.setPlaceholderText("Tên ngành nghề\nChi tiết: ...")
-        name_field.setFixedHeight(82)
-        name_field.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        name_field = QLineEdit()
+        name_field.setPlaceholderText("Ten nganh nghe")
         name_field.textChanged.connect(self._refresh_preview)
+
+        detail_field = QTextEdit()
+        detail_field.setPlaceholderText("Mo ta chi tiet hoac ngoai le (neu co)")
+        detail_field.setFixedHeight(58)
+        detail_field.textChanged.connect(self._refresh_preview)
 
         code_field = QLineEdit()
         code_field.setAlignment(Qt.AlignCenter)
+        code_field.setPlaceholderText("4 chu so")
+        code_field.setValidator(QRegularExpressionValidator(QRegularExpression(r"\d{0,4}"), code_field))
         code_field.setFixedHeight(40)
         code_field.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         code_field.textChanged.connect(self._refresh_preview)
 
         main_checkbox = QCheckBox()
-        main_checkbox.setText("X")
-        main_checkbox.setToolTip("Đánh dấu ngành nghề chính")
+        main_checkbox.setToolTip("Danh dau nganh nghe chinh")
         main_checkbox.stateChanged.connect(lambda state, selected=index: self._set_main_business_line(selected, state))
 
-        delete_button = QPushButton("Xóa")
+        delete_button = QPushButton("Xoa")
         delete_button.setObjectName("GhostButton")
         delete_button.setFixedHeight(40)
         delete_button.clicked.connect(lambda checked=False, selected=index: self._delete_business_line_row(selected))
 
         cells = [
-            self._build_table_cell(name_field),
-            self._build_table_cell(code_field),
+            self._build_business_line_info_cell(name_field, detail_field),
+            self._build_table_cell(code_field, Qt.AlignCenter),
             self._build_table_cell(main_checkbox, Qt.AlignCenter),
-            self._build_table_cell(delete_button),
+            self._build_table_cell(delete_button, Qt.AlignCenter),
         ]
-
         for column, cell in enumerate(cells):
             parent_layout.addWidget(cell, index, column)
 
         self.fields[f"business_line_{index}_name"] = name_field
+        self.fields[f"business_line_{index}_detail"] = detail_field
         self.fields[f"business_line_{index}_code"] = code_field
-        self.business_line_rows.append(BusinessLineRow(name_field, code_field, main_checkbox, delete_button, cells))
+        self.business_line_rows.append(BusinessLineRow(name_field, detail_field, code_field, main_checkbox, delete_button, cells))
         self._set_business_line_row_visible(index, visible)
+
+    def _build_business_line_info_cell(self, name_field: QLineEdit, detail_field: QTextEdit) -> QFrame:
+        cell = QFrame()
+        cell.setObjectName("TableCell")
+        cell.setFixedHeight(124)
+        layout = QVBoxLayout(cell)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(5)
+        layout.addWidget(name_field)
+        layout.addWidget(detail_field)
+        return cell
 
     def _build_table_cell(self, widget: QWidget, alignment=None) -> QFrame:
         cell = QFrame()
         cell.setObjectName("TableCell")
-        cell.setFixedHeight(82)
+        cell.setFixedHeight(124)
         cell_layout = QHBoxLayout(cell)
-        cell_layout.setContentsMargins(0, 0, 0, 0)
+        cell_layout.setContentsMargins(8, 6, 8, 6)
         cell_layout.setSpacing(0)
         if alignment:
             cell_layout.addWidget(widget, 1, alignment)
@@ -1030,7 +1062,7 @@ class BusinessRegistrationWorkspace(QWidget):
 
     def _delete_business_line_row(self, index: int) -> None:
         row = self.business_line_rows[index - 1]
-        has_data = bool(row.name_field.toPlainText().strip() or row.code_field.text().strip() or row.main_checkbox.isChecked())
+        has_data = bool(row.name_field.text().strip() or row.detail_field.toPlainText().strip() or row.code_field.text().strip() or row.main_checkbox.isChecked())
         if has_data:
             answer = QMessageBox.question(
                 self,
@@ -1042,6 +1074,7 @@ class BusinessRegistrationWorkspace(QWidget):
             if answer != QMessageBox.Yes:
                 return
         row.name_field.clear()
+        row.detail_field.clear()
         row.code_field.clear()
         row.main_checkbox.setChecked(False)
         if index == 1:
@@ -1060,9 +1093,10 @@ class BusinessRegistrationWorkspace(QWidget):
         if self.business_line_table is None:
             return
         visible_rows = sum(1 for row in self.business_line_rows if row.cells[0].isVisible())
-        height = 42 + max(1, visible_rows) * 82 + 2
+        height = 42 + max(1, visible_rows) * 124 + 2
         self.business_line_table.setMinimumHeight(height)
         self.business_line_table.setMaximumHeight(height)
+        QTimer.singleShot(0, self._sync_form_stack_height)
 
     def _set_main_business_line(self, index: int, state: int) -> None:
         if state != Qt.Checked:
@@ -1498,6 +1532,9 @@ class BusinessRegistrationWorkspace(QWidget):
             "legal_representative_position": "Giám đốc",
             "director_position": "Giám đốc",
             "authorized_person_gender": "Nữ",
+            "tax_accounting_method": "Hạch toán độc lập",
+            "tax_fiscal_year_start": "01/01",
+            "tax_fiscal_year_end": "31/12",
             "tax_labor_count": "1",
             "tax_vat_method": "Khấu trừ",
             "tax_declaration_period": "Hàng tháng",
@@ -1555,17 +1592,24 @@ class BusinessRegistrationWorkspace(QWidget):
     def _restore_business_lines(self, values: dict[str, str]) -> None:
         for index, row in enumerate(self.business_line_rows, start=1):
             name = values.get(f"business_line_{index}_name", "")
-            code = values.get(f"business_line_{index}_code", "")
+            detail = values.get(f"business_line_{index}_detail", "")
+            code = re.sub(r"\D", "", values.get(f"business_line_{index}_code", ""))[:4]
+            # Ho so cu gop Chi tiet vao ten nganh; tach ra khi mo de chinh sua.
+            if not detail and re.search(r"(?i)\n?chi\s*tiết\s*:", name):
+                name, detail = re.split(r"(?i)\n?chi\s*tiết\s*:", name, maxsplit=1)
             is_main = bool(values.get(f"business_line_{index}_is_main", ""))
-            has_data = bool(name or code or is_main)
+            has_data = bool(name or detail or code or is_main)
             if index == 1 or has_data:
                 self._set_business_line_row_visible(index, True)
             if name:
-                row.name_field.setPlainText(name)
+                row.name_field.setText(name.strip())
+            if detail:
+                row.detail_field.setPlainText(detail.strip())
             if code:
                 row.code_field.setText(code)
             if is_main:
                 row.main_checkbox.setChecked(True)
+        self._resize_business_line_table()
 
     def _add_ocr_person(self) -> None:
         self.ocr_people.append(OcrPerson(f"Người {len(self.ocr_people) + 1}", role=""))
@@ -2224,7 +2268,8 @@ class BusinessRegistrationWorkspace(QWidget):
         for key in self.fields:
             values[key] = self._field_value(key)
         for index, row in enumerate(self.business_line_rows, start=1):
-            values[f"business_line_{index}_name"] = row.name_field.toPlainText().strip()
+            values[f"business_line_{index}_name"] = row.name_field.text().strip()
+            values[f"business_line_{index}_detail"] = row.detail_field.toPlainText().strip()
             values[f"business_line_{index}_code"] = row.code_field.text().strip()
             values[f"business_line_{index}_is_main"] = "X" if row.main_checkbox.isChecked() else ""
         self._store_people_values(values)
@@ -2494,8 +2539,8 @@ class BusinessRegistrationWorkspace(QWidget):
         for index in range(1, 11):
             name = values.get(f"business_line_{index}_name", "").strip()
             code = values.get(f"business_line_{index}_code", "").strip()
-            if name and not code:
-                issues.append(f"Mã ngành nghề của ngành {index}")
+            if name and len(re.sub(r"\D", "", code)) != 4:
+                issues.append(f"Mã ngành nghề cấp 4 của ngành {index}")
         return issues
 
 

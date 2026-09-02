@@ -1,6 +1,6 @@
-﻿from pathlib import Path
+from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_all, collect_submodules
+from PyInstaller.utils.hooks import collect_all
 
 
 PROJECT_ROOT = Path(SPECPATH).parents[1]
@@ -10,7 +10,7 @@ datas = [(str(PROJECT_ROOT / "assets"), "assets")]
 binaries = []
 hiddenimports = []
 
-for package_name in ("PySide6", "numpy", "cv2", "zxingcpp", "pyzbar", "docxtpl", "fitz"):
+for package_name in ("numpy", "cv2", "zxingcpp", "pyzbar", "docxtpl", "fitz"):
     try:
         package_binaries, package_datas, package_hiddenimports = collect_all(package_name)
     except ImportError:
@@ -18,12 +18,6 @@ for package_name in ("PySide6", "numpy", "cv2", "zxingcpp", "pyzbar", "docxtpl",
     binaries.extend(package_binaries)
     datas.extend(package_datas)
     hiddenimports.extend(package_hiddenimports)
-
-for package_name in ("PySide6", "numpy", "cv2", "zxingcpp", "pyzbar", "docx", "PyMuPDF"):
-    try:
-        hiddenimports.extend(collect_submodules(package_name))
-    except ImportError:
-        continue
 
 analysis = Analysis(
     [str(SRC_ROOT / "mingo_assistant" / "__main__.py")],

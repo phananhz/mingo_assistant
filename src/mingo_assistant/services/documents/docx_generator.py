@@ -187,6 +187,7 @@ class DocxTemplateGenerator:
         self._replace_manifest_plain_text(document, docx_path.name, values)
         self._apply_beneficial_owner_template_rules(document, docx_path.name, values)
         self._apply_company_contact_fields(document, docx_path.name, values)
+        self._remove_file1_owner_name_spacer(document, docx_path.name)
         self._apply_document_place_date(document, docx_path.name, values)
         self._normalize_legal_representative_signature(document, docx_path.name, values)
         if not uses_highlighted_fields:
@@ -200,6 +201,8 @@ class DocxTemplateGenerator:
             self._apply_bold_uppercase_formatting(document, values)
             self._fix_signature_font_sizes(document, docx_path.name, values)
             self._normalize_power_of_attorney_layout(document, docx_path.name, values)
+        self._apply_template_checkbox_rules(document, docx_path.name, values)
+        self._normalize_document_fonts(document)
         document.save(docx_path)
 
     def _replace_case_type_text(self, document: Document, values: dict[str, str]) -> None:
@@ -364,9 +367,16 @@ class DocxTemplateGenerator:
             return
         email = str(values.get("company_email", "") or "").strip() or ".................."
         website = str(values.get("company_website", "") or "").strip() or ".................."
+        in_organization_owner_section = False
         for paragraph in self._iter_paragraphs(document):
             folded = self._fold(paragraph.text)
-            if "thu dien tu" not in folded or "website" not in folded or "4@gmail.com" not in paragraph.text:
+            if "doi voi chu so huu la to chuc" in folded:
+                in_organization_owner_section = True
+            elif in_organization_owner_section and folded.startswith("6."):
+                in_organization_owner_section = False
+            if "thu dien tu" not in folded or "website" not in folded:
+                continue
+            if in_organization_owner_section:
                 continue
             self._replace_paragraph_text(
                 paragraph,
@@ -376,8 +386,256 @@ class DocxTemplateGenerator:
                 paragraph.paragraph_format.tab_stops.add_tab_stop(Inches(4.1))
             except Exception:
                 pass
+
         self._replace_plain_text_in_container(document, {"4@gmail.com": email})
 
+    def _remove_file1_owner_name_spacer(self, document: Document, template_name: str) -> None:
+        """Remove the empty paragraph that creates a gap in section 5(a)."""
+        if not template_name.startswith("1."):
+            return
+        paragraphs = list(self._iter_paragraphs(document))
+        for index, paragraph in enumerate(paragraphs[:-1]):
+            if "ho, chu dem va ten chu so huu" not in self._fold(paragraph.text):
+                continue
+            spacer = paragraphs[index + 1]
+            if spacer.text.strip():
+                return
+            spacer._element.getparent().remove(spacer._element)
+            return
+    def _apply_template_checkbox_rules(self, document: Document, template_name: str, values: dict[str, str]) -> None:
+        """Update the selectable checkboxes already present in file 1."""
+        if not template_name.startswith("1."):
+            return
+        paragraphs = list(self._iter_paragraphs(document))
+        accounting_blank = self._checkbox_target_cell(
+            self._find_paragraph_by_folded_text(paragraphs, "hach toan phu thuoc"),
+            1,
+        )
+        vat_blank = self._checkbox_target_cell(
+            self._find_paragraph_by_folded_text(paragraphs, "truc tiep tren gtgt"),
+            1,
+        )
+        period_blank = self._checkbox_target_cell(
+            self._find_paragraph_by_folded_text(paragraphs, "03 thang mot lan"),
+        )
+        pending_bot_choice = False
+        bot_blank = None
+        for index, paragraph in enumerate(paragraphs):
+            folded = self._fold(paragraph.text)
+            if "giay chung nhan quyen su dung dat" in folded and "quoc phong" in folded:
+                label = paragraph.text.split("Có", 1)[0].rstrip(" :\t") + ":"
+                self._set_checkbox_options(
+                    paragraph,
+                    label,
+                    (("Có", bool(values.get("company_land_use_certificate", "").strip())), ("Không", not bool(values.get("company_land_use_certificate", "").strip()))),
+                    new_line=True,
+                )
+                continue
+            if "co hien thi thong tin ve gia tri tuong duong" in folded:
+                if index + 1 >= len(paragraphs):
+                    continue
+                choices = paragraphs[index + 1]
+                choices_folded = self._fold(choices.text)
+                if "co" in choices_folded and "khong" in choices_folded:
+                    show_foreign_currency = bool(str(values.get("foreign_currency_equivalent", "") or "").strip())
+                    self._set_checkbox_options(
+                        choices,
+                        "",
+                        (("Có", show_foreign_currency), ("Không", not show_foreign_currency)),
+                    )
+                continue
+            if "hoat dong theo du an bot" in folded:
+                pending_bot_choice = True
+                continue
+            if pending_bot_choice and folded == "co":
+                bot_blank = self._checkbox_target_cell(paragraph)
+                self._set_checkbox_cell(
+                    bot_blank,
+                    bool(values.get("tax_bot_project", "").strip()),
+                    bot_blank,
+                )
+                continue
+            if pending_bot_choice and folded == "khong":
+                self._set_checkbox_cell(
+                    self._checkbox_target_cell(paragraph),
+                    not bool(values.get("tax_bot_project", "").strip()),
+                    bot_blank,
+                )
+                pending_bot_choice = False
+                continue
+            if folded == "hach toan doc lap":
+                self._set_checkbox_cell(
+                    self._checkbox_target_cell(paragraph, 1),
+                    self._fold(str(values.get("tax_accounting_method", ""))) == self._fold("Hạch toán độc lập"),
+                    accounting_blank,
+                )
+                continue
+            if folded == "co bao cao tai chinh hop nhat":
+                target = self._checkbox_target_cell(paragraph)
+                self._set_checkbox_cell(
+                    target,
+                    bool(values.get("tax_consolidated_financial_statement", "").strip()),
+                    target,
+                )
+                continue
+            if folded == "hach toan phu thuoc":
+                self._set_checkbox_cell(
+                    self._checkbox_target_cell(paragraph, 1),
+                    self._fold(str(values.get("tax_accounting_method", ""))) == self._fold("Hạch toán phụ thuộc"),
+                    accounting_blank,
+                )
+                continue
+            if "ap dung tu ngay" in folded and "den ngay" in folded:
+                start = str(values.get("tax_fiscal_year_start", "01/01") or "01/01").strip()
+                end = str(values.get("tax_fiscal_year_end", "31/12") or "31/12").strip()
+                self._replace_paragraph_text(paragraph, f"Áp dụng từ ngày {start} đến ngày {end}")
+                continue
+            if "tong so lao dong" in folded:
+                labor_count = str(values.get("tax_labor_count", "") or "").strip()
+                if labor_count:
+                    self._replace_paragraph_text(paragraph, f"Tổng số lao động (dự kiến): {labor_count}")
+                continue
+            vat_labels = {
+                "khau tru": "Khấu trừ",
+                "truc tiep tren gtgt": "Trực tiếp trên GTGT",
+                "truc tiep tren doanh so": "Trực tiếp trên doanh số",
+                "khong phai nop thue gtgt": "Không phải nộp thuế GTGT",
+            }
+            if folded in vat_labels:
+                label = vat_labels[folded]
+                self._set_checkbox_cell(
+                    self._checkbox_target_cell(paragraph, 1),
+                    self._fold(str(values.get("tax_vat_method", ""))) == self._fold(label),
+                    vat_blank,
+                    align_left=True,
+                )
+                continue
+            period_labels = {
+                "hang thang": "Hàng tháng",
+                "03 thang mot lan": "03 tháng một lần",
+                "06 thang mot lan": "06 tháng một lần",
+            }
+            if folded in period_labels:
+                label = period_labels[folded]
+                self._set_checkbox_cell(
+                    self._checkbox_target_cell(paragraph),
+                    self._fold(str(values.get("tax_declaration_period", ""))) == self._fold(label),
+                    period_blank,
+                )
+
+    def _find_paragraph_by_folded_text(self, paragraphs: list[Paragraph], text: str) -> Paragraph | None:
+        return next((paragraph for paragraph in paragraphs if self._fold(paragraph.text) == text), None)
+
+    def _checkbox_target_cell(self, paragraph: Paragraph | None, offset: int = 0):
+        if paragraph is None or not hasattr(paragraph._parent, "_tc"):
+            return None
+        cell = paragraph._parent
+        row = cell._tc.getparent()
+        cells = list(row.tc_lst)
+        try:
+            return cells[cells.index(cell._tc) + offset]
+        except (IndexError, ValueError):
+            return None
+
+    def _set_checkbox_cell(self, target_cell, checked: bool, blank_source_cell, align_left: bool = False) -> None:
+        """Toggle an existing checkbox without recreating its label or table layout."""
+        if target_cell is None:
+            return
+        if align_left:
+            self._align_checkbox_cell_left(target_cell)
+        symbols = list(target_cell.findall(".//" + qn("w:sym")))
+        drawings = list(target_cell.findall(".//" + qn("w:drawing")))
+        if checked:
+            if symbols:
+                self._set_symbol_checkbox_value_from_element(symbols[0], True)
+                for symbol in symbols[1:]:
+                    symbol.getparent().remove(symbol)
+                for drawing in drawings:
+                    drawing.getparent().remove(drawing)
+                return
+            if drawings:
+                drawing = drawings[0]
+                run = drawing.getparent()
+                position = run.index(drawing)
+                run.remove(drawing)
+                symbol = OxmlElement("w:sym")
+                symbol.set(qn("w:font"), "Wingdings 2")
+                symbol.set(qn("w:char"), "F053")
+                run.insert(position, symbol)
+                for extra_drawing in drawings[1:]:
+                    extra_drawing.getparent().remove(extra_drawing)
+            return
+        if drawings:
+            for symbol in symbols:
+                symbol.getparent().remove(symbol)
+            return
+        if not symbols or blank_source_cell is None:
+            return
+        blank_drawings = blank_source_cell.findall(".//" + qn("w:drawing"))
+        if not blank_drawings:
+            return
+        symbol = symbols[0]
+        run = symbol.getparent()
+        position = run.index(symbol)
+        run.remove(symbol)
+        run.insert(position, deepcopy(blank_drawings[0]))
+        for extra_symbol in symbols[1:]:
+            extra_symbol.getparent().remove(extra_symbol)
+
+    def _align_checkbox_cell_left(self, target_cell) -> None:
+        paragraph = target_cell.find(qn("w:p"))
+        if paragraph is None:
+            return
+        for text in list(paragraph.findall(".//" + qn("w:t"))):
+            if not (text.text or "").strip():
+                text.getparent().remove(text)
+        paragraph_properties = paragraph.get_or_add_pPr()
+        alignment = paragraph_properties.find(qn("w:jc"))
+        if alignment is None:
+            alignment = OxmlElement("w:jc")
+            paragraph_properties.append(alignment)
+        alignment.set(qn("w:val"), "left")
+    def _set_symbol_checkbox_value_from_element(self, symbol, checked: bool) -> None:
+        symbol.set(qn("w:font"), "Wingdings 2")
+        symbol.set(qn("w:char"), "F053" if checked else "F052")
+
+    def _set_checkbox_options(self, paragraph, prefix: str, options: tuple[tuple[str, bool], ...], new_line: bool = False) -> None:
+        """Render plain inline checkboxes after their labels on a single baseline."""
+        p_element = paragraph._p
+        for child in list(p_element):
+            if child.tag != qn("w:pPr"):
+                p_element.remove(child)
+        if prefix:
+            paragraph.add_run(prefix)
+        if new_line:
+            paragraph.add_run().add_break()
+        for index, (label, checked) in enumerate(options):
+            if index:
+                paragraph.add_run("        ")
+            text_run = paragraph.add_run(f"{label} ")
+            text_run.font.name = "Times New Roman"
+            text_run._element.rPr.rFonts.set(qn("w:ascii"), "Times New Roman")
+            text_run._element.rPr.rFonts.set(qn("w:hAnsi"), "Times New Roman")
+            checkbox = paragraph.add_run("☒" if checked else "☐")
+            checkbox.font.name = "Segoe UI Symbol"
+            checkbox.font.size = Pt(11)
+            checkbox._element.rPr.rFonts.set(qn("w:ascii"), "Segoe UI Symbol")
+            checkbox._element.rPr.rFonts.set(qn("w:hAnsi"), "Segoe UI Symbol")
+
+    def _normalize_document_fonts(self, document: Document) -> None:
+        """Use Times New Roman consistently while preserving Wingdings checkboxes."""
+        for paragraph in self._iter_paragraphs(document):
+            for run in paragraph.runs:
+                if run._r.findall(qn("w:sym")) or "☒" in run.text or "☐" in run.text:
+                    continue
+                run.font.name = "Times New Roman"
+                r_pr = run._r.get_or_add_rPr()
+                fonts = r_pr.find(qn("w:rFonts"))
+                if fonts is None:
+                    fonts = OxmlElement("w:rFonts")
+                    r_pr.insert(0, fonts)
+                for font_name in ("w:ascii", "w:hAnsi", "w:eastAsia", "w:cs"):
+                    fonts.set(qn(font_name), "Times New Roman")
     def _apply_document_place_date(self, document: Document, template_name: str, values: dict[str, str]) -> None:
         place = str(values.get("document_place", "") or "").strip()
         day = str(values.get("document_day", "") or "").strip()
@@ -1102,7 +1360,10 @@ class DocxTemplateGenerator:
         lines: list[dict[str, str | bool]] = []
         for index in range(1, 11):
             name = self._normalize_business_line_text(values.get(f"business_line_{index}_name", ""))
-            code = values.get(f"business_line_{index}_code", "").strip()
+            detail = self._normalize_business_line_text(values.get(f"business_line_{index}_detail", ""))
+            if detail:
+                name = f"{name}\nChi tiết: {detail}" if name else f"Chi tiết: {detail}"
+            code = re.sub(r"\D", "", values.get(f"business_line_{index}_code", ""))[:4]
             is_main = bool(values.get(f"business_line_{index}_is_main", "").strip())
             if name or code or is_main:
                 lines.append({"name": name, "code": code, "is_main": is_main})
@@ -2110,3 +2371,12 @@ class DocxTemplateGenerator:
         text = re.sub(r"[^\w\s.-]", "", value, flags=re.UNICODE).strip()
         text = re.sub(r"\s+", "_", text)
         return text[:80] or "ho_so"
+
+
+
+
+
+
+
+
+
