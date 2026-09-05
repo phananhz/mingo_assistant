@@ -36,6 +36,8 @@ class GenerationResult:
 
 
 class DocxTemplateGenerator:
+    PERSONAL_CHARTER_TEMPLATE = "2. Điều lệ.docx"
+    ORGANIZATION_CHARTER_TEMPLATE = "2. Dieu le_CSH la to chuc.docx"
     UPPERCASE_BOLD_FIELDS = {
         "company_name",
         "company_short_name",
@@ -45,21 +47,25 @@ class DocxTemplateGenerator:
         "applicant_full_name",
         "authorized_person_full_name",
         "beneficial_owner_full_name",
+        "organization_owner_name",
     }
     DETAIL_ADDRESS_FIELDS = {
         "company_address_detail",
         "applicant_address_detail",
         "legal_representative_address_detail",
+        "organization_owner_address_detail",
     }
     WARD_FIELDS = {
         "company_ward",
         "applicant_ward",
         "legal_representative_ward",
+        "organization_owner_ward",
     }
     PROVINCE_FIELDS = {
         "company_province",
         "applicant_province",
         "legal_representative_province",
+        "organization_owner_province",
     }
     PROVINCE_AFTER_MERGER = {
         "ha_giang": "Tuyên Quang",
@@ -134,13 +140,15 @@ class DocxTemplateGenerator:
         skipped: list[str] = []
         unresolved: dict[str, list[str]] = {}
 
-        for template in sorted(self.template_dir.iterdir()):
-            if template.name.startswith("~$"):
-                continue
+        for template in self._selected_templates(values):
             if template.suffix.lower() == ".docx":
-                output_path = output_dir / template.name
-                shutil.copy2(template, output_path)
-                self._replace_placeholders(output_path, values)
+                template_output_path = output_dir / template.name
+                output_path = output_dir / self._output_filename(template.name, values)
+                shutil.copy2(template, template_output_path)
+                # Placeholder manifests are keyed by the original template name.
+                self._replace_placeholders(template_output_path, values)
+                if output_path != template_output_path:
+                    template_output_path.replace(output_path)
                 remaining = self.unresolved_placeholders(output_path)
                 if remaining:
                     unresolved[template.name] = remaining
@@ -150,13 +158,58 @@ class DocxTemplateGenerator:
 
         return GenerationResult(output_dir=output_dir, generated=generated, skipped=skipped, unresolved=unresolved)
 
+    def _selected_templates(self, values: dict[str, str]) -> list[Path]:
+        """Return the five dossier templates, selecting the charter by owner type."""
+        owner_is_organization = self._fold(str(values.get("owner_type", "") or "")) == "to chuc"
+        selected: list[Path] = []
+        for template in sorted(self.template_dir.iterdir()):
+            if template.name.startswith("~$"):
+                continue
+            if template.name == self.PERSONAL_CHARTER_TEMPLATE and owner_is_organization:
+                continue
+            if template.name == self.ORGANIZATION_CHARTER_TEMPLATE and not owner_is_organization:
+                continue
+            selected.append(template)
+        return selected
+
+    def _output_filename(self, template_name: str, values: dict[str, str]) -> str:
+        def without_accents(value: str) -> str:
+            text = unicodedata.normalize("NFD", value)
+            text = "".join(character for character in text if unicodedata.category(character) != "Mn")
+            return text.replace("Đ", "D").replace("đ", "d")
+
+        def safe_component(value: str, fallback: str) -> str:
+            text = without_accents(value)
+            text = re.sub(r'[<>:"/\\|?*]', " ", text)
+            text = re.sub(r"\s+", " ", text).strip(" .")
+            return text[:80] or fallback
+
+        raw_company_name = str(values.get("company_name", "") or "")
+        company_name_without_legal_form = re.sub(
+            r"^\s*(?:(?:công\s*ty|cty)\s+)?(?:tnhh(?:\s+(?:một\s+thành\s+viên|mtv|hai\s+thành\s+viên\s+trở\s+lên))?|cổ\s*phần|cp|hợp\s*danh|tư\s*nhân)\s+",
+            "",
+            raw_company_name,
+            flags=re.IGNORECASE,
+        )
+        company_words = safe_component(company_name_without_legal_form, "Ho so thanh lap").split()
+        company_name = "".join(word[:1].upper() + word[1:].lower() for word in company_words)
+        procedure_names = {
+            "1.": "Giay de nghi",
+            "2.": "Dieu le",
+            "3.": "Danh sach chu so huu huong loi",
+            "4.": "Giay uy quyen",
+            "5.": "Huong dan ky",
+        }
+        procedure_name = next(
+            (name for prefix, name in procedure_names.items() if template_name.startswith(prefix)),
+            safe_component(re.sub(r"^\d+\.\s*", "", Path(template_name).stem), "Tai lieu"),
+        )
+        return f"{company_name}_{procedure_name}.docx"
     def validate_templates(self, values: dict[str, str]) -> dict[str, list[str]]:
         report: dict[str, list[str]] = {}
         with tempfile.TemporaryDirectory(dir=self.export_root if self.export_root.exists() else None) as temp_dir:
             temp_path = Path(temp_dir)
-            for template in sorted(self.template_dir.iterdir()):
-                if template.name.startswith("~$"):
-                    continue
+            for template in self._selected_templates(values):
                 if template.suffix.lower() != ".docx":
                     continue
                 candidate = temp_path / template.name
@@ -184,12 +237,17 @@ class DocxTemplateGenerator:
         self._replace_split_placeholders_in_package(docx_path, values)
         document = Document(docx_path)
         uses_highlighted_fields = self._replace_highlighted_runs(document, docx_path.name, values)
+        self._apply_organization_owner_highlighted_fields(document, docx_path.name, values)
+        self._apply_organization_charter_owner_fields(document, docx_path.name, values)
+        self._apply_charter_article_6_capital(document, docx_path.name, values)
+        self._apply_organization_owner_representative_table(document, docx_path.name, values)
         self._replace_manifest_plain_text(document, docx_path.name, values)
         self._apply_charter_legal_representative_gender(document, docx_path.name, values)
         self._apply_beneficial_owner_template_rules(document, docx_path.name, values)
         self._apply_company_contact_fields(document, docx_path.name, values)
-        self._remove_file1_owner_name_spacer(document, docx_path.name)
+        self._remove_file1_owner_name_spacer(document, docx_path.name, values)
         self._apply_document_place_date(document, docx_path.name, values)
+        self._apply_organization_charter_document_date(document, docx_path.name, values)
         self._normalize_legal_representative_signature(document, docx_path.name, values)
         if not uses_highlighted_fields:
             self._replace_case_type_text(document, values)
@@ -204,6 +262,7 @@ class DocxTemplateGenerator:
             self._normalize_power_of_attorney_layout(document, docx_path.name, values)
         self._apply_template_checkbox_rules(document, docx_path.name, values)
         self._normalize_document_fonts(document)
+        self._ensure_power_of_attorney_address_font(document, docx_path.name, values)
         document.save(docx_path)
 
     def _replace_case_type_text(self, document: Document, values: dict[str, str]) -> None:
@@ -293,7 +352,9 @@ class DocxTemplateGenerator:
                     continue
                 target = field_map.get(str(highlighted_index))
                 if target is not None:
-                    replacement = self._value_for_template_target(str(target), values)
+                    replacement = "" if self._clear_file1_individual_owner_field(
+                        template_name, str(target), values
+                    ) else self._value_for_template_target(str(target), values)
                     if run._r.findall(qn("w:sym")):
                         self._set_symbol_checkbox_value(run, replacement)
                     else:
@@ -301,6 +362,15 @@ class DocxTemplateGenerator:
                 highlighted_index += 1
         return True
 
+    def _clear_file1_individual_owner_field(
+        self, template_name: str, target: str, values: dict[str, str]
+    ) -> bool:
+        """Clear only section 5(a)'s personal sample values for an organization owner."""
+        return (
+            template_name.startswith("1.")
+            and target.startswith("beneficial_owner_")
+            and self._fold(str(values.get("owner_type", "") or "")) == "to chuc"
+        )
     def _set_symbol_checkbox_value(self, run, value: str) -> None:
         """Preserve a Word symbol checkbox while selecting or clearing it."""
         checkbox_code = "F053" if str(value or "").strip() else "F052"
@@ -358,7 +428,8 @@ class DocxTemplateGenerator:
         """Fill the existing beneficial-owner row while preserving the template table geometry."""
         if not template_name.startswith("3."):
             return
-        gender = str(values.get("beneficial_owner_gender", "") or "").strip()
+        owner_columns = [str(values.get(key, "") or "").strip() for key in ("beneficial_owner_list_number", "beneficial_owner_list_full_name", "beneficial_owner_list_date_of_birth", "beneficial_owner_list_gender", "beneficial_owner_list_identity", "beneficial_owner_list_nationality", "beneficial_owner_list_ethnicity", "beneficial_owner_list_address")]
+        owner_columns[4] = self._beneficial_owner_identity_number(owner_columns[4])
         column_values = [str(values.get(key, "") or "").strip() for key in ("beneficial_owner_list_capital_direct", "beneficial_owner_list_capital_indirect", "beneficial_owner_list_capital_total", "beneficial_owner_list_voting_direct", "beneficial_owner_list_voting_indirect", "beneficial_owner_list_voting_total", "beneficial_owner_list_general_partner", "beneficial_owner_list_related_group", "beneficial_owner_list_control", "beneficial_owner_list_manager")]
         for table in self._iter_tables(document):
             numbering_row_index = next((index for index, row in enumerate(table.rows) if len(row.cells) >= 18 and row.cells[0].text.strip() == "1" and row.cells[17].text.strip() == "18"), None)
@@ -367,10 +438,18 @@ class DocxTemplateGenerator:
             for row in table.rows[numbering_row_index + 1:]:
                 if len(row.cells) < 18:
                     continue
-                self._replace_table_cell_text(row.cells[3], gender)
-                self._replace_table_cell_text(row.cells[5], str(values.get("beneficial_owner_nationality", "") or "").strip())
+                for cell, value in zip(row.cells[:8], owner_columns, strict=True):
+                    self._replace_table_cell_text(cell, value)
                 for cell, value in zip(row.cells[8:18], column_values, strict=True):
                     self._replace_table_cell_text(cell, value)
+
+    @staticmethod
+    def _beneficial_owner_identity_number(value: str) -> str:
+        match = re.search(r"(?:CCCD\s*số|Số\s*định\s*danh\s*cá\s*nhân)\s*:?\s*([0-9A-Za-z-]+)", value, re.IGNORECASE)
+        if match:
+            return f"CCCD số {match.group(1)}"
+        fallback = re.search(r"[0-9]{6,}", value)
+        return f"CCCD số {fallback.group(0)}" if fallback else value
 
     def _replace_table_cell_text(self, cell, text: str) -> None:
         paragraphs = list(cell.paragraphs)
@@ -384,11 +463,203 @@ class DocxTemplateGenerator:
             first.runs[0].text = text
         else:
             first.add_run(text)
+    def _apply_organization_owner_highlighted_fields(
+        self, document: Document, template_name: str, values: dict[str, str]
+    ) -> None:
+        """Fill the organization-owner section without changing its labels."""
+        if not template_name.startswith("1.") or self._fold(str(values.get("owner_type", "") or "")) != "to chuc":
+            return
+
+        in_organization_owner_section = False
+        for paragraph in self._iter_paragraphs(document):
+            context = self._fold(paragraph.text)
+            if "doi voi chu so huu la to chuc" in context:
+                in_organization_owner_section = True
+                continue
+            if in_organization_owner_section and context.startswith("6."):
+                break
+            if not in_organization_owner_section:
+                continue
+
+            target = ""
+            if "ten to chuc" in context:
+                target = "organization_owner_name"
+            elif "ma so doanh nghiep" in context or "so quyet dinh thanh lap" in context:
+                target = "organization_owner_registration_number"
+            elif "ngay cap" in context and "noi cap" in context:
+                self._replace_paragraph_with_highlighted_values(
+                    paragraph,
+                    (
+                        ("Ngày cấp: ", False),
+                        (self._value_for_template_target("organization_owner_issue_date", values), True),
+                        ("\tNơi cấp: ", False),
+                        (self._value_for_template_target("organization_owner_issue_place", values), True),
+                    ),
+                )
+                continue
+            elif "so nha/phong" in context:
+                target = "organization_owner_address_detail"
+            elif "xa/phuong" in context or "dac khu" in context:
+                target = "organization_owner_ward"
+            elif "tinh/thanh pho" in context:
+                target = "organization_owner_province"
+            elif context.startswith("quoc gia"):
+                target = "organization_owner_country"
+            elif "dien thoai" in context and "so fax" in context:
+                self._replace_paragraph_with_highlighted_values(
+                    paragraph,
+                    (
+                        ("Điện thoại (nếu có): ", False),
+                        (self._value_for_template_target("organization_owner_phone", values), True),
+                        ("\tSố fax (nếu có): ", False),
+                        (self._value_for_template_target("organization_owner_fax", values), True),
+                    ),
+                )
+                continue
+            elif "thu dien tu" in context and "website" in context:
+                self._replace_paragraph_with_highlighted_values(
+                    paragraph,
+                    (
+                        ("Thư điện tử (nếu có): ", False),
+                        (self._value_for_template_target("organization_owner_email", values), True),
+                        ("\tWebsite (nếu có): ", False),
+                        (self._value_for_template_target("organization_owner_website", values), True),
+                    ),
+                )
+                continue
+            if not target:
+                continue
+
+            label = paragraph.text.split(":", 1)[0].rstrip() + ": "
+            self._replace_paragraph_with_highlighted_values(
+                paragraph,
+                ((label, False), (self._value_for_template_target(target, values), True)),
+            )
+
+    def _apply_charter_article_6_capital(
+        self, document: Document, template_name: str, values: dict[str, str]
+    ) -> None:
+        """Keep Article 6 capital wording exact in both charter variants."""
+        if template_name not in {self.PERSONAL_CHARTER_TEMPLATE, self.ORGANIZATION_CHARTER_TEMPLATE}:
+            return
+        number = self._with_vnd(values.get("charter_capital_number", ""))
+        words = str(values.get("charter_capital_text", "") or "").strip()
+        if words and not re.search(r"\sđồng$", words, re.IGNORECASE):
+            words = f"{words} đồng"
+        if not (number and words):
+            return
+        for paragraph in self._iter_paragraphs(document):
+            if "von dieu le cua cong ty la" not in self._fold(paragraph.text):
+                continue
+            self._replace_paragraph_with_highlighted_values(
+                paragraph,
+                (
+                    ("1. Vốn điều lệ của công ty là: ", False),
+                    (f"{number} (Ghi bằng chữ: {words})", True),
+                    (", trong đó bao gồm:", False),
+                ),
+            )
+            return
+
+    def _apply_organization_charter_owner_fields(
+        self, document: Document, template_name: str, values: dict[str, str]
+    ) -> None:
+        """Fill the turquoise organization and capital-representative fields in charter 2."""
+        if template_name != self.ORGANIZATION_CHARTER_TEMPLATE:
+            return
+
+        targets = (
+            "organization_owner_name",
+            "organization_owner_registration_number",
+            "organization_owner_issue_date",
+            "organization_owner_issue_place",
+            "organization_owner_address_detail",
+            "organization_owner_ward",
+            "organization_owner_province",
+            "organization_owner_country",
+            "organization_owner_phone",
+            "organization_owner_fax",
+            "organization_owner_email",
+            "organization_owner_website",
+            "organization_owner_representative_full_name",
+            "organization_owner_representative_date_of_birth",
+            "organization_owner_representative_id_number",
+            "organization_owner_representative_contact_address",
+            "organization_owner_name",
+            "organization_owner_representative_full_name",
+        )
+        highlighted_runs = [
+            run
+            for paragraph in self._iter_paragraphs(document)
+            for run in paragraph.runs
+            if run.font.highlight_color == WD_COLOR_INDEX.TURQUOISE
+        ]
+        for run, target in zip(highlighted_runs, targets, strict=False):
+            run.text = self._value_for_template_target(target, values)
+    def _apply_organization_owner_representative_table(
+        self, document: Document, template_name: str, values: dict[str, str]
+    ) -> None:
+        """Fill the organization owner's 13-column representative row in template 1."""
+        if not template_name.startswith("1.") or self._fold(str(values.get("owner_type", "") or "")) != "to chuc":
+            return
+
+        field_keys = (
+            "organization_owner_representative_number",
+            "organization_owner_representative_full_name",
+            "organization_owner_representative_date_of_birth",
+            "organization_owner_representative_gender",
+            "organization_owner_representative_identity",
+            "organization_owner_representative_nationality",
+            "organization_owner_representative_ethnicity",
+            "organization_owner_representative_contact_address",
+            "organization_owner_representative_authorized_capital_value",
+            "organization_owner_representative_authorized_capital_ratio",
+            "organization_owner_representative_authorized_capital_date",
+            "organization_owner_representative_signature",
+            "organization_owner_representative_notes",
+        )
+        for table in self._iter_tables(document):
+            if len(table.rows) < 4 or len(table.rows[-1].cells) != len(field_keys):
+                continue
+            header = self._fold(" ".join(cell.text for row in table.rows[:2] for cell in row.cells))
+            if "ten nguoi dai dien theo phap luat" not in header or "von duoc uy quyen" not in header:
+                continue
+            for cell, field_key in zip(table.rows[-1].cells, field_keys):
+                self._set_cell_text_with_highlight(
+                    cell, self._value_for_template_target(field_key, values)
+                )
+            return
+
+    def _replace_paragraph_with_highlighted_values(
+        self, paragraph, segments: tuple[tuple[str, bool], ...]
+    ) -> None:
+        p_element = paragraph._p
+        for child in list(p_element):
+            if child.tag != qn("w:pPr"):
+                p_element.remove(child)
+        for text, highlight in segments:
+            if not text:
+                continue
+            run = paragraph.add_run(str(text))
+            if highlight:
+                run.font.highlight_color = WD_COLOR_INDEX.YELLOW
+
+    def _set_cell_text_with_highlight(self, cell, value: str) -> None:
+        self._set_cell_text(cell, value)
+        if not str(value or "").strip():
+            return
+        for paragraph in cell.paragraphs:
+            for run in paragraph.runs:
+                if run.text:
+                    run.font.highlight_color = WD_COLOR_INDEX.YELLOW
     def _apply_company_contact_fields(self, document: Document, template_name: str, values: dict[str, str]) -> None:
         if not template_name.startswith("1."):
             return
-        email = str(values.get("company_email", "") or "").strip() or ".................."
-        website = str(values.get("company_website", "") or "").strip() or ".................."
+        email = str(values.get("company_email", "") or "").strip()
+        website = str(values.get("company_website", "") or "").strip()
+        if not email and not website:
+            return
+
         in_organization_owner_section = False
         for paragraph in self._iter_paragraphs(document):
             folded = self._fold(paragraph.text)
@@ -400,9 +671,14 @@ class DocxTemplateGenerator:
                 continue
             if in_organization_owner_section:
                 continue
-            self._replace_paragraph_text(
+            self._replace_paragraph_with_highlighted_values(
                 paragraph,
-                f"Thư điện tử (nếu có): {email}\tWebsite (nếu có): {website}",
+                (
+                    ("Thư điện tử (nếu có): ", False),
+                    (email or "..................", bool(email)),
+                    ("\tWebsite (nếu có): ", False),
+                    (website or "..................", bool(website)),
+                ),
             )
             try:
                 paragraph.paragraph_format.tab_stops.add_tab_stop(Inches(4.1))
@@ -410,10 +686,14 @@ class DocxTemplateGenerator:
                 pass
 
         self._replace_plain_text_in_container(document, {"4@gmail.com": email})
-
-    def _remove_file1_owner_name_spacer(self, document: Document, template_name: str) -> None:
-        """Remove the empty paragraph that creates a gap in section 5(a)."""
-        if not template_name.startswith("1."):
+    def _remove_file1_owner_name_spacer(
+        self, document: Document, template_name: str, values: dict[str, str]
+    ) -> None:
+        """Remove the section 5(a) spacer only for an individual owner."""
+        if (
+            not template_name.startswith("1.")
+            or self._fold(str(values.get("owner_type", "") or "")) != "ca nhan"
+        ):
             return
         paragraphs = list(self._iter_paragraphs(document))
         for index, paragraph in enumerate(paragraphs[:-1]):
@@ -658,6 +938,51 @@ class DocxTemplateGenerator:
                     r_pr.insert(0, fonts)
                 for font_name in ("w:ascii", "w:hAnsi", "w:eastAsia", "w:cs"):
                     fonts.set(qn(font_name), "Times New Roman")
+    def _apply_organization_charter_document_date(
+        self, document: Document, template_name: str, values: dict[str, str]
+    ) -> None:
+        """The organization charter has a split date line; rewrite it as one stable value."""
+        if template_name != self.ORGANIZATION_CHARTER_TEMPLATE:
+            return
+        place = str(values.get("document_place", "") or "").strip()
+        day = str(values.get("document_day", "") or "").strip()
+        month = str(values.get("document_month", "") or "").strip()
+        year = str(values.get("document_year", "") or "").strip()
+        if not (place and day and month and year):
+            return
+        if day.isdigit():
+            day = day.zfill(2)
+        if month.isdigit():
+            month = month.zfill(2)
+        date_line = f"{place}, ngày {day} tháng {month} năm {year}"
+        paragraphs = list(self._iter_paragraphs(document))
+        for index, paragraph in enumerate(paragraphs[:-1]):
+            if self._fold(paragraphs[index + 1].text) != "chu so huu":
+                continue
+            self._replace_paragraph_with_highlighted_values(paragraph, ((date_line, True),))
+            return
+
+    def _ensure_power_of_attorney_address_font(
+        self, document: Document, template_name: str, values: dict[str, str]
+    ) -> None:
+        if not template_name.startswith("4. "):
+            return
+        addresses = {
+            str(values.get(key, "") or "").strip()
+            for key in ("legal_representative_permanent_address", "legal_representative_contact_address")
+        } - {""}
+        for paragraph in self._iter_paragraphs(document):
+            if not any(address in paragraph.text for address in addresses):
+                continue
+            for run in paragraph.runs:
+                if run.text:
+                    run.font.name = "Times New Roman"
+                    run.font.size = Pt(13)
+                    r_pr = run._r.get_or_add_rPr()
+                    fonts = r_pr.rFonts
+                    for font_name in ("w:ascii", "w:hAnsi", "w:eastAsia", "w:cs"):
+                        fonts.set(qn(font_name), "Times New Roman")
+
     def _apply_document_place_date(self, document: Document, template_name: str, values: dict[str, str]) -> None:
         place = str(values.get("document_place", "") or "").strip()
         day = str(values.get("document_day", "") or "").strip()
@@ -731,8 +1056,34 @@ class DocxTemplateGenerator:
         if target == "legal_representative_province_with_nationality":
             province = self._value_for_template_target("legal_representative_province", values)
             return f"{province}, Việt Nam" if province else ""
+        if target == "charter_capital_article_6_text":
+            number = self._with_vnd(values.get("charter_capital_number", ""))
+            words = str(values.get("charter_capital_text", "") or "").strip()
+            if words and not re.search(r"\sđồng$", words, re.IGNORECASE):
+                words = f"{words} đồng"
+            if number and words:
+                return f"{number} (Ghi bằng chữ: {words})"
+            return number
+        if target == "organization_owner_issue_place":
+            return str(values.get(target, "") or "").split(" - ", 1)[0].strip(" ,;-")
         if target == "charter_capital_words_without_currency":
             return re.sub(r"\s*đồng\s*$", "", str(values.get("charter_capital_text", "") or ""), flags=re.IGNORECASE).strip()
+        if target.startswith("organization_owner_representative_contact_address_"):
+            address = str(values.get("organization_owner_representative_contact_address", "") or "").strip()
+            suffix = target.removeprefix("organization_owner_representative_contact_address_")
+            if suffix == "detail":
+                return self._address_detail_only(address)
+            if suffix == "ward":
+                return self._administrative_part_only(address, {"xa", "phuong", "thi_tran"})
+            if suffix == "province":
+                return self._normalize_province(self._administrative_part_only(address, {"tinh", "thanh_pho"}))
+        if target == "organization_owner_representative_id_number":
+            identity = str(values.get("organization_owner_representative_identity", "") or "")
+            match = re.search(r"(?:CCCD\s*số|Số\s*định\s*danh\s*cá\s*nhân)\s*:?\s*([0-9A-Za-z-]+)", identity, re.IGNORECASE)
+            if match:
+                return match.group(1)
+            fallback = re.search(r"[0-9]{6,}", identity)
+            return fallback.group(0) if fallback else ""
         if target == "legal_representative_full_name_title":
             return str(values.get("legal_representative_full_name", "") or "").title()
         if target in {"legal_representative_address_without_province", "beneficial_owner_address_without_province"}:

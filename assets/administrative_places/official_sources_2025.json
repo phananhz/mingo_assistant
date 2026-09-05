@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "effective_from": "2025-07-01",
+  "policy": "The offline address matcher only emits commune-level administrative units in the bundled 2025 dataset. Ward mappings are reviewed against the relevant official resolution before release.",
+  "sources": [
+    {
+      "scope": "Vietnam - 34 provincial and commune-level administrative arrangements in 2025",
+      "publisher": "Bộ Nội vụ",
+      "title": "Chính phủ công bố diện tích tự nhiên các đơn vị hành chính cấp xã mới trước 30/9",
+      "url": "https://isol.moha.gov.vn/tin-hoat-dong/diem-tin/chinh-phu-cong-bo-dien-tich-tu-nhien-cac-don-vi-hanh-chinh-cap-xa-moi-truoc-309-43752.html"
+    },
+    {
+      "scope": "Thành phố Hồ Chí Minh - Phường 5, Quận Gò Vấp to Phường An Nhơn",
+      "publisher": "Ủy ban Thường vụ Quốc hội",
+      "legal_document": "1685/NQ-UBTVQH15",
+      "issued_on": "2025-06-16",
+      "title": "Về việc sắp xếp các đơn vị hành chính cấp xã của Thành phố Hồ Chí Minh năm 2025",
+      "url": "https://vanban.chinhphu.vn/?docid=214007&pageid=27160"
+    }
+  ]
+}

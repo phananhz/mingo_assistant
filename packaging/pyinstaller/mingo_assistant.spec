@@ -10,7 +10,7 @@ datas = [(str(PROJECT_ROOT / "assets"), "assets")]
 binaries = []
 hiddenimports = []
 
-for package_name in ("numpy", "cv2", "zxingcpp", "pyzbar", "docxtpl", "fitz"):
+for package_name in ("numpy", "cv2", "zxingcpp", "pyzbar", "docxtpl", "fitz", "rapidocr_onnxruntime", "onnxruntime"):
     try:
         package_binaries, package_datas, package_hiddenimports = collect_all(package_name)
     except ImportError:

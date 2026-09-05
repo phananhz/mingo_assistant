@@ -35,7 +35,8 @@ class AdministrativePlaceMatcher:
         self.old_mapping_candidates = self._old_mapping_candidates(data)
 
     def normalize_address(self, address: str) -> str:
-        parts = [part.strip(" ,.;") for part in re.split(r"[,;]", address or "") if part.strip(" ,.;")]
+        repaired_address = self._repair_ocr_administrative_boundaries(address)
+        parts = [part.strip(" ,.;") for part in re.split(r"[,;]", repaired_address) if part.strip(" ,.;")]
         if not parts:
             return address
         merged = self._normalize_old_split_sequence(parts)
@@ -49,6 +50,24 @@ class AdministrativePlaceMatcher:
             normalized_parts.append(self._normalize_part(part, province=province, district=district))
         return ", ".join(self._dedupe_keep_order(normalized_parts))
 
+    def _repair_ocr_administrative_boundaries(self, address: str) -> str:
+        """Split common Vietnamese administrative labels that OCR joins together."""
+        repaired = address or ""
+        repaired = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", repaired)
+        repaired = re.sub(r"(?i)\bph(?:uong|ng)\s*(\d+)\b", r"Phường \1", repaired)
+        repaired = re.sub(r"(?i)\bq(?:uan|un)\b\s*", "Quận ", repaired)
+        repaired = re.sub(r"(?i)\bthanh\s*ph(?:o|h)?\b\s*", "Thành phố ", repaired)
+        repaired = re.sub(
+            r"(?i)(Phường\s+\d+)\s*[.\-]?\s*(Quận\b)",
+            r"\1, \2",
+            repaired,
+        )
+        repaired = re.sub(
+            r"(?i)(Quận\s+[^,;]+?)\s*(?=(?:Thành phố|Tỉnh)\b)",
+            r"\1, ",
+            repaired,
+        )
+        return repaired
     def _normalize_old_split_sequence(self, parts: list[str]) -> list[str]:
         province = self._best_province(parts)
         result: list[str] = []
@@ -62,9 +81,9 @@ class AdministrativePlaceMatcher:
                 continue
 
             if match.new_ward_name:
-                result.append(match.new_ward_name)
+                result.append(unicodedata.normalize("NFC", match.new_ward_name))
             if match.new_province_name:
-                result.append(match.new_province_name)
+                result.append(unicodedata.normalize("NFC", match.new_province_name))
             changed = True
             index += window
             while index < len(parts) and self._is_old_context_part(parts[index], match):
@@ -81,7 +100,7 @@ class AdministrativePlaceMatcher:
         best: PlaceCandidate | None = None
         best_window = 0
         best_score = 0.0
-        for window in (3, 2):
+        for window in (3, 2, 1):
             if index + window > len(parts):
                 continue
             value = " ".join(parts[index : index + window])
@@ -92,6 +111,16 @@ class AdministrativePlaceMatcher:
                     candidates = scoped
             for candidate in candidates:
                 score = self._candidate_score(self._fold(value), candidate.normalized)
+                if score < 0.96:
+                    continue
+                has_same_name = sum(
+                    1 for possible in candidates if possible.normalized == candidate.normalized
+                ) > 1
+                context_matches = self._mapping_context_matches(parts, index, window, candidate)
+                if has_same_name and not context_matches:
+                    continue
+                if context_matches:
+                    score += 0.05
                 if score > best_score:
                     best = candidate
                     best_window = window
@@ -100,6 +129,21 @@ class AdministrativePlaceMatcher:
             return best, best_window
         return None, 0
 
+    def _mapping_context_matches(
+        self,
+        parts: list[str],
+        index: int,
+        window: int,
+        candidate: PlaceCandidate,
+    ) -> bool:
+        if not candidate.district_name:
+            return True
+        context = " ".join(parts[index + window : index + window + 3])
+        district = self._strip_admin_prefix(self._fold(candidate.district_name))
+        context_normalized = self._strip_admin_prefix(self._fold(context))
+        if not district or not context_normalized:
+            return False
+        return district in context_normalized or self._similarity(district, context_normalized) >= 0.88
     def _is_old_context_part(self, part: str, match: PlaceCandidate) -> bool:
         folded = self._fold(part)
         if not folded:
@@ -120,6 +164,11 @@ class AdministrativePlaceMatcher:
 
     def best_province_name(self, value: str) -> str:
         match = self._best_match(value, self.province_candidates, threshold=0.93)
+        return match.name if match else ""
+
+    def best_ward_name(self, value: str, province_name: str = "") -> str:
+        province = self._best_match(province_name, self.province_candidates, threshold=0.82) if province_name else None
+        match = self._best_ward_match(value, province=province, district=None, threshold=0.84)
         return match.name if match else ""
 
     def _normalize_part(self, part: str, *, province: PlaceCandidate | None, district: PlaceCandidate | None) -> str:
