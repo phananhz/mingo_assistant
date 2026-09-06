@@ -149,6 +149,54 @@ class BusinessRegistrationRegressionTest(unittest.TestCase):
 
         self.assertNotIn("4@gmail.com", paragraph.text)
         self.assertIn("..................", paragraph.text)
+    def test_company_email_is_not_replaced_inside_its_new_value(self) -> None:
+        document = Document()
+        paragraph = document.add_paragraph(
+            "Th\u01b0 \u0111i\u1ec7n t\u1eed (n\u1ebfu c\u00f3): 4@gmail.com\tWebsite (n\u1ebfu c\u00f3): example.com"
+        )
+        generator = DocxTemplateGenerator.__new__(DocxTemplateGenerator)
+
+        generator._apply_company_contact_fields(
+            document,
+            "1. Gi\u1ea5y \u0111\u1ec1 ngh\u1ecb.docx",
+            {"company_email": "234@gmail.com", "company_website": ""},
+        )
+
+        self.assertIn("234@gmail.com", paragraph.text)
+        self.assertNotIn("23234@gmail.com", paragraph.text)
+
+    def test_case_load_clears_authorized_contact_copied_to_different_applicant(self) -> None:
+        values = {
+            "applicant_full_name": "TR\u1ecaNH TH\u1eca THU TH\u1ee6Y",
+            "applicant_id_number": "034302004369",
+            "applicant_phone": "0986602511",
+            "applicant_email": "ngocduonghong21@gmail.com",
+            "authorized_person_full_name": "D\u01af\u01a0NG H\u1ed2NG NG\u1eccC",
+            "authorized_person_id_number": "030085001651",
+            "authorized_person_phone": "0986602511",
+            "authorized_person_email": "ngocduonghong21@gmail.com",
+        }
+
+        BusinessRegistrationWorkspace._clear_cross_person_authorized_contacts(values)
+
+        self.assertEqual(values["applicant_phone"], "")
+        self.assertEqual(values["applicant_email"], "")
+
+    def test_case_load_keeps_contacts_when_applicant_is_authorized_person(self) -> None:
+        values = {
+            "applicant_id_number": "034302004369",
+            "applicant_phone": "0986602511",
+            "applicant_email": "ngocduonghong21@gmail.com",
+            "authorized_person_id_number": "034302004369",
+            "authorized_person_phone": "0986602511",
+            "authorized_person_email": "ngocduonghong21@gmail.com",
+        }
+
+        BusinessRegistrationWorkspace._clear_cross_person_authorized_contacts(values)
+
+        self.assertEqual(values["applicant_phone"], "0986602511")
+        self.assertEqual(values["applicant_email"], "ngocduonghong21@gmail.com")
+
     def test_legacy_province_address_is_converted_from_administrative_data(self) -> None:
         result = AddressParser().parse(
             "Th\u00f4n B\u1ed3n Th\u00f4n, Trung An, V\u0169 Th\u01b0, Th\u00e1i B\u00ecnh"

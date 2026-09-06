@@ -765,7 +765,6 @@ class DocxTemplateGenerator:
             except Exception:
                 pass
 
-        self._replace_plain_text_in_container(document, {"4@gmail.com": email})
     def _remove_file1_owner_name_spacer(
         self, document: Document, template_name: str, values: dict[str, str]
     ) -> None:

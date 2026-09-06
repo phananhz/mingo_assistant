@@ -2418,6 +2418,7 @@ class BusinessRegistrationWorkspace(QWidget):
                 }
             )
             defaults.update(case.form_values)
+        self._clear_cross_person_authorized_contacts(defaults)
         for key, value in defaults.items():
             self._set_field(key, value)
         self._restore_business_lines(case.form_values if case else {})
@@ -3094,6 +3095,29 @@ class BusinessRegistrationWorkspace(QWidget):
         digits = re.sub(r"\D", "", str(value or ""))
         return bool(digits and digits in id_numbers)
 
+    @staticmethod
+    def _clear_cross_person_authorized_contacts(values: dict[str, str]) -> None:
+        """Remove contacts copied from an authorized person into a different applicant."""
+        applicant_id = re.sub(r"\D", "", str(values.get("applicant_id_number", "") or ""))
+        authorized_id = re.sub(r"\D", "", str(values.get("authorized_person_id_number", "") or ""))
+        applicant_name = re.sub(r"\W", "", str(values.get("applicant_full_name", "") or "").casefold())
+        authorized_name = re.sub(r"\W", "", str(values.get("authorized_person_full_name", "") or "").casefold())
+        people_are_distinct = (
+            bool(applicant_id and authorized_id and applicant_id != authorized_id)
+            or bool(not applicant_id and not authorized_id and applicant_name and authorized_name and applicant_name != authorized_name)
+        )
+        if not people_are_distinct:
+            return
+
+        for applicant_key, authorized_key, normalizer in (
+            ("applicant_phone", "authorized_person_phone", lambda value: re.sub(r"\D", "", value)),
+            ("applicant_email", "authorized_person_email", lambda value: value.casefold()),
+        ):
+            applicant_value = str(values.get(applicant_key, "") or "").strip()
+            authorized_value = str(values.get(authorized_key, "") or "").strip()
+            if applicant_value and authorized_value and normalizer(applicant_value) == normalizer(authorized_value):
+                values[applicant_key] = ""
+
     def _sync_personal_data_to_case(self, card_values: dict[str, str], previous_id_number: str) -> None:
         """Refresh every in-case reference that belongs to the CCCD being edited."""
         id_numbers = {
@@ -3716,7 +3740,7 @@ class BusinessRegistrationWorkspace(QWidget):
             "director_position": "legal_representative_position",
             "director_phone": "legal_representative_phone",
         }
-        applicant_prefix = "authorized_person" if values.get("authorized_person_full_name", "").strip() else "legal_representative"
+        applicant_prefix = "legal_representative"
         representative_aliases.update(
             {
                 "applicant_full_name": f"{applicant_prefix}_full_name",
