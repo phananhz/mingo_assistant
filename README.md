@@ -34,3 +34,16 @@ $env:PYTHONPATH = "src"
 & "C:\Users\duyle\AppData\Local\Programs\Python\Python312\python.exe" -m mingo_assistant
 ```
 
+
+
+## Build Windows EXE
+
+A fresh clone can produce a Windows EXE by installing both dependency files and using the portable PyInstaller spec:
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt -r requirements-build.txt
+.\.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean packaging\pyinstaller\MingoAssistantQRMaxV3.spec
+```
+
+See [packaging/pyinstaller/README.md](packaging/pyinstaller/README.md) for the full test and build steps.

@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QFrame,
     QGridLayout,
+    QHeaderView,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -39,7 +40,7 @@ from mingo_assistant.models.case import CaseSummary
 from mingo_assistant.repositories.case_repository import CaseRepository
 from mingo_assistant.services.business_lines.industry_lookup import IndustryCatalog, IndustryRow
 from mingo_assistant.ui.dialogs.settings_dialog import SettingsDialog
-from mingo_assistant.ui.styles import stylesheet_for_theme
+from mingo_assistant.ui.styles import LAYOUT_OPTIONS, stylesheet_for_theme
 from mingo_assistant.ui.views.business_registration_documents import BusinessRegistrationDocumentsView
 from mingo_assistant.ui.views.business_registration_workspace import BusinessRegistrationWorkspace
 from mingo_assistant.ui.widgets.combo_box import NoWheelComboBox
@@ -112,6 +113,10 @@ class MainWindow(QMainWindow):
         self.case_repository = CaseRepository(self.app_paths.cases_file)
         self.cases: list[CaseSummary] = self.case_repository.list_cases()
         self.nav_buttons: dict[str, QPushButton] = {}
+        self.top_nav_buttons: dict[str, QPushButton] = {}
+        self.slim_nav_buttons: dict[str, QPushButton] = {}
+        self._selected_case_for_detail: CaseSummary | None = None
+        self._current_nav_key = "business_registration"
         self.stack = QStackedWidget()
         self.current_workspace: BusinessRegistrationWorkspace | None = None
         self.current_documents_view: BusinessRegistrationDocumentsView | None = None
@@ -121,7 +126,10 @@ class MainWindow(QMainWindow):
         self.authorized_person_fields: dict[str, QLineEdit | QTextEdit] = {}
         self.authorized_person_cards_layout: QGridLayout | None = None
         self.authorized_person_save_button: QPushButton | None = None
-        self._last_applied_theme: tuple[str, int, str, bool] | None = None
+        self._last_applied_theme: tuple | None = None
+
+        init_settings = load_settings(self.app_paths)
+        self.current_layout: str = init_settings.get("layout", "default")
 
         self.search_input = QLineEdit()
         self.case_type_filter = NoWheelComboBox()
@@ -144,16 +152,158 @@ class MainWindow(QMainWindow):
         self.industry_status_label = QLabel()
         self.industry_detail = QTextEdit()
 
+        self.sidebar = self._build_sidebar()
+        self.slim_sidebar = self._build_slim_sidebar()
+        self.global_topbar = self._build_global_topbar()
+        self.top_nav_bar = self._build_top_nav_bar()
+        self.content_stack_wrapper = self._build_content_stack()
+
         root = QWidget()
-        root_layout = QHBoxLayout(root)
+        root_layout = QVBoxLayout(root)
         root_layout.setContentsMargins(0, 0, 0, 0)
         root_layout.setSpacing(0)
-        root_layout.addWidget(self._build_sidebar())
-        root_layout.addWidget(self._build_content_stack(), 1)
 
+        root_layout.addWidget(self.global_topbar)
+        root_layout.addWidget(self.top_nav_bar)
+
+        self.body_container = QWidget()
+        self.body_layout = QHBoxLayout(self.body_container)
+        self.body_layout.setContentsMargins(0, 0, 0, 0)
+        self.body_layout.setSpacing(0)
+        self.body_layout.addWidget(self.sidebar)
+        self.body_layout.addWidget(self.slim_sidebar)
+        self.body_layout.addWidget(self.content_stack_wrapper, 1)
+
+        root_layout.addWidget(self.body_container, 1)
         self.setCentralWidget(root)
+
+        self._apply_layout_structure(self.current_layout)
         self._select_nav("business_registration")
         self._refresh_cases()
+
+    def _build_global_topbar(self) -> QWidget:
+        topbar = QFrame()
+        topbar.setObjectName("GlobalTopbar")
+        layout = QHBoxLayout(topbar)
+        layout.setContentsMargins(16, 0, 16, 0)
+        layout.setSpacing(12)
+
+        logo = QLabel("⚡ MINGO STUDIO")
+        logo.setStyleSheet("font-weight: 800; font-size: 13px; letter-spacing: 0.5px;")
+        layout.addWidget(logo)
+
+        crumb = QLabel("›  Hồ sơ doanh nghiệp")
+        crumb.setStyleSheet("font-size: 12px; color: #94A3B8;")
+        layout.addWidget(crumb)
+
+        layout.addStretch(1)
+
+        search_quick = QLineEdit()
+        search_quick.setPlaceholderText("Tìm nhanh hồ sơ...")
+        search_quick.setFixedWidth(240)
+        search_quick.setStyleSheet("padding: 4px 10px; font-size: 12px; border-radius: 6px;")
+        search_quick.textChanged.connect(lambda text: self.search_input.setText(text))
+        layout.addWidget(search_quick)
+
+        quick_create = QPushButton("+ Tạo mới")
+        quick_create.setObjectName("PrimaryButton")
+        quick_create.setCursor(Qt.PointingHandCursor)
+        quick_create.clicked.connect(self._open_new_business_case)
+        layout.addWidget(quick_create)
+
+        quick_settings = QPushButton("⚙")
+        quick_settings.setObjectName("SettingsButton")
+        quick_settings.setCursor(Qt.PointingHandCursor)
+        quick_settings.setToolTip("Cài đặt ứng dụng")
+        quick_settings.clicked.connect(self._open_settings)
+        layout.addWidget(quick_settings)
+
+        return topbar
+
+    def _build_top_nav_bar(self) -> QWidget:
+        bar = QFrame()
+        bar.setObjectName("TopNavContainer")
+        layout = QHBoxLayout(bar)
+        layout.setContentsMargins(18, 0, 18, 0)
+        layout.setSpacing(10)
+
+        brand = QLabel("MINGO ASSISTANT")
+        brand.setObjectName("AppEyebrow")
+        brand.setStyleSheet("font-size: 13px; font-weight: 800;")
+        layout.addWidget(brand)
+        layout.addSpacing(14)
+
+        for key, label in NAV_ITEMS[:4]:
+            btn = QPushButton(label)
+            btn.setObjectName("TopNavButton")
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.clicked.connect(lambda checked=False, item_key=key: self._select_nav(item_key))
+            self.top_nav_buttons[key] = btn
+            layout.addWidget(btn)
+
+        layout.addStretch(1)
+
+        create_btn = QPushButton("+ Tạo hồ sơ mới")
+        create_btn.setObjectName("PrimaryButton")
+        create_btn.setCursor(Qt.PointingHandCursor)
+        create_btn.clicked.connect(self._open_new_business_case)
+        layout.addWidget(create_btn)
+
+        settings_btn = QPushButton("⚙")
+        settings_btn.setObjectName("SettingsButton")
+        settings_btn.setCursor(Qt.PointingHandCursor)
+        settings_btn.setToolTip("Cài đặt")
+        settings_btn.clicked.connect(self._open_settings)
+        layout.addWidget(settings_btn)
+
+        return bar
+
+    def _build_slim_sidebar(self) -> QWidget:
+        sidebar = QFrame()
+        sidebar.setObjectName("SlimSidebar")
+        sidebar.setFixedWidth(60)
+
+        layout = QVBoxLayout(sidebar)
+        layout.setContentsMargins(8, 12, 8, 16)
+        layout.setSpacing(8)
+
+        logo = QLabel("M")
+        logo.setAlignment(Qt.AlignCenter)
+        logo.setStyleSheet("font-size: 20px; font-weight: 900; padding: 4px 0 10px;")
+        layout.addWidget(logo)
+
+        icons = {
+            "business_registration": "📁",
+            "industry_lookup": "🔍",
+            "trash": "🗑",
+            "capital_change": "💰",
+            "legal_representative_change": "👤",
+            "address_change": "📍",
+            "business_lines_change": "📋",
+            "dissolution": "⚠️",
+            "templates": "📝",
+            "people": "👥",
+        }
+
+        for key, label in NAV_ITEMS:
+            btn = QPushButton(icons.get(key, "📄"))
+            btn.setObjectName("SlimNavButton")
+            btn.setToolTip(label)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.clicked.connect(lambda checked=False, item_key=key: self._select_nav(item_key))
+            self.slim_nav_buttons[key] = btn
+            layout.addWidget(btn)
+
+        layout.addStretch(1)
+
+        settings_btn = QPushButton("⚙")
+        settings_btn.setObjectName("SlimNavButton")
+        settings_btn.setToolTip("Cài đặt")
+        settings_btn.setCursor(Qt.PointingHandCursor)
+        settings_btn.clicked.connect(self._open_settings)
+        layout.addWidget(settings_btn)
+
+        return sidebar
 
     def _build_sidebar(self) -> QWidget:
         sidebar = QFrame()
@@ -212,10 +362,21 @@ class MainWindow(QMainWindow):
         return content
 
     def _select_nav(self, key: str) -> None:
+        self._current_nav_key = key
         for item_key, button in self.nav_buttons.items():
             button.setProperty("active", item_key == key)
             button.style().unpolish(button)
             button.style().polish(button)
+        if hasattr(self, "top_nav_buttons"):
+            for item_key, button in self.top_nav_buttons.items():
+                button.setProperty("active", item_key == key)
+                button.style().unpolish(button)
+                button.style().polish(button)
+        if hasattr(self, "slim_nav_buttons"):
+            for item_key, button in self.slim_nav_buttons.items():
+                button.setProperty("active", item_key == key)
+                button.style().unpolish(button)
+                button.style().polish(button)
 
         if key == "business_registration":
             self.stack.setCurrentWidget(self.business_page)
@@ -231,9 +392,10 @@ class MainWindow(QMainWindow):
     def _build_business_registration_page(self) -> QWidget:
         page = QWidget()
         page.setObjectName("BusinessCasesPage")
-        layout = QVBoxLayout(page)
+        self.business_page_layout = QVBoxLayout(page)
+        layout = self.business_page_layout
         layout.setContentsMargins(24, 22, 24, 22)
-        layout.setSpacing(18)
+        layout.setSpacing(16)
 
         header = QHBoxLayout()
         header_text = QVBoxLayout()
@@ -270,6 +432,10 @@ class MainWindow(QMainWindow):
         header.addWidget(create_button, 0, Qt.AlignTop)
         layout.addLayout(header)
 
+        # KPI Row (for executive layout)
+        self.kpi_row = self._build_kpi_row()
+        layout.addWidget(self.kpi_row)
+
         layout.addWidget(self._build_filters())
 
         self.result_text.setObjectName("ResultText")
@@ -285,22 +451,273 @@ class MainWindow(QMainWindow):
         self.cards_layout.setContentsMargins(0, 0, 0, 0)
         self.cards_layout.setHorizontalSpacing(18)
         self.cards_layout.setVerticalSpacing(18)
-
         self.cards_scroll.setWidget(self.cards_container)
-        layout.addWidget(self.cards_scroll, 1)
+
+        self.main_work_area = QWidget()
+        work_layout = QHBoxLayout(self.main_work_area)
+        work_layout.setContentsMargins(0, 0, 0, 0)
+        work_layout.setSpacing(18)
+
+        work_layout.addWidget(self.cards_scroll, 1)
+        self.detail_preview_panel = self._build_detail_preview_panel()
+        work_layout.addWidget(self.detail_preview_panel, 0)
+
+        layout.addWidget(self.main_work_area, 1)
 
         return page
 
-    def _apply_theme_preview(self, theme_id: str, strength: int = 100, appearance_mode: str = "light") -> None:
+    def _build_kpi_row(self) -> QWidget:
+        row = QFrame()
+        row.setObjectName("KpiRow")
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(14)
+
+        self.kpi_total_val = QLabel("0")
+        self.kpi_total_val.setObjectName("KpiValue")
+        c1 = self._kpi_card("📁", "Tổng hồ sơ", self.kpi_total_val)
+
+        self.kpi_draft_val = QLabel("0")
+        self.kpi_draft_val.setObjectName("KpiValue")
+        c2 = self._kpi_card("⏳", "Đang xử lý", self.kpi_draft_val)
+
+        self.kpi_ready_val = QLabel("0")
+        self.kpi_ready_val.setObjectName("KpiValue")
+        c3 = self._kpi_card("✅", "Sẵn sàng tạo", self.kpi_ready_val)
+
+        self.kpi_auth_val = QLabel("---")
+        self.kpi_auth_val.setObjectName("KpiValue")
+        self.kpi_auth_val.setStyleSheet("font-size: 14px; font-weight: 700;")
+        c4 = self._kpi_card("👤", "Người ủy quyền", self.kpi_auth_val)
+
+        layout.addWidget(c1, 1)
+        layout.addWidget(c2, 1)
+        layout.addWidget(c3, 1)
+        layout.addWidget(c4, 1)
+        return row
+
+    def _kpi_card(self, icon: str, label_text: str, value_widget: QLabel) -> QWidget:
+        card = QFrame()
+        card.setObjectName("KpiCard")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(14, 10, 14, 10)
+        layout.setSpacing(4)
+
+        top = QHBoxLayout()
+        icon_lbl = QLabel(icon)
+        icon_lbl.setObjectName("KpiIcon")
+        lbl = QLabel(label_text)
+        lbl.setObjectName("KpiLabel")
+        top.addWidget(icon_lbl)
+        top.addWidget(lbl)
+        top.addStretch(1)
+
+        layout.addLayout(top)
+        layout.addWidget(value_widget)
+        return card
+
+    def _update_kpi_metrics(self) -> None:
+        if not hasattr(self, "kpi_total_val"):
+            return
+        total = len(self.cases)
+        ready = sum(1 for c in self.cases if c.status in ("Sẵn sàng tạo", "Đã tạo hồ sơ", "Đã hoàn thành"))
+        draft = total - ready
+        self.kpi_total_val.setText(str(total))
+        self.kpi_draft_val.setText(str(max(0, draft)))
+        self.kpi_ready_val.setText(str(ready))
+        auth_name = "---"
+        if self.cases:
+            auth_name = self._authorized_person_name(self.cases[0])
+        elif self.authorized_person_profiles:
+            auth_name = self.authorized_person_profiles[0].get("authorized_person_full_name", "---")
+        self.kpi_auth_val.setText(auth_name[:18] + "..." if len(auth_name) > 18 else auth_name)
+
+    def _build_detail_preview_panel(self) -> QWidget:
+        panel = QFrame()
+        panel.setObjectName("DetailPreviewPanel")
+        panel.setFixedWidth(330)
+
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        badge_row = QHBoxLayout()
+        badge_row.setContentsMargins(0, 0, 0, 0)
+        badge_lbl = QLabel("CHI TIẾT HỒ SƠ")
+        badge_lbl.setObjectName("DocumentsEyebrow")
+        self.detail_status_badge = QLabel("Chưa chọn")
+        self.detail_status_badge.setObjectName("StatusBadge")
+        badge_row.addWidget(badge_lbl)
+        badge_row.addStretch(1)
+        badge_row.addWidget(self.detail_status_badge)
+        layout.addLayout(badge_row)
+
+        self.detail_company_title = QLabel("Chọn một hồ sơ để xem chi tiết")
+        self.detail_company_title.setObjectName("DetailTitle")
+        self.detail_company_title.setWordWrap(True)
+        layout.addWidget(self.detail_company_title)
+
+        self.detail_type_val = QLabel("---")
+        self.detail_capital_val = QLabel("---")
+        self.detail_members_val = QLabel("---")
+        self.detail_owner_val = QLabel("---")
+        self.detail_updated_val = QLabel("---")
+
+        layout.addWidget(self._detail_field("Loại hình:", self.detail_type_val))
+        layout.addWidget(self._detail_field("Vốn điều lệ:", self.detail_capital_val))
+        layout.addWidget(self._detail_field("Số thành viên:", self.detail_members_val))
+        layout.addWidget(self._detail_field("Người ủy quyền:", self.detail_owner_val))
+        layout.addWidget(self._detail_field("Cập nhật:", self.detail_updated_val))
+
+        layout.addStretch(1)
+
+        self.detail_open_btn = QPushButton("📂 Mở bộ giấy tờ")
+        self.detail_open_btn.setObjectName("PrimaryButton")
+        self.detail_open_btn.setCursor(Qt.PointingHandCursor)
+        self.detail_open_btn.clicked.connect(self._open_selected_detail_documents)
+        layout.addWidget(self.detail_open_btn)
+
+        self.detail_edit_btn = QPushButton("✏ Soạn thảo hồ sơ")
+        self.detail_edit_btn.setObjectName("GhostButton")
+        self.detail_edit_btn.setCursor(Qt.PointingHandCursor)
+        self.detail_edit_btn.clicked.connect(self._open_selected_detail_workspace)
+        layout.addWidget(self.detail_edit_btn)
+
+        return panel
+
+    def _detail_field(self, label: str, value_widget: QLabel) -> QWidget:
+        row = QWidget()
+        layout = QVBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 4)
+        layout.setSpacing(2)
+        lbl = QLabel(label)
+        lbl.setObjectName("DetailMetaLabel")
+        layout.addWidget(lbl)
+        layout.addWidget(value_widget)
+        return row
+
+    def _update_detail_preview(self, case: CaseSummary | None = None) -> None:
+        if not hasattr(self, "detail_company_title"):
+            return
+        if case is None:
+            if self.cases:
+                case = self.cases[0]
+        if case:
+            self._selected_case_for_detail = case
+            self.detail_company_title.setText(case.company_name or case.name or "Hồ sơ không tên")
+            self.detail_status_badge.setText(case.warning or case.status)
+            self.detail_type_val.setText(case.case_type or "---")
+            self.detail_capital_val.setText(case.capital or "---")
+            self.detail_members_val.setText(f"{case.members} thành viên")
+            self.detail_owner_val.setText(self._authorized_person_name(case))
+            self.detail_updated_val.setText(case.updated_at or "---")
+        else:
+            self.detail_company_title.setText("Chưa có hồ sơ nào")
+            self.detail_status_badge.setText("Trống")
+            self.detail_type_val.setText("---")
+            self.detail_capital_val.setText("---")
+            self.detail_members_val.setText("---")
+            self.detail_owner_val.setText("---")
+            self.detail_updated_val.setText("---")
+
+    def _open_selected_detail_documents(self) -> None:
+        case = getattr(self, "_selected_case_for_detail", None)
+        if case:
+            self._open_case_documents(case)
+        elif self.cases:
+            self._open_case_documents(self.cases[0])
+
+    def _open_selected_detail_workspace(self) -> None:
+        case = getattr(self, "_selected_case_for_detail", None)
+        if case:
+            self._open_case_workspace(case)
+        elif self.cases:
+            self._open_case_workspace(self.cases[0])
+
+    def _apply_layout_structure(self, layout_key: str) -> None:
+        self.current_layout = layout_key if layout_key in LAYOUT_OPTIONS else "default"
+
+        # 1. Topbar visibility
+        if hasattr(self, "global_topbar"):
+            self.global_topbar.setVisible(self.current_layout == "modern_studio")
+
+        # 2. Top navigation bar visibility
+        if hasattr(self, "top_nav_bar"):
+            self.top_nav_bar.setVisible(self.current_layout == "top_nav")
+
+        # 3. Sidebar visibility
+        if hasattr(self, "sidebar"):
+            show_std_sidebar = self.current_layout not in ("top_nav", "slim_sidebar")
+            self.sidebar.setVisible(show_std_sidebar)
+            if self.current_layout == "compact_legal":
+                self.sidebar.setFixedWidth(190)
+            elif self.current_layout == "modern_studio":
+                self.sidebar.setFixedWidth(210)
+            else:
+                self.sidebar.setFixedWidth(self.SIDEBAR_WIDTH)
+
+        # 4. Slim sidebar visibility
+        if hasattr(self, "slim_sidebar"):
+            self.slim_sidebar.setVisible(self.current_layout == "slim_sidebar")
+
+        # 5. KPI row visibility
+        if hasattr(self, "kpi_row"):
+            is_exec = self.current_layout == "executive"
+            self.kpi_row.setVisible(is_exec)
+            if is_exec:
+                self._update_kpi_metrics()
+
+        # 6. Detail preview panel visibility
+        if hasattr(self, "detail_preview_panel"):
+            is_compact = self.current_layout == "compact_legal"
+            self.detail_preview_panel.setVisible(is_compact)
+            if is_compact:
+                self._update_detail_preview(getattr(self, "_selected_case_for_detail", None))
+
+        # 7. Margins on business page for centered_focus
+        if hasattr(self, "business_page_layout"):
+            if self.current_layout == "centered_focus":
+                self.business_page_layout.setContentsMargins(56, 22, 56, 22)
+            else:
+                self.business_page_layout.setContentsMargins(24, 22, 24, 22)
+
+        self._select_nav(getattr(self, "_current_nav_key", "business_registration"))
+        self._relayout_filters()
+        self._refresh_cases()
+
+    def _apply_theme_preview(
+        self,
+        theme_id: str,
+        strength: int = 100,
+        appearance_mode: str = "light",
+        layout: str = "default",
+        font_size: str = "medium",
+        border_radius: str = "rounded",
+        high_contrast: bool = False,
+        custom_color: str = "",
+    ) -> None:
+        self._apply_layout_structure(layout)
         app = QApplication.instance()
         if app is None:
             return
         system_is_dark = self._system_prefers_dark(app)
-        key = (theme_id, int(strength), appearance_mode, system_is_dark)
+        key = (theme_id, int(strength), appearance_mode, system_is_dark, layout, font_size, border_radius, bool(high_contrast), custom_color)
         if key == self._last_applied_theme:
             return
         self._last_applied_theme = key
-        app.setStyleSheet(stylesheet_for_theme(*key))
+        app.setStyleSheet(
+            stylesheet_for_theme(
+                theme_id=theme_id,
+                strength=int(strength),
+                appearance_mode=appearance_mode,
+                system_is_dark=system_is_dark,
+                layout=layout,
+                font_size=font_size,
+                border_radius=border_radius,
+                high_contrast=high_contrast,
+                custom_color=custom_color,
+            )
+        )
 
     @staticmethod
     def _system_prefers_dark(app: QApplication) -> bool:
@@ -317,31 +734,76 @@ class MainWindow(QMainWindow):
         except ValueError:
             current_strength = 100
         current_mode = current_settings.get("appearance_mode", "light")
+        current_layout = current_settings.get("layout", "default")
+        current_font_size = current_settings.get("font_size", "medium")
+        current_border_radius = current_settings.get("border_radius", "rounded")
+        current_high_contrast = current_settings.get("high_contrast", "false").lower() in ("true", "1")
+        current_custom_color = current_settings.get("custom_color", "")
+
         dialog = SettingsDialog(
-            current_theme,
-            current_strength,
-            current_mode,
+            selected_theme=current_theme,
+            color_strength=current_strength,
+            appearance_mode=current_mode,
             export_root=self.app_paths.documents_root,
+            selected_layout=current_layout,
+            font_size=current_font_size,
+            border_radius=current_border_radius,
+            high_contrast=current_high_contrast,
+            custom_color=current_custom_color,
         )
         dialog.theme_preview_changed.connect(self._apply_theme_preview)
         if dialog.exec() != QDialog.DialogCode.Accepted:
-            self._apply_theme_preview(current_theme, current_strength, current_mode)
+            self._apply_theme_preview(
+                current_theme,
+                current_strength,
+                current_mode,
+                current_layout,
+                current_font_size,
+                current_border_radius,
+                current_high_contrast,
+                current_custom_color,
+            )
             return
+
         selected_theme = dialog.selected_theme()
         selected_strength = dialog.selected_strength()
         selected_mode = dialog.selected_appearance_mode()
+        selected_layout = dialog.selected_layout()
+        selected_font_size = dialog.selected_font_size()
+        selected_border_radius = dialog.selected_border_radius()
+        selected_high_contrast = dialog.selected_high_contrast()
+        selected_custom_color = dialog.selected_custom_color()
         selected_export_root = dialog.selected_export_root()
         selected_export_root.mkdir(parents=True, exist_ok=True)
         self.app_paths.documents_root = selected_export_root
+        self.current_layout = selected_layout
+
+        self._apply_theme_preview(
+            selected_theme,
+            selected_strength,
+            selected_mode,
+            selected_layout,
+            selected_font_size,
+            selected_border_radius,
+            selected_high_contrast,
+            selected_custom_color,
+        )
+
         save_settings(
             self.app_paths,
             {
                 "theme": selected_theme,
                 "theme_strength": str(selected_strength),
                 "appearance_mode": selected_mode,
+                "layout": selected_layout,
+                "font_size": selected_font_size,
+                "border_radius": selected_border_radius,
+                "high_contrast": "true" if selected_high_contrast else "false",
+                "custom_color": selected_custom_color,
                 "export_root": str(selected_export_root),
             },
         )
+        self._refresh_cases()
 
     def _build_trash_page(self) -> QWidget:
         page = QWidget()
@@ -601,10 +1063,22 @@ class MainWindow(QMainWindow):
 
     def _card_column_count(self) -> int:
         available_width = max(1, self._content_width())
-        return max(1, min(4, (available_width + self.CARD_GAP) // (self.CARD_WIDTH + self.CARD_GAP)))
+        max_cols = 5 if getattr(self, "current_layout", "default") == "top_nav" else 4
+        return max(1, min(max_cols, (available_width + self.CARD_GAP) // (self.CARD_WIDTH + self.CARD_GAP)))
 
     def _content_width(self) -> int:
-        return max(1, self.width() - self.SIDEBAR_WIDTH - self.PAGE_HORIZONTAL_MARGIN)
+        sidebar_w = 0
+        if hasattr(self, "sidebar") and self.sidebar.isVisible():
+            sidebar_w = self.sidebar.width()
+        elif hasattr(self, "slim_sidebar") and self.slim_sidebar.isVisible():
+            sidebar_w = self.slim_sidebar.width()
+        detail_w = 0
+        if hasattr(self, "detail_preview_panel") and self.detail_preview_panel.isVisible():
+            detail_w = self.detail_preview_panel.width()
+        margin = self.PAGE_HORIZONTAL_MARGIN
+        if getattr(self, "current_layout", "default") == "centered_focus":
+            margin = 112
+        return max(1, self.width() - sidebar_w - detail_w - margin)
 
     def _authorized_person_name(self, case: CaseSummary) -> str:
         name = str(case.form_values.get("authorized_person_full_name", "") or "").strip()
@@ -860,6 +1334,14 @@ class MainWindow(QMainWindow):
         actions.addWidget(open_button)
         actions.addWidget(edit_button)
         body.addLayout(actions)
+
+        def on_card_click(event, c=case):
+            self._selected_case_for_detail = c
+            if hasattr(self, "detail_preview_panel") and self.detail_preview_panel.isVisible():
+                self._update_detail_preview(c)
+            QFrame.mousePressEvent(card, event)
+
+        card.mousePressEvent = on_card_click
 
         layout.addLayout(body, 1)
         return card

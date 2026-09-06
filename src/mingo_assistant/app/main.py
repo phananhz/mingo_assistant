@@ -40,7 +40,19 @@ def main() -> int:
         system_is_dark = app.styleHints().colorScheme() == Qt.ColorScheme.Dark
     except AttributeError:
         pass
-    app.setStyleSheet(stylesheet_for_theme(settings.get("theme", "rose"), settings.get("theme_strength", "100"), settings.get("appearance_mode", "light"), system_is_dark))
+    app.setStyleSheet(
+        stylesheet_for_theme(
+            theme_id=settings.get("theme", "rose"),
+            strength=settings.get("theme_strength", "100"),
+            appearance_mode=settings.get("appearance_mode", "light"),
+            system_is_dark=system_is_dark,
+            layout=settings.get("layout", "default"),
+            font_size=settings.get("font_size", "medium"),
+            border_radius=settings.get("border_radius", "rounded"),
+            high_contrast=settings.get("high_contrast", "false").lower() in ("true", "1"),
+            custom_color=settings.get("custom_color", ""),
+        )
+    )
     window = MainWindow(app_paths=paths)
     show_startup_splash(app, window)
     _prepare_storage_location(paths)
