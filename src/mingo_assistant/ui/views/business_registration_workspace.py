@@ -920,7 +920,6 @@ class BusinessRegistrationWorkspace(QWidget):
             "beneficial_owner_list_date_of_birth": data.get("legal_representative_date_of_birth", ""),
             "beneficial_owner_list_gender": data.get("legal_representative_gender", ""),
             "beneficial_owner_list_identity": self._representative_identity_text(data),
-            "beneficial_owner_list_nationality": data.get("legal_representative_nationality", "") or "Việt Nam",
             "beneficial_owner_list_ethnicity": data.get("legal_representative_ethnicity", ""),
             "beneficial_owner_list_address": contact_address,
         }

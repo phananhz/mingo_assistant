@@ -178,5 +178,23 @@ class BusinessRegistrationRegressionTest(unittest.TestCase):
         )
 
         self.assertEqual(paragraph.runs[0].font.size, Pt(13))
+    def test_beneficial_owner_template_never_exports_nationality(self) -> None:
+        document = Document()
+        table = document.add_table(rows=2, cols=18)
+        table.rows[0].cells[0].text = "1"
+        table.rows[0].cells[17].text = "18"
+        generator = DocxTemplateGenerator.__new__(DocxTemplateGenerator)
+
+        generator._apply_beneficial_owner_template_rules(
+            document,
+            "3. Danh s\u00e1ch ch\u1ee7 s\u1edf h\u1eefu h\u01b0\u1edfng l\u1ee3i.docx",
+            {
+                "beneficial_owner_list_number": "1",
+                "beneficial_owner_list_full_name": "NGUYEN VAN A",
+                "beneficial_owner_list_nationality": "Vi\u1ec7t Nam",
+            },
+        )
+
+        self.assertEqual(table.rows[1].cells[5].text, "")
 if __name__ == "__main__":
     unittest.main()

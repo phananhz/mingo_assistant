@@ -460,6 +460,9 @@ class DocxTemplateGenerator:
             return
         owner_columns = [str(values.get(key, "") or "").strip() for key in ("beneficial_owner_list_number", "beneficial_owner_list_full_name", "beneficial_owner_list_date_of_birth", "beneficial_owner_list_gender", "beneficial_owner_list_identity", "beneficial_owner_list_nationality", "beneficial_owner_list_ethnicity", "beneficial_owner_list_address")]
         owner_columns[4] = self._beneficial_owner_identity_number(owner_columns[4])
+        # Column 6 is intentionally left blank in this dossier template.
+        # Ignore legacy saved values and any CCCD/profile-derived nationality.
+        owner_columns[5] = ""
         column_values = [str(values.get(key, "") or "").strip() for key in ("beneficial_owner_list_capital_direct", "beneficial_owner_list_capital_indirect", "beneficial_owner_list_capital_total", "beneficial_owner_list_voting_direct", "beneficial_owner_list_voting_indirect", "beneficial_owner_list_voting_total", "beneficial_owner_list_general_partner", "beneficial_owner_list_related_group", "beneficial_owner_list_control", "beneficial_owner_list_manager")]
         column_values[:6] = [self._beneficial_owner_percentage(value) for value in column_values[:6]]
         for table in self._iter_tables(document):
