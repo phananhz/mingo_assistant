@@ -347,7 +347,7 @@ class DocxTemplateGenerator:
 
         highlighted_index = 0
         for paragraph in self._iter_paragraphs(document):
-            for run in paragraph.runs:
+            for run_index, run in enumerate(paragraph.runs):
                 if run.font.highlight_color != WD_COLOR_INDEX.YELLOW:
                     continue
                 target = field_map.get(str(highlighted_index))
@@ -355,6 +355,10 @@ class DocxTemplateGenerator:
                     replacement = "" if self._clear_file1_individual_owner_field(
                         template_name, str(target), values
                     ) else self._value_for_template_target(str(target), values)
+                    if str(target) == "company_english_name":
+                        prefix = "".join(previous_run.text for previous_run in paragraph.runs[:run_index])
+                        suffix = "".join(next_run.text for next_run in paragraph.runs[run_index + 1 :])
+                        replacement = self._replacement_with_boundary_spacing(replacement, prefix, suffix)
                     if run._r.findall(qn("w:sym")):
                         self._set_symbol_checkbox_value(run, replacement)
                     else:
@@ -431,6 +435,7 @@ class DocxTemplateGenerator:
         owner_columns = [str(values.get(key, "") or "").strip() for key in ("beneficial_owner_list_number", "beneficial_owner_list_full_name", "beneficial_owner_list_date_of_birth", "beneficial_owner_list_gender", "beneficial_owner_list_identity", "beneficial_owner_list_nationality", "beneficial_owner_list_ethnicity", "beneficial_owner_list_address")]
         owner_columns[4] = self._beneficial_owner_identity_number(owner_columns[4])
         column_values = [str(values.get(key, "") or "").strip() for key in ("beneficial_owner_list_capital_direct", "beneficial_owner_list_capital_indirect", "beneficial_owner_list_capital_total", "beneficial_owner_list_voting_direct", "beneficial_owner_list_voting_indirect", "beneficial_owner_list_voting_total", "beneficial_owner_list_general_partner", "beneficial_owner_list_related_group", "beneficial_owner_list_control", "beneficial_owner_list_manager")]
+        column_values[:6] = [self._beneficial_owner_percentage(value) for value in column_values[:6]]
         for table in self._iter_tables(document):
             numbering_row_index = next((index for index, row in enumerate(table.rows) if len(row.cells) >= 18 and row.cells[0].text.strip() == "1" and row.cells[17].text.strip() == "18"), None)
             if numbering_row_index is None:
@@ -440,16 +445,47 @@ class DocxTemplateGenerator:
                     continue
                 for cell, value in zip(row.cells[:8], owner_columns, strict=True):
                     self._replace_table_cell_text(cell, value)
-                for cell, value in zip(row.cells[8:18], column_values, strict=True):
+                for column, (cell, value) in enumerate(zip(row.cells[8:18], column_values, strict=True), start=9):
                     self._replace_table_cell_text(cell, value)
+                    self._format_beneficial_owner_numeric_cell(cell, value)
 
     @staticmethod
     def _beneficial_owner_identity_number(value: str) -> str:
         match = re.search(r"(?:CCCD\s*số|Số\s*định\s*danh\s*cá\s*nhân)\s*:?\s*([0-9A-Za-z-]+)", value, re.IGNORECASE)
         if match:
-            return f"CCCD số {match.group(1)}"
+            return f"Số định danh cá nhân: {match.group(1)}"
         fallback = re.search(r"[0-9]{6,}", value)
-        return f"CCCD số {fallback.group(0)}" if fallback else value
+        return f"Số định danh cá nhân: {fallback.group(0)}" if fallback else value
+
+    @staticmethod
+    def _beneficial_owner_percentage(value: str) -> str:
+        compact = re.sub(r"\s+", "", str(value or "").strip())
+        if not compact:
+            return ""
+        return compact if compact.endswith("%") else f"{compact}%"
+
+    @staticmethod
+    def _format_beneficial_owner_numeric_cell(cell, value: str) -> None:
+        """Use the compact centered style of column 9 for columns 9 onward."""
+        paragraphs = list(cell.paragraphs)
+        if not paragraphs:
+            paragraphs = [cell.add_paragraph()]
+        first = paragraphs[0]
+        for paragraph in paragraphs[1:]:
+            element = paragraph._element
+            element.getparent().remove(element)
+        first.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        first.paragraph_format.left_indent = Inches(0)
+        first.paragraph_format.right_indent = Inches(0)
+        first.paragraph_format.first_line_indent = Inches(0)
+        first.paragraph_format.space_before = Pt(0)
+        first.paragraph_format.space_after = Pt(0)
+        first.paragraph_format.line_spacing = 1
+        cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+        for run in first.runs:
+            if run.text:
+                run.font.size = Pt(10)
+                run.font.highlight_color = WD_COLOR_INDEX.YELLOW if str(value or "").strip() else None
 
     def _replace_table_cell_text(self, cell, text: str) -> None:
         paragraphs = list(cell.paragraphs)

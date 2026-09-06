@@ -16,7 +16,10 @@ class ExtractedIdCard:
     date_of_birth: str = ""
     gender: str = ""
     nationality: str = ""
+    raw_permanent_address: str = ""
     permanent_address: str = ""
+    address_status: str = ""
+    address_message: str = ""
     place_of_origin: str = ""
     issue_date: str = ""
     expiry_date: str = ""
@@ -31,7 +34,10 @@ class ExtractedIdCard:
             "legal_representative_date_of_birth": self.date_of_birth,
             "legal_representative_gender": self.gender,
             "legal_representative_nationality": self.nationality,
+            "legal_representative_raw_permanent_address": self.raw_permanent_address,
             "legal_representative_permanent_address": self.permanent_address,
+            "legal_representative_address_status": self.address_status,
+            "legal_representative_address_message": self.address_message,
             "legal_representative_issue_date": self.issue_date,
             "legal_representative_expiry_date": self.expiry_date,
         }
@@ -51,11 +57,19 @@ class IdCardParser:
         card.date_of_birth = self._find_date_of_birth(lines, joined)
         card.gender = self._find_gender(lines) or self._gender_from_id_number(card.id_number)
         card.full_name = self._find_name(lines)
-        card.permanent_address = self._find_address(lines, ["thuong tru", "residence", "place of residence"])
+        raw_permanent_address = self._find_address(lines, ["thuong tru", "residence", "place of residence"])
+        self._set_card_permanent_address(card, raw_permanent_address)
         card.place_of_origin = self._find_address(lines, ["que quan", "origin", "ongin", "place of origin", "nguyen quan"])
         card.place_of_origin = self.place_matcher.normalize_address(card.place_of_origin)
-        card.permanent_address = self.place_matcher.normalize_address(card.permanent_address)
-        card.permanent_address = self._complete_residence_with_origin(card.permanent_address, card.place_of_origin)
+        completed_address = self._complete_residence_with_origin(
+            card.permanent_address,
+            card.place_of_origin,
+        )
+        if completed_address and completed_address != card.raw_permanent_address:
+            normalized = self.place_matcher.analyze_address(completed_address)
+            card.permanent_address = normalized.normalized_address
+            card.address_status = normalized.status
+            card.address_message = normalized.message
         card.unknown_lines = lines
         return card
 
@@ -69,14 +83,14 @@ class IdCardParser:
             card.full_name = parts[2].upper()
             card.date_of_birth = self._format_compact_date(parts[3])
             card.gender = self._normalize_gender(parts[4]) or self._gender_from_id_number(card.id_number)
-            card.permanent_address = self.place_matcher.normalize_address(parts[5])
+            self._set_card_permanent_address(card, parts[5])
             card.issue_date = self._format_compact_date(parts[6])
         elif len(parts) >= 6:
             card.id_number = self._cccd_number(parts[0])
             card.full_name = parts[1].upper()
             card.date_of_birth = self._format_compact_date(parts[2])
             card.gender = self._normalize_gender(parts[3]) or self._gender_from_id_number(card.id_number)
-            card.permanent_address = self.place_matcher.normalize_address(parts[4])
+            self._set_card_permanent_address(card, parts[4])
             card.issue_date = self._format_compact_date(parts[5])
         else:
             card.warnings.append("Mã QR CCCD không đúng định dạng dữ liệu cá nhân thường gặp.")
@@ -84,12 +98,18 @@ class IdCardParser:
 
         if not card.id_number:
             card.warnings.append("Mã QR không có số CCCD 12 số; thông tin CMND cũ đã được bỏ qua.")
-        if not card.id_number:
-            card.warnings.append("Mã QR không có số CCCD 12 số; thông tin CMND cũ đã được bỏ qua.")
-        card.nationality = "Việt Nam"
-        card.place_of_origin = self._origin_from_residence(card.permanent_address)
+        card.nationality = "Vi\u1ec7t Nam"
         card.unknown_lines = parts
         return card
+
+    def _set_card_permanent_address(self, card: ExtractedIdCard, raw_address: str) -> None:
+        normalized = self.place_matcher.analyze_address(raw_address)
+        card.raw_permanent_address = normalized.raw_address
+        card.permanent_address = normalized.normalized_address
+        card.address_status = normalized.status
+        card.address_message = normalized.message
+        if normalized.needs_confirmation and normalized.message:
+            card.warnings.append(normalized.message)
 
     def _origin_from_residence(self, residence: str) -> str:
         if not residence:

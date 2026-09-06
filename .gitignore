@@ -26,6 +26,9 @@ releases/
 _template_eval/
 _template_eval_output/
 _ui_test_*.png
+layout_baseline.png
+test_artifacts/
+tmp_docx_qa/
 Templates04/
 *.docx~
 ~$*.docx

@@ -278,6 +278,10 @@ class BusinessRegistrationWorkspace(QWidget):
         self.beneficial_owner_list_auto_fields: dict[str, QLineEdit | QTextEdit] = {}
         self.beneficial_owner_list_selector: QComboBox | None = None
         self.ocr_card_fields: dict[str, QLineEdit | QTextEdit | QComboBox] = {}
+        self.cccd_address_status_label: QLabel | None = None
+        self._cccd_address_status = ""
+        self._cccd_address_message = ""
+        self._cccd_address_requires_confirmation = False
         self.organization_card_fields: dict[str, QLineEdit | QTextEdit] = {}
         self.business_line_rows: list[BusinessLineRow] = []
         self.business_line_table: QFrame | None = None
@@ -590,18 +594,14 @@ class BusinessRegistrationWorkspace(QWidget):
             ("legal_representative_gender", "Gi\u1edbi t\u00ednh", "text"),
             ("legal_representative_issue_date", "Ng\u00e0y c\u1ea5p", "text"),
             ("legal_representative_issue_place", "N\u01a1i c\u1ea5p", "issue_place"),
-            ("legal_representative_permanent_address", "\u0110\u1ecba ch\u1ec9 li\u00ean l\u1ea1c", "multiline"),
         ]
         for index, (key, label_text, field_type) in enumerate(fields):
             row = index // 2
             column = (index % 2) * 2
             label = QLabel(label_text)
             label.setObjectName("FilterLabel")
-            if field_type == "multiline":
-                field: QLineEdit | QTextEdit | QComboBox = QTextEdit()
-                field.setFixedHeight(58)
-            elif field_type == "issue_place":
-                field = NoWheelComboBox()
+            if field_type == "issue_place":
+                field: QLineEdit | QTextEdit | QComboBox = NoWheelComboBox()
                 field.setPlaceholderText("Ch\u1ecdn n\u01a1i c\u1ea5p")
                 field.addItems((
                     "C\u1ee5c C\u1ea3nh s\u00e1t Qu\u1ea3n l\u00fd H\u00e0nh ch\u00ednh v\u1ec1 Tr\u1eadt t\u1ef1 X\u00e3 h\u1ed9i",
@@ -613,15 +613,48 @@ class BusinessRegistrationWorkspace(QWidget):
             field.setPlaceholderText(label_text)
             self.ocr_card_fields[key] = field
             layout.addWidget(label, row, column)
-            if field_type == "multiline":
-                layout.addWidget(field, row, column + 1, 1, 3)
-            else:
-                layout.addWidget(field, row, column + 1)
+            layout.addWidget(field, row, column + 1)
 
+        raw_label = QLabel("\u0110\u1ecba ch\u1ec9 g\u1ed1c tr\u00ean CCCD/QR")
+        raw_label.setObjectName("FilterLabel")
+        raw_address = QTextEdit()
+        raw_address.setReadOnly(True)
+        raw_address.setFixedHeight(58)
+        raw_address.setPlaceholderText("\u0110\u1ecba ch\u1ec9 nguy\u00ean v\u0103n do QR CCCD tr\u1ea3 v\u1ec1")
+        self.ocr_card_fields["legal_representative_raw_permanent_address"] = raw_address
+        layout.addWidget(raw_label, 3, 0)
+        layout.addWidget(raw_address, 3, 1, 1, 3)
+
+        normalized_label = QLabel("\u0110\u1ecba ch\u1ec9 d\u00f9ng \u0111i\u1ec1n h\u1ed3 s\u01a1")
+        normalized_label.setObjectName("FilterLabel")
+        normalized_address = QTextEdit()
+        normalized_address.setFixedHeight(58)
+        normalized_address.setPlaceholderText("\u0110\u1ecba ch\u1ec9 sau khi chuy\u1ec3n \u0111\u1ed5i ho\u1eb7c do ng\u01b0\u1eddi d\u00f9ng x\u00e1c nh\u1eadn")
+        normalized_address.textChanged.connect(self._mark_cccd_address_edited)
+        self.ocr_card_fields["legal_representative_permanent_address"] = normalized_address
+        layout.addWidget(normalized_label, 4, 0)
+        layout.addWidget(normalized_address, 4, 1, 1, 3)
+
+        status_label = QLabel("Tr\u1ea1ng th\u00e1i \u0111\u1ecba ch\u1ec9")
+        status_label.setObjectName("FilterLabel")
+        self.cccd_address_status_label = QLabel()
+        self.cccd_address_status_label.setWordWrap(True)
+        self.cccd_address_status_label.setObjectName("FilterLabel")
+        layout.addWidget(status_label, 5, 0)
+        layout.addWidget(self.cccd_address_status_label, 5, 1, 1, 3)
+        self._set_cccd_address_status("", "")
+
+        actions = QHBoxLayout()
+        actions.addStretch(1)
+        confirm_button = QPushButton("X\u00e1c nh\u1eadn \u0111\u1ecba ch\u1ec9")
+        confirm_button.setObjectName("GhostButton")
+        confirm_button.clicked.connect(self._confirm_cccd_address)
+        actions.addWidget(confirm_button)
         apply_button = QPushButton("L\u01b0u d\u1eef li\u1ec7u c\u00e1 nh\u00e2n")
         apply_button.setObjectName("PrimaryButton")
         apply_button.clicked.connect(self._save_cccd_personal_profile)
-        layout.addWidget(apply_button, (len(fields) + 1) // 2, 0, 1, 4, Qt.AlignRight)
+        actions.addWidget(apply_button)
+        layout.addLayout(actions, 6, 0, 1, 4)
         return group
 
     def _build_address_section(self) -> QWidget:
@@ -2181,6 +2214,8 @@ class BusinessRegistrationWorkspace(QWidget):
         if not address:
             return
         parsed = self.address_parser.parse(address)
+        if parsed.normalization_status == "needs_confirmation":
+            return
         detail = self._address_detail_from_result(parsed)
         if not any([detail, parsed.ward, parsed.province]):
             return
@@ -2873,6 +2908,58 @@ class BusinessRegistrationWorkspace(QWidget):
         seconds = int(elapsed % 60)
         return f"{minutes} phút {seconds} giây"
 
+    def _set_cccd_address_status(self, status: str, message: str = "") -> None:
+        self._cccd_address_status = status or ""
+        self._cccd_address_message = message or ""
+        self._cccd_address_requires_confirmation = status == "needs_confirmation"
+        status_text = {
+            "current": "\u0110\u1ecba ch\u1ec9 CCCD \u0111\u00e3 theo ch\u00ednh quy\u1ec1n hai c\u1ea5p.",
+            "converted": "\u0110\u00e3 chuy\u1ec3n \u0111\u1ed5i \u0111\u1ecba ch\u1ec9 t\u1eeb h\u1ec7 th\u1ed1ng h\u00e0nh ch\u00ednh c\u0169.",
+            "confirmed": "\u0110\u1ecba ch\u1ec9 \u0111\u00e3 \u0111\u01b0\u1ee3c ng\u01b0\u1eddi d\u00f9ng x\u00e1c nh\u1eadn.",
+            "needs_confirmation": "C\u1ea7n ki\u1ec3m tra \u0111\u1ecba ch\u1ec9 g\u1ed1c v\u00e0 x\u00e1c nh\u1eadn tr\u01b0\u1edbc khi d\u00f9ng cho h\u1ed3 s\u01a1.",
+            "": "Ch\u01b0a c\u00f3 \u0111\u1ecba ch\u1ec9 CCCD \u0111\u1ec3 \u0111\u1ed1i chi\u1ebfu.",
+        }.get(status or "", "C\u1ea7n ki\u1ec3m tra \u0111\u1ecba ch\u1ec9 CCCD.")
+        text = message or status_text
+        if self.cccd_address_status_label is not None:
+            color = "#a5531c" if status == "needs_confirmation" else "#2f6d4f"
+            if not status:
+                color = "#6b6470"
+            self.cccd_address_status_label.setText(text)
+            self.cccd_address_status_label.setToolTip(text)
+            self.cccd_address_status_label.setStyleSheet(f"color: {color};")
+
+    def _mark_cccd_address_edited(self) -> None:
+        raw_field = self.ocr_card_fields.get("legal_representative_raw_permanent_address")
+        normalized_field = self.ocr_card_fields.get("legal_representative_permanent_address")
+        if not isinstance(raw_field, QTextEdit) or not isinstance(normalized_field, QTextEdit):
+            return
+        if raw_field.toPlainText().strip() and normalized_field.toPlainText().strip():
+            self._set_cccd_address_status(
+                "needs_confirmation",
+                "\u0110\u1ecba ch\u1ec9 \u0111\u00e3 \u0111\u01b0\u1ee3c ch\u1ec9nh s\u1eeda. Ch\u1ecdn X\u00e1c nh\u1eadn \u0111\u1ecba ch\u1ec9 tr\u01b0\u1edbc khi d\u00f9ng.",
+            )
+            self._apply_cccd_values_to_current_person(
+                self._cccd_result_values(),
+                apply_to_form=False,
+            )
+
+    def _confirm_cccd_address(self) -> None:
+        values = self._cccd_result_values()
+        if not values.get("legal_representative_raw_permanent_address") or not values.get(
+            "legal_representative_permanent_address"
+        ):
+            QMessageBox.warning(
+                self,
+                "Ch\u01b0a th\u1ec3 x\u00e1c nh\u1eadn \u0111\u1ecba ch\u1ec9",
+                "C\u1ea7n c\u00f3 c\u1ea3 \u0111\u1ecba ch\u1ec9 g\u1ed1c v\u00e0 \u0111\u1ecba ch\u1ec9 d\u00f9ng \u0111i\u1ec1n h\u1ed3 s\u01a1.",
+            )
+            return
+        self._set_cccd_address_status(
+            "confirmed",
+            "\u0110\u1ecba ch\u1ec9 \u0111\u00e3 \u0111\u01b0\u1ee3c ng\u01b0\u1eddi d\u00f9ng x\u00e1c nh\u1eadn.",
+        )
+        self._apply_cccd_values_to_current_person(self._cccd_result_values())
+
     def _update_cccd_result_fields(self, values: dict[str, str]) -> None:
         for key, field in self.ocr_card_fields.items():
             value = values.get(key, "")
@@ -2886,6 +2973,10 @@ class BusinessRegistrationWorkspace(QWidget):
                 field.setCursorPosition(0)
             field.setToolTip(value)
             field.blockSignals(False)
+        self._set_cccd_address_status(
+            values.get("legal_representative_address_status", ""),
+            values.get("legal_representative_address_message", ""),
+        )
 
     def _cccd_result_values(self) -> dict[str, str]:
         values: dict[str, str] = {}
@@ -2896,24 +2987,40 @@ class BusinessRegistrationWorkspace(QWidget):
                 values[key] = field.currentText().strip()
             else:
                 values[key] = field.text().strip()
+        values["legal_representative_address_status"] = self._cccd_address_status
+        values["legal_representative_address_message"] = self._cccd_address_message
         return values
+
+    def _require_confirmed_cccd_address(self) -> bool:
+        if not self._cccd_address_requires_confirmation:
+            return True
+        QMessageBox.warning(
+            self,
+            "C\u1ea7n x\u00e1c nh\u1eadn \u0111\u1ecba ch\u1ec9 CCCD",
+            "Ki\u1ec3m tra \u0111\u1ecba ch\u1ec9 g\u1ed1c, ch\u1ec9nh \u0111\u1ecba ch\u1ec9 d\u00f9ng \u0111i\u1ec1n h\u1ed3 s\u01a1 n\u1ebfu c\u1ea7n, r\u1ed3i ch\u1ecdn X\u00e1c nh\u1eadn \u0111\u1ecba ch\u1ec9.",
+        )
+        return False
 
     def _apply_cccd_result_to_form(self) -> None:
         values = self._cccd_result_values()
         if not any(values.values()):
-            QMessageBox.warning(self, "Chưa có dữ liệu CCCD", "Bạn cần quét QR hoặc nhập thông tin CCCD trước.")
+            QMessageBox.warning(self, "Ch\u01b0a c\u00f3 d\u1eef li\u1ec7u CCCD", "B\u1ea1n c\u1ea7n qu\u00e9t QR ho\u1eb7c nh\u1eadp th\u00f4ng tin CCCD tr\u01b0\u1edbc.")
+            return
+        if not self._require_confirmed_cccd_address():
             return
         self._apply_cccd_values_to_current_person(values)
 
     def _save_cccd_personal_profile(self) -> None:
         values = self._cccd_result_values()
         if not any(values.values()):
-            QMessageBox.warning(self, "Chưa có dữ liệu CCCD", "Bạn cần quét QR hoặc nhập thông tin CCCD trước.")
+            QMessageBox.warning(self, "Ch\u01b0a c\u00f3 d\u1eef li\u1ec7u CCCD", "B\u1ea1n c\u1ea7n qu\u00e9t QR ho\u1eb7c nh\u1eadp th\u00f4ng tin CCCD tr\u01b0\u1edbc.")
+            return
+        if not self._require_confirmed_cccd_address():
             return
         full_name = values.get("legal_representative_full_name", "").strip()
         id_number = values.get("legal_representative_id_number", "").strip()
         if not full_name or not id_number:
-            QMessageBox.warning(self, "Không thể lưu dữ liệu", "Cần có họ tên và số CCCD để lưu profile trong hồ sơ này.")
+            QMessageBox.warning(self, "Kh\u00f4ng th\u1ec3 l\u01b0u d\u1eef li\u1ec7u", "C\u1ea7n c\u00f3 h\u1ecd t\u00ean v\u00e0 s\u1ed1 CCCD \u0111\u1ec3 l\u01b0u profile trong h\u1ed3 s\u01a1 n\u00e0y.")
             return
         values["legal_representative_ethnicity"] = self._field_value("legal_representative_ethnicity")
         values["personal_phone"] = self._field_value("legal_representative_phone") or self._field_value("applicant_phone")
@@ -2929,9 +3036,13 @@ class BusinessRegistrationWorkspace(QWidget):
         self._refresh_beneficial_owner_list_selector()
         self._refresh_organization_representative_selector()
         self._apply_cccd_values_to_current_person(saved)
-        QMessageBox.information(self, "Đã lưu dữ liệu cá nhân", f"Đã lưu profile {full_name} cho hồ sơ hiện tại.")
+        QMessageBox.information(self, "\u0110\u00e3 l\u01b0u d\u1eef li\u1ec7u c\u00e1 nh\u00e2n", f"\u0110\u00e3 l\u01b0u profile {full_name} cho h\u1ed3 s\u01a1 hi\u1ec7n t\u1ea1i.")
 
-    def _apply_cccd_values_to_current_person(self, card_values: dict[str, str]) -> None:
+    def _apply_cccd_values_to_current_person(
+        self,
+        card_values: dict[str, str],
+        apply_to_form: bool = True,
+    ) -> None:
         person = self.ocr_people[self.current_person_index]
         person.data = {key: value for key, value in card_values.items() if value}
         person.recognition_type = "individual"
@@ -2942,24 +3053,27 @@ class BusinessRegistrationWorkspace(QWidget):
             person.name = full_name
             self._refresh_people_buttons()
         self._refresh_organization_representative_selector()
-        if person.role in {"legal_representative", "member", "applicant", "authorized_person", "beneficial_owner"}:
+        if apply_to_form and person.role in {"legal_representative", "member", "applicant", "authorized_person", "beneficial_owner"}:
             self._apply_person_data_to_role(card_values, person.role, self.current_person_index + 1, overwrite=True)
         self._refresh_preview()
 
     def _parse_ocr_text(self) -> None:
         text = self.raw_ocr_text.toPlainText().strip()
         if not text:
-            QMessageBox.warning(self, "Chưa có dữ liệu QR", "Bạn cần quét QR CCCD trước.")
+            QMessageBox.warning(self, "Ch\u01b0a c\u00f3 d\u1eef li\u1ec7u QR", "B\u1ea1n c\u1ea7n qu\u00e9t QR CCCD tr\u01b0\u1edbc.")
             return
 
         card = self.id_parser.parse_qr(text)
         card_values = card.to_form_values()
         self._update_cccd_result_fields(card_values)
-        self._apply_cccd_values_to_current_person(card_values)
+        self._apply_cccd_values_to_current_person(
+            self._cccd_result_values(),
+            apply_to_form=not self._cccd_address_requires_confirmation,
+        )
         self.ocr_people[self.current_person_index].raw_text = text
         self._parse_registration_office_from_text(text)
         if card.warnings:
-            QMessageBox.warning(self, "Cảnh báo dữ liệu CCCD", "\n".join(card.warnings))
+            QMessageBox.warning(self, "C\u1ea3nh b\u00e1o d\u1eef li\u1ec7u CCCD", "\\n".join(card.warnings))
         self._refresh_preview()
 
     def _apply_person_data_to_role(self, card_values: dict[str, str], role: str, person_number: int, overwrite: bool = False) -> None:
@@ -3053,6 +3167,8 @@ class BusinessRegistrationWorkspace(QWidget):
 
         result = self.address_parser.parse(text)
         self.address_result.setPlainText(result.summary() or "Chưa phân tích được dữ liệu rõ ràng.")
+        if result.normalization_status == "needs_confirmation":
+            return
         if result.company_name:
             self._set_field("company_name", result.company_name)
         if result.normalized_address:
@@ -3671,7 +3787,14 @@ class BusinessRegistrationWorkspace(QWidget):
                     "organization_owner_representative_identity": "Giấy tờ pháp lý của người đại diện vốn",
                 }
             )
-        return [label for key, label in required.items() if not values.get(key, "").strip()]
+        missing = [label for key, label in required.items() if not values.get(key, "").strip()]
+        if any(
+            person.recognition_type == "individual"
+            and person.data.get("legal_representative_address_status") == "needs_confirmation"
+            for person in self.ocr_people
+        ):
+            missing.append("Xác nhận địa chỉ CCCD trước khi xuất hồ sơ")
+        return missing
 
     def _validation_issues(self, values: dict[str, str]) -> list[str]:
         issues = self._missing_required_fields(values)
