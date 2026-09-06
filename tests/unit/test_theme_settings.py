@@ -1,5 +1,6 @@
 import unittest
 
+from mingo_assistant.ui.dialogs.settings_dialog import SettingsDialog
 from mingo_assistant.ui.styles import THEME_OPTIONS, resolved_appearance_mode, stylesheet_for_theme
 
 
@@ -37,9 +38,23 @@ class ThemeSettingsTest(unittest.TestCase):
             self.assertIn(selector, stylesheet)
 
     def test_additional_color_palettes_are_available(self) -> None:
-        for theme_id in ("violet", "ocean", "amber", "olive_gray"):
+        for theme_id in ("violet", "ocean", "amber", "olive_gray", "steel_blue"):
             self.assertIn(theme_id, THEME_OPTIONS)
             self.assertIn(THEME_OPTIONS[theme_id]["color"], stylesheet_for_theme(theme_id))
+
+    def test_case_cards_follow_the_selected_theme(self) -> None:
+        stylesheet = stylesheet_for_theme("olive_gray")
+        self.assertIn("#CardHeader { background: #777466; }", stylesheet)
+        self.assertIn("QLabel#StatusBadge { background: rgba(255, 255, 255, 0.88);", stylesheet)
+        self.assertIn("color: #59574D;", stylesheet)
+
+    def test_settings_has_storage_and_development_categories_without_recognition(self) -> None:
+        pages = dict(SettingsDialog._PAGES)
+        self.assertEqual(pages["storage"], "N\u01a1i l\u01b0u tr\u1eef")
+        self.assertIn("pets", pages)
+        self.assertIn("background_music", pages)
+        self.assertIn("ai", pages)
+        self.assertNotIn("recognition", pages)
 
     def test_unknown_theme_falls_back_to_default(self) -> None:
         self.assertEqual(stylesheet_for_theme("unknown"), stylesheet_for_theme("rose"))

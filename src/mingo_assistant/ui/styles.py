@@ -641,7 +641,8 @@ THEME_OPTIONS = {
     "violet": {"label": "Tím lavender", "color": "#B7A7F7"},
     "ocean": {"label": "Xanh biển", "color": "#63C5DA"},
     "amber": {"label": "Vàng hổ phách", "color": "#F5C16C"},
-    "olive_gray": {"label": "Xám olive", "color": "#A8A492"},
+    "olive_gray": {"label": "Xám olive", "color": "#A8A492"},    "steel_blue": {"label": "Xanh th\u00e9p", "color": "#3B7597"},
+
 }
 
 _THEME_REPLACEMENTS = {
@@ -686,7 +687,16 @@ _THEME_REPLACEMENTS = {
         "#fff0f6": "#F0EFE8", "#9b315f": "#59574D", "#765565": "#727066",
         "#f0d4df": "#DDDACE", "#4b2434": "#37362F", "#efc4d6": "#D0CDC0",
         "#d878a2": "#918D7B", "#aa527b": "#666356",
+    },    "steel_blue": {
+        "#fff7fa": "#F3F8FB", "#c46a93": "#3B7597", "#e38ab0": "#6FA6C5",
+        "#fff0f6": "#E3EFF5", "#9b315f": "#24536E", "#765565": "#59707D",
+        "#f0d4df": "#C9DDE8", "#4b2434": "#203D4D", "#8b6877": "#687B86",
+        "#a15b78": "#4B7890", "#fffafd": "#FAFCFD", "#f1d8e3": "#DCEAF0",
+        "#d798b5": "#77A2B8", "#ffe8f0": "#E5F1F6", "#efc4d6": "#BDD4E1",
+        "#d878a2": "#679AB5", "#70455a": "#3E6477", "#ffe5ef": "#E0EDF3",
+        "#dfa0ba": "#80ADC2", "#aa527b": "#2F6788",
     },
+
 }
 
 _THEME_SIDEBAR = {
@@ -695,7 +705,8 @@ _THEME_SIDEBAR = {
     "violet": ("#B7A7F7", "#30285A", "#9D8BE1"),
     "ocean": ("#63C5DA", "#163E49", "#4FAEC4"),
     "amber": ("#F5C16C", "#50370E", "#DEA549"),
-    "olive_gray": ("#A8A492", "#303029", "#918D7B"),
+    "olive_gray": ("#A8A492", "#303029", "#918D7B"),    "steel_blue": ("#3B7597", "#F5FAFC", "#5C92B1"),
+
 }
 
 
@@ -809,7 +820,17 @@ QLabel#SidebarFooter {{ color: {text}; }}
 """
     for color in _accent_colors(selected):
         stylesheet = stylesheet.replace(color, _adjust_color(color, normalized_strength))
+
+    # The original case-card status chip used a rose literal not present in every
+    # palette. Define the complete card accent at the end of the stylesheet so
+    # created cases always match the currently selected theme.
+    theme_values = _THEME_REPLACEMENTS.get(selected, {})
+    accent = _adjust_color(theme_values.get("#c46a93", "#c46a93"), normalized_strength)
+    card_text = _adjust_color(theme_values.get("#9b315f", "#9b315f"), normalized_strength)
+    stylesheet += f"""
+#CardHeader {{ background: {accent}; }}
+QLabel#StatusBadge {{ background: rgba(255, 255, 255, 0.88); color: {card_text}; }}
+"""
     if resolved_appearance_mode(appearance_mode, system_is_dark) == "dark":
-        accent = _adjust_color(_THEME_REPLACEMENTS.get(selected, {}).get("#c46a93", "#c46a93"), normalized_strength)
         stylesheet += _dark_stylesheet(accent)
     return stylesheet

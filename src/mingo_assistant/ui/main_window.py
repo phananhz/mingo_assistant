@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 from uuid import uuid4
 
-from PySide6.QtCore import Qt, QTimer, QUrl
+from PySide6.QtCore import Qt, QUrl
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -20,7 +20,6 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMainWindow,
     QMessageBox,
-    QProgressBar,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -318,7 +317,12 @@ class MainWindow(QMainWindow):
         except ValueError:
             current_strength = 100
         current_mode = current_settings.get("appearance_mode", "light")
-        dialog = SettingsDialog(current_theme, current_strength, current_mode)
+        dialog = SettingsDialog(
+            current_theme,
+            current_strength,
+            current_mode,
+            export_root=self.app_paths.documents_root,
+        )
         dialog.theme_preview_changed.connect(self._apply_theme_preview)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             self._apply_theme_preview(current_theme, current_strength, current_mode)
@@ -326,7 +330,18 @@ class MainWindow(QMainWindow):
         selected_theme = dialog.selected_theme()
         selected_strength = dialog.selected_strength()
         selected_mode = dialog.selected_appearance_mode()
-        save_settings(self.app_paths, {"theme": selected_theme, "theme_strength": str(selected_strength), "appearance_mode": selected_mode})
+        selected_export_root = dialog.selected_export_root()
+        selected_export_root.mkdir(parents=True, exist_ok=True)
+        self.app_paths.documents_root = selected_export_root
+        save_settings(
+            self.app_paths,
+            {
+                "theme": selected_theme,
+                "theme_strength": str(selected_strength),
+                "appearance_mode": selected_mode,
+                "export_root": str(selected_export_root),
+            },
+        )
 
     def _build_trash_page(self) -> QWidget:
         page = QWidget()
@@ -932,72 +947,21 @@ class MainWindow(QMainWindow):
         layout.setSpacing(10)
         layout.setAlignment(Qt.AlignCenter)
 
-        title = QLabel("C\u1ea7n 100.000 VND \u0111\u1ec3 m\u1edf kh\u00f3a")
+        title = QLabel("Ch\u1ee9c n\u0103ng n\u00e0y \u0111ang \u0111\u01b0\u1ee3c ph\u00e1t tri\u1ec3n")
         title.setObjectName("ComingSoonTitle")
         title.setAlignment(Qt.AlignCenter)
 
-        description = QLabel("M\u1ed9t kho\u1ea3n donate nho nh\u1ecf c\u00f3 th\u1ec3 gi\u00fap t\u00ednh n\u0103ng n\u00e0y... ti\u1ebfp t\u1ee5c n\u1eb1m y\u00ean trong roadmap.")
+        description = QLabel(
+            "T\u00ednh n\u0103ng n\u00e0y s\u1ebd \u0111\u01b0\u1ee3c b\u1ed5 sung trong c\u00e1c phi\u00ean b\u1ea3n s\u1eafp t\u1edbi."
+        )
         description.setObjectName("EmptyDescription")
         description.setAlignment(Qt.AlignCenter)
         description.setWordWrap(True)
         description.setMaximumWidth(520)
-
-        self.unlock_status_label = QLabel("S\u1eb5n s\u00e0ng x\u00e1c minh giao d\u1ecbch.")
-        self.unlock_status_label.setObjectName("EmptyDescription")
-        self.unlock_status_label.setAlignment(Qt.AlignCenter)
-        self.unlock_status_label.setVisible(False)
-
-        self.unlock_progress = QProgressBar()
-        self.unlock_progress.setRange(0, 100)
-        self.unlock_progress.setValue(0)
-        self.unlock_progress.setTextVisible(False)
-        self.unlock_progress.setFixedWidth(320)
-        self.unlock_progress.setVisible(False)
-
-        self.unlock_button = QPushButton("M\u1edf kh\u00f3a b\u1eb1ng 100.000 VND")
-        self.unlock_button.setObjectName("PrimaryButton")
-        self.unlock_button.setCursor(Qt.PointingHandCursor)
-        self.unlock_button.clicked.connect(self._start_unlock_simulation)
-
-        simulation_hint = QLabel("Nh\u1ea5n \u0111\u1ec3 b\u1eaft \u0111\u1ea7u x\u00e1c minh thanh to\u00e1n")
-        simulation_hint.setObjectName("EmptyDescription")
-        simulation_hint.setAlignment(Qt.AlignCenter)
-
         layout.addWidget(title)
         layout.addWidget(description)
-        layout.addSpacing(8)
-        layout.addWidget(self.unlock_status_label)
-        layout.addWidget(self.unlock_progress, 0, Qt.AlignCenter)
-        layout.addWidget(self.unlock_button, 0, Qt.AlignCenter)
-        layout.addWidget(simulation_hint)
         return page
 
-    def _start_unlock_simulation(self) -> None:
-        self.unlock_button.setEnabled(False)
-        self.unlock_button.setText("\u0110ang x\u00e1c minh...")
-        self.unlock_status_label.setVisible(True)
-        self.unlock_progress.setVisible(True)
-        self.unlock_progress.setValue(12)
-        self.unlock_status_label.setText("\u0110ang kh\u1edfi t\u1ea1o y\u00eau c\u1ea7u giao d\u1ecbch...")
-        QTimer.singleShot(650, lambda: self._update_unlock_progress(48, "\u0110ang \u0111\u1ed1i chi\u1ebfu giao d\u1ecbch v\u1edbi ng\u00e2n h\u00e0ng..."))
-        QTimer.singleShot(1450, lambda: self._update_unlock_progress(76, "\u0110ang ch\u1edd x\u00e1c nh\u1eadn t\u1eeb h\u1ec7 th\u1ed1ng..."))
-        QTimer.singleShot(2350, self._finish_unlock_simulation)
-
-    def _update_unlock_progress(self, value: int, message: str) -> None:
-        self.unlock_progress.setValue(value)
-        self.unlock_status_label.setText(message)
-
-    def _finish_unlock_simulation(self) -> None:
-        self.unlock_progress.setValue(100)
-        self.unlock_status_label.setText("Giao d\u1ecbch \u0111\u00e3 \u0111\u01b0\u1ee3c x\u00e1c minh.")
-        self.unlock_button.setText("\u0110\u00e3 x\u00e1c minh giao d\u1ecbch")
-        QTimer.singleShot(300, self._show_unlock_success)
-
-    def _show_unlock_success(self) -> None:
-        QMessageBox.information(self, "Thanh to\u00e1n th\u00e0nh c\u00f4ng", "\u0110\u00e3 x\u00e1c minh giao d\u1ecbch 100.000 VND.\n\nT\u00ednh n\u0103ng v\u1eabn \u0111ang \u0111\u01b0\u1ee3c ph\u00e1t tri\u1ec3n.")
-        QMessageBox.information(self, "C\u1ea3m \u01a1n b\u1ea1n", "C\u1ea3m \u01a1n b\u1ea1n \u0111\u00e3 donate. Y\u00eau c\u1ea7u m\u1edf kh\u00f3a t\u00ednh n\u0103ng \u0111\u00e3 \u0111\u01b0\u1ee3c ti\u1ebfp nh\u1eadn.")
-        self.unlock_button.setEnabled(True)
-        self.unlock_button.setText("M\u1edf kh\u00f3a th\u00eam l\u1ea7n n\u1eefa")
     def _open_new_business_case(self) -> None:
         self._open_case_workspace(None)
 
