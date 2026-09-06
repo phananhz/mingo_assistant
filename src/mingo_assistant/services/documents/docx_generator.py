@@ -253,7 +253,11 @@ class DocxTemplateGenerator:
         self._normalize_legal_representative_signature(document, docx_path.name, values)
         if not uses_highlighted_fields:
             self._replace_case_type_text(document, values)
-        self._replace_business_lines_tables_v2(document, values)
+        self._replace_business_lines_tables_v2(
+            document,
+            values,
+            keep_file1_business_line_numbers_on_one_line=docx_path.name.startswith("1."),
+        )
         self._replace_asset_contribution_tables(document, values)
         self._normalize_file1_financial_tables(document, docx_path.name)
         if not uses_highlighted_fields:
@@ -1346,7 +1350,13 @@ class DocxTemplateGenerator:
                 break
         return self.PROVINCE_AFTER_MERGER.get(normalized, text)
 
-    def _replace_business_lines_tables_v2(self, document: Document, values: dict[str, str]) -> None:
+    def _replace_business_lines_tables_v2(
+        self,
+        document: Document,
+        values: dict[str, str],
+        *,
+        keep_file1_business_line_numbers_on_one_line: bool = False,
+    ) -> None:
         business_lines = self._business_lines(values)
         for table in self._iter_tables(document):
             if not table.rows:
@@ -1364,7 +1374,13 @@ class DocxTemplateGenerator:
                 row_xml = deepcopy(source_row) if source_row is not None else self._new_business_line_row_xml_v2(widths)
                 self._strip_business_line_row_content_v2(row_xml)
                 table._tbl.append(row_xml)
-                self._write_business_line_row_v2(table.rows[-1], index, line, widths)
+                self._write_business_line_row_v2(
+                    table.rows[-1],
+                    index,
+                    line,
+                    widths,
+                    keep_stt_on_one_line=keep_file1_business_line_numbers_on_one_line,
+                )
 
     def _business_line_widths_v2(self, table) -> list[int]:
         widths = [int(column.get(qn("w:w")) or 0) for column in table._tbl.tblGrid.gridCol_lst[:4]]
@@ -1445,14 +1461,37 @@ class DocxTemplateGenerator:
             for element in tr_pr.findall(qn("w:trHeight")):
                 tr_pr.remove(element)
 
-    def _write_business_line_row_v2(self, row, index: int, line: dict[str, str | bool], widths: list[int]) -> None:
+    def _write_business_line_row_v2(
+        self,
+        row,
+        index: int,
+        line: dict[str, str | bool],
+        widths: list[int],
+        *,
+        keep_stt_on_one_line: bool = False,
+    ) -> None:
         self._remove_row_height_v2(row._tr)
-        self._write_business_line_cell_v2(row.cells[0], str(index), widths[0], "center")
+        self._write_business_line_cell_v2(
+            row.cells[0],
+            str(index),
+            widths[0],
+            "center",
+            no_wrap=keep_stt_on_one_line,
+        )
         self._write_business_line_cell_v2(row.cells[1], str(line["name"]), widths[1], "left")
         self._write_business_line_cell_v2(row.cells[2], str(line["code"]), widths[2], "center", bold=bool(line["is_main"]))
         self._write_business_line_cell_v2(row.cells[3], "X" if line["is_main"] else "", widths[3], "center", bold=bool(line["is_main"]))
 
-    def _write_business_line_cell_v2(self, cell, value: str, width: int, alignment: str, bold: bool = False) -> None:
+    def _write_business_line_cell_v2(
+        self,
+        cell,
+        value: str,
+        width: int,
+        alignment: str,
+        bold: bool = False,
+        *,
+        no_wrap: bool = False,
+    ) -> None:
         """Replace text while retaining the paragraph spacing from the template row."""
         tc = cell._tc
         tc_pr = tc.get_or_add_tcPr()
@@ -1467,6 +1506,10 @@ class DocxTemplateGenerator:
             v_align = OxmlElement("w:vAlign")
             tc_pr.append(v_align)
         v_align.set(qn("w:val"), "center")
+        if no_wrap:
+            no_wrap_element = tc_pr.find(qn("w:noWrap"))
+            if no_wrap_element is None:
+                tc_pr.append(OxmlElement("w:noWrap"))
 
         source_paragraph = next((child for child in tc if child.tag == qn("w:p")), None)
         source_p_pr = deepcopy(source_paragraph.find(qn("w:pPr"))) if source_paragraph is not None else None
@@ -1483,9 +1526,14 @@ class DocxTemplateGenerator:
         p_pr = source_p_pr if source_p_pr is not None else OxmlElement("w:pPr")
         for justification in p_pr.findall(qn("w:jc")):
             p_pr.remove(justification)
-        if alignment == "left":
+        if alignment == "left" or no_wrap:
+            # Some legacy file-1 sample rows carry an indentation intended for
+            # a single digit. It reduces the usable width enough for 10, 11,
+            # ... to split vertically. The STT cell owns its full width.
             for indentation in p_pr.findall(qn("w:ind")):
                 p_pr.remove(indentation)
+            for tab_stops in p_pr.findall(qn("w:tabs")):
+                p_pr.remove(tab_stops)
         justification = OxmlElement("w:jc")
         justification.set(qn("w:val"), alignment)
         p_pr.append(justification)
@@ -1859,9 +1907,18 @@ class DocxTemplateGenerator:
         digits = re.sub(r"\D", "", str(value or ""))
         return int(digits) if digits else 0
 
+    @staticmethod
+    def _business_line_indices(values: dict[str, str]) -> list[int]:
+        indices = {
+            int(match.group(1))
+            for key in values
+            if (match := re.match(r"^business_line_(\d+)_(?:name|detail|code|is_main)$", key))
+        }
+        return sorted(index for index in indices if index > 0)
+
     def _business_lines(self, values: dict[str, str]) -> list[dict[str, str | bool]]:
         lines: list[dict[str, str | bool]] = []
-        for index in range(1, 11):
+        for index in self._business_line_indices(values):
             name = self._normalize_business_line_text(values.get(f"business_line_{index}_name", ""))
             detail = self._normalize_business_line_text(values.get(f"business_line_{index}_detail", ""))
             if detail:

@@ -1,3 +1,3 @@
 """Mingo Assistant desktop application."""
 
-__version__ = "2026.09.04.7"
+__version__ = "2026.09.06.12"

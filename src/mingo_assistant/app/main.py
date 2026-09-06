@@ -1,11 +1,12 @@
 import sys
 from pathlib import Path
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from mingo_assistant.app.paths import get_app_paths, load_settings, save_settings
 from mingo_assistant.ui.main_window import MainWindow
-from mingo_assistant.ui.styles import APP_STYLESHEET
+from mingo_assistant.ui.styles import stylesheet_for_theme
 from mingo_assistant.ui.dialogs.storage_location_dialog import StorageLocationDialog
 from mingo_assistant.ui.splash_screen import show_startup_splash
 
@@ -31,10 +32,15 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("Mingo Assistant")
     app.setOrganizationName("Mingo Assistant")
-    app.setStyleSheet(APP_STYLESHEET)
-
     paths = get_app_paths()
     paths.ensure_user_dirs()
+    settings = load_settings(paths)
+    system_is_dark = False
+    try:
+        system_is_dark = app.styleHints().colorScheme() == Qt.ColorScheme.Dark
+    except AttributeError:
+        pass
+    app.setStyleSheet(stylesheet_for_theme(settings.get("theme", "rose"), settings.get("theme_strength", "100"), settings.get("appearance_mode", "light"), system_is_dark))
     window = MainWindow(app_paths=paths)
     show_startup_splash(app, window)
     _prepare_storage_location(paths)

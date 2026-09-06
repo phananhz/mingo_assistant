@@ -1,6 +1,7 @@
 import unittest
 
 from docx import Document
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.shared import Pt
 
 from mingo_assistant.services.documents.docx_generator import DocxTemplateGenerator
@@ -196,6 +197,54 @@ class BusinessRegistrationRegressionTest(unittest.TestCase):
 
         self.assertEqual(values["applicant_phone"], "0986602511")
         self.assertEqual(values["applicant_email"], "ngocduonghong21@gmail.com")
+
+    def test_document_generation_keeps_business_lines_beyond_ten(self) -> None:
+        generator = DocxTemplateGenerator.__new__(DocxTemplateGenerator)
+        values = {
+            "business_line_1_name": "Ngành đầu tiên",
+            "business_line_1_code": "1000",
+            "business_line_11_name": "Ngành thứ mười một",
+            "business_line_11_code": "8569",
+        }
+
+        lines = generator._business_lines(values)
+
+        self.assertEqual([line["code"] for line in lines], ["1000", "8569"])
+        self.assertEqual(lines[-1]["name"], "Ngành thứ mười một")
+
+    def test_file1_business_line_stt_is_centered_and_does_not_wrap_after_nine(self) -> None:
+        document = Document()
+        table = document.add_table(rows=2, cols=4)
+        table.rows[0].cells[0].text = "STT"
+        table.rows[0].cells[1].text = "Ten nganh"
+        table.rows[0].cells[2].text = "Ma nganh"
+        table.rows[0].cells[3].text = "Nganh chinh"
+        table.rows[1].cells[0].paragraphs[0].paragraph_format.left_indent = Pt(24)
+        generator = DocxTemplateGenerator.__new__(DocxTemplateGenerator)
+        values = {
+            f"business_line_{index}_name": f"Nganh {index}"
+            for index in range(1, 11)
+        }
+        values.update(
+            {
+                f"business_line_{index}_code": f"{index:04d}"
+                for index in range(1, 11)
+            }
+        )
+
+        generator._replace_business_lines_tables_v2(
+            document,
+            values,
+            keep_file1_business_line_numbers_on_one_line=True,
+        )
+
+        stt_cell = table.rows[10].cells[0]
+        paragraph = stt_cell.paragraphs[0]
+        self.assertEqual(stt_cell.text, "10")
+        self.assertEqual(len(paragraph.runs), 1)
+        self.assertEqual(paragraph.alignment, WD_ALIGN_PARAGRAPH.CENTER)
+        self.assertIsNone(paragraph.paragraph_format.left_indent)
+        self.assertIn("w:noWrap", stt_cell._tc.xml)
 
     def test_legacy_province_address_is_converted_from_administrative_data(self) -> None:
         result = AddressParser().parse(

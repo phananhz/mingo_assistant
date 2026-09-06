@@ -8,6 +8,7 @@ from uuid import uuid4
 from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QDialog,
     QDialogButtonBox,
     QGroupBox,
@@ -34,10 +35,12 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import QDesktopServices, QFontMetrics
 
 from mingo_assistant import __version__
-from mingo_assistant.app.paths import AppPaths, get_app_paths
+from mingo_assistant.app.paths import AppPaths, get_app_paths, load_settings, save_settings
 from mingo_assistant.models.case import CaseSummary
 from mingo_assistant.repositories.case_repository import CaseRepository
 from mingo_assistant.services.business_lines.industry_lookup import IndustryCatalog, IndustryRow
+from mingo_assistant.ui.dialogs.settings_dialog import SettingsDialog
+from mingo_assistant.ui.styles import stylesheet_for_theme
 from mingo_assistant.ui.views.business_registration_documents import BusinessRegistrationDocumentsView
 from mingo_assistant.ui.views.business_registration_workspace import BusinessRegistrationWorkspace
 from mingo_assistant.ui.widgets.combo_box import NoWheelComboBox
@@ -119,6 +122,7 @@ class MainWindow(QMainWindow):
         self.authorized_person_fields: dict[str, QLineEdit | QTextEdit] = {}
         self.authorized_person_cards_layout: QGridLayout | None = None
         self.authorized_person_save_button: QPushButton | None = None
+        self._last_applied_theme: tuple[str, int, str, bool] | None = None
 
         self.search_input = QLineEdit()
         self.case_type_filter = NoWheelComboBox()
@@ -181,7 +185,8 @@ class MainWindow(QMainWindow):
         layout.addStretch(1)
 
         footer = QLabel("Dữ liệu lưu cục bộ trên máy")
-        footer.setStyleSheet("color: #fff0f6; font-size: 12px;")
+        footer.setObjectName("SidebarFooter")
+        footer.setStyleSheet("font-size: 12px;")
         layout.addWidget(footer)
 
         return sidebar
@@ -226,6 +231,7 @@ class MainWindow(QMainWindow):
 
     def _build_business_registration_page(self) -> QWidget:
         page = QWidget()
+        page.setObjectName("BusinessCasesPage")
         layout = QVBoxLayout(page)
         layout.setContentsMargins(24, 22, 24, 22)
         layout.setSpacing(18)
@@ -252,7 +258,15 @@ class MainWindow(QMainWindow):
         authorized_person_button.setCursor(Qt.PointingHandCursor)
         authorized_person_button.clicked.connect(self._open_authorized_person_manager)
 
+        settings_button = QPushButton("⚙")
+        settings_button.setObjectName("SettingsButton")
+        settings_button.setToolTip("Cài đặt ứng dụng")
+        settings_button.setAccessibleName("Cài đặt ứng dụng")
+        settings_button.setCursor(Qt.PointingHandCursor)
+        settings_button.clicked.connect(self._open_settings)
+
         header.addLayout(header_text, 1)
+        header.addWidget(settings_button, 0, Qt.AlignTop)
         header.addWidget(authorized_person_button, 0, Qt.AlignTop)
         header.addWidget(create_button, 0, Qt.AlignTop)
         layout.addLayout(header)
@@ -263,6 +277,8 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.result_text)
 
         self.cards_scroll = QScrollArea()
+        self.cards_scroll.setObjectName("CaseCardsScroll")
+        self.cards_container.setObjectName("CaseCardsContainer")
         self.cards_scroll.setWidgetResizable(True)
         self.cards_scroll.setFrameShape(QFrame.NoFrame)
         self.cards_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -275,6 +291,42 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.cards_scroll, 1)
 
         return page
+
+    def _apply_theme_preview(self, theme_id: str, strength: int = 100, appearance_mode: str = "light") -> None:
+        app = QApplication.instance()
+        if app is None:
+            return
+        system_is_dark = self._system_prefers_dark(app)
+        key = (theme_id, int(strength), appearance_mode, system_is_dark)
+        if key == self._last_applied_theme:
+            return
+        self._last_applied_theme = key
+        app.setStyleSheet(stylesheet_for_theme(*key))
+
+    @staticmethod
+    def _system_prefers_dark(app: QApplication) -> bool:
+        try:
+            return app.styleHints().colorScheme() == Qt.ColorScheme.Dark
+        except AttributeError:
+            return False
+
+    def _open_settings(self) -> None:
+        current_settings = load_settings(self.app_paths)
+        current_theme = current_settings.get("theme", "rose")
+        try:
+            current_strength = int(current_settings.get("theme_strength", "100"))
+        except ValueError:
+            current_strength = 100
+        current_mode = current_settings.get("appearance_mode", "light")
+        dialog = SettingsDialog(current_theme, current_strength, current_mode)
+        dialog.theme_preview_changed.connect(self._apply_theme_preview)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            self._apply_theme_preview(current_theme, current_strength, current_mode)
+            return
+        selected_theme = dialog.selected_theme()
+        selected_strength = dialog.selected_strength()
+        selected_mode = dialog.selected_appearance_mode()
+        save_settings(self.app_paths, {"theme": selected_theme, "theme_strength": str(selected_strength), "appearance_mode": selected_mode})
 
     def _build_trash_page(self) -> QWidget:
         page = QWidget()

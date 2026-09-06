@@ -350,8 +350,10 @@ class BusinessRegistrationWorkspace(QWidget):
         self.people_list_layout.setContentsMargins(0, 0, 0, 0)
         self.people_list_layout.setSpacing(8)
         self.people_list_widget = QWidget()
+        self.people_list_widget.setObjectName("PeopleListContainer")
         self.people_list_widget.setLayout(self.people_list_layout)
         self.people_list_scroll = QScrollArea()
+        self.people_list_scroll.setObjectName("PeopleListScroll")
         self.add_person_button = QPushButton("+ Thêm người")
         self.form_nav_layout = QHBoxLayout()
         self.form_stack = QStackedWidget()
@@ -369,10 +371,12 @@ class BusinessRegistrationWorkspace(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
 
         scroll = QScrollArea()
+        scroll.setObjectName("BusinessWorkspaceScroll")
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
 
         page = QWidget()
+        page.setObjectName("BusinessWorkspacePage")
         layout = QVBoxLayout(page)
         layout.setContentsMargins(24, 22, 24, 22)
         layout.setSpacing(16)
@@ -1691,9 +1695,8 @@ class BusinessRegistrationWorkspace(QWidget):
             QMessageBox.warning(self, "Mã ngành nghề đã tồn tại", f"Đã có mã ngành nghề này trong danh sách: {code}.")
             return
         target_index = self._first_available_business_line_index()
-        if target_index is None:
-            QMessageBox.information(self, "Đã đủ ngành nghề", "Hiện form đang hỗ trợ tối đa 10 ngành nghề trong một hồ sơ.")
-            return
+        if target_index > len(self.business_line_rows):
+            self._append_business_line_row(visible=True)
         business_row = self.business_line_rows[target_index - 1]
         business_row.name_field.setText(self._industry_row_form_text(row))
         business_row.detail_field.clear()
@@ -1716,13 +1719,13 @@ class BusinessRegistrationWorkspace(QWidget):
         code = self.business_line_rows[index - 1].code_field.text()
         if self._has_duplicate_business_line_code(code, excluded_index=index):
             QMessageBox.warning(self, "Mã ngành nghề đã tồn tại", f"Đã có mã ngành nghề này trong danh sách: {code.strip()}.")
-    def _first_available_business_line_index(self) -> int | None:
+    def _first_available_business_line_index(self) -> int:
         for index, row in enumerate(self.business_line_rows, start=1):
             if row.cells[0].isHidden():
                 return index
             if not row.name_field.text().strip() and not row.detail_field.toPlainText().strip() and not row.code_field.text().strip():
                 return index
-        return None
+        return len(self.business_line_rows) + 1
 
     def _industry_row_code(self, row: IndustryRow) -> str:
         # Ho so dang ky doanh nghiep chi su dung ma nganh cap 4.
@@ -1812,12 +1815,20 @@ class BusinessRegistrationWorkspace(QWidget):
             cell_layout.addWidget(widget, 1)
         return cell
 
+    def _append_business_line_row(self, visible: bool) -> None:
+        if self.business_line_table is None:
+            return
+        layout = self.business_line_table.layout()
+        if not isinstance(layout, QGridLayout):
+            return
+        self._add_business_line_row(layout, len(self.business_line_rows) + 1, visible=visible)
+
     def _show_next_business_line_row(self) -> None:
         for index, row in enumerate(self.business_line_rows, start=1):
             if row.cells[0].isHidden():
                 self._set_business_line_row_visible(index, True)
                 return
-        QMessageBox.information(self, "Đã đủ ngành nghề", "Hiện form đang hỗ trợ tối đa 10 ngành nghề trong một hồ sơ.")
+        self._append_business_line_row(visible=True)
 
     def _delete_business_line_row(self, index: int) -> None:
         row = self.business_line_rows[index - 1]
@@ -2466,7 +2477,19 @@ class BusinessRegistrationWorkspace(QWidget):
         self._refresh_people_buttons()
         self._refresh_selected_person_images()
 
+    @staticmethod
+    def _business_line_indices(values: dict[str, str]) -> list[int]:
+        indices = {
+            int(match.group(1))
+            for key in values
+            if (match := re.match(r"^business_line_(\d+)_(?:name|detail|code|is_main)$", key))
+        }
+        return sorted(index for index in indices if index > 0)
+
     def _restore_business_lines(self, values: dict[str, str]) -> None:
+        saved_indices = self._business_line_indices(values)
+        while saved_indices and len(self.business_line_rows) < saved_indices[-1]:
+            self._append_business_line_row(visible=False)
         for index, row in enumerate(self.business_line_rows, start=1):
             name = values.get(f"business_line_{index}_name", "")
             detail = values.get(f"business_line_{index}_detail", "")
@@ -3610,7 +3633,7 @@ class BusinessRegistrationWorkspace(QWidget):
         completed_prefix = chr(0x2713) + " "
         for title, button in self.form_nav_buttons.items():
             if title == "Ngành nghề kinh doanh":
-                complete = any(values.get(f"business_line_{index}_name", "").strip() and values.get(f"business_line_{index}_code", "").strip() for index in range(1, 11))
+                complete = any(values.get(f"business_line_{index}_name", "").strip() and values.get(f"business_line_{index}_code", "").strip() for index in self._business_line_indices(values))
             else:
                 fields = requirements.get(title, ())
                 complete = bool(fields) and all(values.get(field, "").strip() for field in fields)
@@ -3835,7 +3858,7 @@ class BusinessRegistrationWorkspace(QWidget):
 
     def _business_lines_summary(self, values: dict[str, str]) -> str:
         lines = []
-        for index in range(1, 11):
+        for index in self._business_line_indices(values):
             name = self._normalize_business_line_text(values.get(f"business_line_{index}_name", ""))
             code = values.get(f"business_line_{index}_code", "").strip()
             if not name and not code:
@@ -3942,11 +3965,12 @@ class BusinessRegistrationWorkspace(QWidget):
 
     def _validation_issues(self, values: dict[str, str]) -> list[str]:
         issues = self._missing_required_fields(values)
-        if not any(values.get(f"business_line_{index}_name", "").strip() for index in range(1, 11)):
+        business_line_indices = self._business_line_indices(values)
+        if not any(values.get(f"business_line_{index}_name", "").strip() for index in business_line_indices):
             issues.append("Ít nhất 1 ngành nghề kinh doanh")
-        if not any(values.get(f"business_line_{index}_is_main", "").strip() for index in range(1, 11)):
+        if not any(values.get(f"business_line_{index}_is_main", "").strip() for index in business_line_indices):
             issues.append("Chọn 1 ngành nghề chính")
-        for index in range(1, 11):
+        for index in business_line_indices:
             name = values.get(f"business_line_{index}_name", "").strip()
             code = values.get(f"business_line_{index}_code", "").strip()
             if name and len(re.sub(r"\D", "", code)) != 4:
