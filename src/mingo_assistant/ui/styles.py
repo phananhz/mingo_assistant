@@ -23,6 +23,13 @@ QMainWindow {
     letter-spacing: 0px;
 }
 
+#TopNavBrand {
+    color: #c46a93;
+    font-size: 14px;
+    font-weight: 900;
+    letter-spacing: 0.8px;
+}
+
 #AppTitle {
     color: #ffffff;
     font-size: 20px;
@@ -1106,7 +1113,7 @@ QSlider::handle:horizontal {{ background: #1A1C1F; border-color: {accent}; }}
 """
 
 
-def _layout_stylesheet(layout: str, accent: str, is_dark: bool) -> str:
+def _layout_stylesheet(layout: str, accent: str, is_dark: bool, sidebar_bg: str | None = None) -> str:
     border_col = "#2E3440" if is_dark else "#E2E8F0"
     card_bg = "#24272C" if is_dark else "#FFFFFF"
     subtle_bg = "#1E2227" if is_dark else "#F8FAFC"
@@ -1114,8 +1121,8 @@ def _layout_stylesheet(layout: str, accent: str, is_dark: bool) -> str:
     text_muted = "#94A3B8" if is_dark else "#64748B"
 
     if layout == "modern_studio":
-        sidebar_bg = "#181A1F" if is_dark else "#F3F5F8"
-        sidebar_text = "#D1D5DB" if is_dark else "#334155"
+        bar_bg = "#181A1F" if is_dark else "#F3F5F8"
+        bar_text = "#D1D5DB" if is_dark else "#334155"
         return f"""
 /* Modern Studio IDE Layout */
 QFrame#GlobalTopbar {{
@@ -1125,12 +1132,12 @@ QFrame#GlobalTopbar {{
     max-height: 48px;
 }}
 QFrame#Sidebar {{
-    background: {sidebar_bg};
+    background: {bar_bg};
     border-right: 1px solid {border_col};
 }}
-#AppEyebrow, #AppTitle, QLabel#SidebarFooter {{ color: {sidebar_text}; }}
+#AppEyebrow, #AppTitle, QLabel#SidebarFooter {{ color: {bar_text}; }}
 QPushButton#NavButton {{
-    color: {sidebar_text};
+    color: {bar_text};
     border-radius: 6px;
     padding: 9px 12px;
     margin: 1px 6px;
@@ -1145,81 +1152,71 @@ QPushButton#NavButton[active="true"] {{
     font-weight: 700;
 }}
 #Card {{
-    border-radius: 8px;
+    border-radius: 10px;
     border: 1px solid {border_col};
-}}
-#CardHeader {{
-    border-top-left-radius: 8px;
-    border-top-right-radius: 8px;
-}}
-QPushButton#PrimaryButton, QPushButton#GhostButton {{
-    border-radius: 6px;
 }}
 """
     elif layout == "top_nav":
+        nav_bg = "#181A1F" if is_dark else "#FFFFFF"
+        nav_text = "#94A3B8" if is_dark else "#475569"
+        brand_color = text_primary
         return f"""
 /* Top Navigation Horizon Layout */
-QFrame#TopNavContainer {{
-    background: {card_bg};
+QFrame#TopNavBar {{
+    background: {nav_bg};
     border-bottom: 1px solid {border_col};
     min-height: 52px;
     max-height: 52px;
-    padding: 0 16px;
+}}
+QLabel#TopNavBrand {{
+    color: {brand_color};
+    font-weight: 800;
+    font-size: 15px;
 }}
 QPushButton#TopNavButton {{
     background: transparent;
     border: none;
-    border-bottom: 3px solid transparent;
-    color: {text_muted};
-    font-weight: 600;
+    border-radius: 8px;
+    padding: 6px 14px;
     font-size: 13px;
-    padding: 12px 14px;
-    border-radius: 0px;
+    font-weight: 600;
+    color: {nav_text};
 }}
 QPushButton#TopNavButton:hover {{
-    color: {text_primary};
     background: {subtle_bg};
+    color: {text_primary};
 }}
 QPushButton#TopNavButton[active="true"] {{
-    color: {accent};
-    border-bottom: 3px solid {accent};
-    font-weight: 700;
+    background: {accent};
+    color: #FFFFFF;
 }}
 #Card {{
-    border-radius: 10px;
+    border-radius: 12px;
     border: 1px solid {border_col};
-}}
-#CardHeader {{
-    border-top-left-radius: 10px;
-    border-top-right-radius: 10px;
 }}
 """
     elif layout == "executive":
         return f"""
 /* Executive KPI Dashboard Layout */
-QFrame#KpiCard {{
+QFrame#KPICard {{
     background: {card_bg};
     border: 1px solid {border_col};
     border-radius: 10px;
-    padding: 10px 16px;
+    padding: 10px 14px;
 }}
-QFrame#KpiCard:hover {{
+QFrame#KPICard:hover {{
     border-color: {accent};
 }}
-QLabel#KpiValue {{
+QLabel#KPIValue {{
     font-size: 22px;
     font-weight: 800;
     color: {accent};
 }}
-QLabel#KpiLabel {{
+QLabel#KPILabel {{
     font-size: 11px;
-    font-weight: 700;
+    font-weight: 600;
     color: {text_muted};
     text-transform: uppercase;
-    letter-spacing: 0.5px;
-}}
-QLabel#KpiIcon {{
-    font-size: 20px;
 }}
 #Card {{
     border-radius: 10px;
@@ -1228,73 +1225,80 @@ QLabel#KpiIcon {{
 """
     elif layout == "compact_legal":
         return f"""
-/* Compact Legal Master-Detail Layout */
-QFrame#Sidebar {{ width: 200px; }}
-QPushButton#NavButton {{ padding: 7px 10px; font-size: 12.5px; }}
+/* Compact Legal 2-Column Layout */
+QFrame#Sidebar {{
+    min-width: 190px;
+    max-width: 190px;
+}}
+QPushButton#NavButton {{
+    padding: 7px 10px;
+    font-size: 12px;
+}}
 QFrame#DetailPreviewPanel {{
     background: {card_bg};
+    border-left: 1px solid {border_col};
+    min-width: 320px;
+    max-width: 380px;
+}}
+QFrame#DetailSectionBox {{
+    background: {subtle_bg};
     border: 1px solid {border_col};
-    border-radius: 10px;
-    padding: 16px;
-}}
-QLabel#DetailTitle {{
-    font-size: 16px;
-    font-weight: 800;
-    color: {accent};
-}}
-QLabel#DetailMetaLabel {{
-    font-size: 11px;
-    font-weight: 700;
-    color: {text_muted};
-    text-transform: uppercase;
-}}
-QLabel#DetailMetaValue {{
-    font-size: 12.5px;
-    color: {text_primary};
-}}
-#Card {{
-    border-radius: 6px;
-    border: 1px solid {border_col};
-}}
-#CardHeader {{
-    border-top-left-radius: 6px;
-    border-top-right-radius: 6px;
-    min-height: 80px;
-    max-height: 80px;
-}}
-QPushButton#PrimaryButton, QPushButton#GhostButton, QLineEdit, QComboBox {{
     border-radius: 5px;
     padding: 6px 10px;
 }}
 """
     elif layout == "slim_sidebar":
+        slim_bg = "#16181D" if is_dark else (sidebar_bg if sidebar_bg else accent)
+        logo_bg = "rgba(255, 255, 255, 0.12)" if is_dark else "rgba(255, 255, 255, 0.25)"
+        logo_border = "rgba(255, 255, 255, 0.18)" if is_dark else "rgba(255, 255, 255, 0.35)"
+        btn_color = "#94A3B8" if is_dark else "rgba(255, 255, 255, 0.9)"
+        btn_hover_bg = "rgba(255, 255, 255, 0.1)" if is_dark else "rgba(255, 255, 255, 0.22)"
+        btn_hover_color = "#FFFFFF"
+        btn_active_bg = accent if is_dark else "#FFFFFF"
+        btn_active_color = "#FFFFFF" if is_dark else accent
+        border_right_col = "#252932" if is_dark else "rgba(0, 0, 0, 0.08)"
+
         return f"""
 /* Slim Icon Bar Layout */
 QFrame#SlimSidebar {{
-    background: {"#181A1F" if is_dark else "#FFFFFF"};
-    border-right: 1px solid {border_col};
-    min-width: 60px;
-    max-width: 60px;
+    background: {slim_bg};
+    border-right: 1px solid {border_right_col};
+    min-width: 64px;
+    max-width: 64px;
 }}
-QPushButton#SlimNavButton {{
-    background: transparent;
-    border: none;
-    border-radius: 8px;
+QLabel#SlimSidebarLogo {{
+    background: {logo_bg};
+    color: #FFFFFF;
+    font-size: 20px;
+    font-weight: 900;
+    border-radius: 12px;
+    border: 1px solid {logo_border};
     min-width: 42px;
     max-width: 42px;
     min-height: 42px;
     max-height: 42px;
-    font-size: 18px;
-    color: {text_muted};
-    margin: 2px auto;
+}}
+QPushButton#SlimNavButton {{
+    background: transparent;
+    border: none;
+    border-radius: 10px;
+    min-width: 42px;
+    max-width: 42px;
+    min-height: 42px;
+    max-height: 42px;
+    font-size: 19px;
+    color: {btn_color};
+    padding: 0px;
+    margin: 2px 0px;
 }}
 QPushButton#SlimNavButton:hover {{
-    background: {subtle_bg};
-    color: {text_primary};
+    background: {btn_hover_bg};
+    color: {btn_hover_color};
 }}
 QPushButton#SlimNavButton[active="true"] {{
-    background: {accent};
-    color: #FFFFFF;
+    background: {btn_active_bg};
+    color: {btn_active_color};
+    font-weight: bold;
 }}
 #Card {{
     border-radius: 10px;
@@ -1470,7 +1474,8 @@ QLabel#StatusBadge {{ background: rgba(255, 255, 255, 0.88); color: {card_text};
 
     # Layout specific overrides
     normalized_layout = layout or "default"
-    layout_css = _layout_stylesheet(normalized_layout, theme_accent, is_dark)
+    current_sidebar_bg = "#181A1F" if is_dark else (sidebar[0] if sidebar else theme_accent)
+    layout_css = _layout_stylesheet(normalized_layout, theme_accent, is_dark, current_sidebar_bg)
     if layout_css:
         stylesheet += layout_css
 

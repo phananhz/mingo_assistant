@@ -205,12 +205,6 @@ class MainWindow(QMainWindow):
         search_quick.textChanged.connect(lambda text: self.search_input.setText(text))
         layout.addWidget(search_quick)
 
-        quick_create = QPushButton("+ Tạo mới")
-        quick_create.setObjectName("PrimaryButton")
-        quick_create.setCursor(Qt.PointingHandCursor)
-        quick_create.clicked.connect(self._open_new_business_case)
-        layout.addWidget(quick_create)
-
         quick_settings = QPushButton("⚙")
         quick_settings.setObjectName("SettingsButton")
         quick_settings.setCursor(Qt.PointingHandCursor)
@@ -224,17 +218,24 @@ class MainWindow(QMainWindow):
         bar = QFrame()
         bar.setObjectName("TopNavContainer")
         layout = QHBoxLayout(bar)
-        layout.setContentsMargins(18, 0, 18, 0)
-        layout.setSpacing(10)
+        layout.setContentsMargins(20, 0, 20, 0)
+        layout.setSpacing(8)
 
         brand = QLabel("MINGO ASSISTANT")
-        brand.setObjectName("AppEyebrow")
-        brand.setStyleSheet("font-size: 13px; font-weight: 800;")
+        brand.setObjectName("TopNavBrand")
         layout.addWidget(brand)
-        layout.addSpacing(14)
+        layout.addSpacing(12)
+
+        nav_labels = {
+            "business_registration": "Hồ sơ thành lập",
+            "industry_lookup": "Tra cứu ngành nghề",
+            "trash": "Thùng rác",
+            "capital_change": "Thay đổi vốn",
+        }
 
         for key, label in NAV_ITEMS[:4]:
-            btn = QPushButton(label)
+            display_label = nav_labels.get(key, label)
+            btn = QPushButton(display_label)
             btn.setObjectName("TopNavButton")
             btn.setCursor(Qt.PointingHandCursor)
             btn.clicked.connect(lambda checked=False, item_key=key: self._select_nav(item_key))
@@ -243,16 +244,10 @@ class MainWindow(QMainWindow):
 
         layout.addStretch(1)
 
-        create_btn = QPushButton("+ Tạo hồ sơ mới")
-        create_btn.setObjectName("PrimaryButton")
-        create_btn.setCursor(Qt.PointingHandCursor)
-        create_btn.clicked.connect(self._open_new_business_case)
-        layout.addWidget(create_btn)
-
         settings_btn = QPushButton("⚙")
         settings_btn.setObjectName("SettingsButton")
         settings_btn.setCursor(Qt.PointingHandCursor)
-        settings_btn.setToolTip("Cài đặt")
+        settings_btn.setToolTip("Cài đặt ứng dụng")
         settings_btn.clicked.connect(self._open_settings)
         layout.addWidget(settings_btn)
 
@@ -261,16 +256,19 @@ class MainWindow(QMainWindow):
     def _build_slim_sidebar(self) -> QWidget:
         sidebar = QFrame()
         sidebar.setObjectName("SlimSidebar")
-        sidebar.setFixedWidth(60)
+        sidebar.setFixedWidth(64)
 
         layout = QVBoxLayout(sidebar)
-        layout.setContentsMargins(8, 12, 8, 16)
-        layout.setSpacing(8)
+        layout.setContentsMargins(0, 14, 0, 16)
+        layout.setSpacing(6)
+        layout.setAlignment(Qt.AlignHCenter)
 
         logo = QLabel("M")
+        logo.setObjectName("SlimSidebarLogo")
         logo.setAlignment(Qt.AlignCenter)
-        logo.setStyleSheet("font-size: 20px; font-weight: 900; padding: 4px 0 10px;")
-        layout.addWidget(logo)
+        logo.setFixedSize(42, 42)
+        layout.addWidget(logo, 0, Qt.AlignHCenter)
+        layout.addSpacing(6)
 
         icons = {
             "business_registration": "📁",
@@ -290,9 +288,10 @@ class MainWindow(QMainWindow):
             btn.setObjectName("SlimNavButton")
             btn.setToolTip(label)
             btn.setCursor(Qt.PointingHandCursor)
+            btn.setFixedSize(42, 42)
             btn.clicked.connect(lambda checked=False, item_key=key: self._select_nav(item_key))
             self.slim_nav_buttons[key] = btn
-            layout.addWidget(btn)
+            layout.addWidget(btn, 0, Qt.AlignHCenter)
 
         layout.addStretch(1)
 
@@ -300,8 +299,9 @@ class MainWindow(QMainWindow):
         settings_btn.setObjectName("SlimNavButton")
         settings_btn.setToolTip("Cài đặt")
         settings_btn.setCursor(Qt.PointingHandCursor)
+        settings_btn.setFixedSize(42, 42)
         settings_btn.clicked.connect(self._open_settings)
-        layout.addWidget(settings_btn)
+        layout.addWidget(settings_btn, 0, Qt.AlignHCenter)
 
         return sidebar
 
@@ -409,27 +409,27 @@ class MainWindow(QMainWindow):
         header_text.addWidget(title)
         header_text.addWidget(description)
 
-        create_button = QPushButton("+ Tạo hồ sơ mới")
-        create_button.setObjectName("PrimaryButton")
-        create_button.setCursor(Qt.PointingHandCursor)
-        create_button.clicked.connect(self._open_new_business_case)
+        self.business_create_button = QPushButton("+ Tạo hồ sơ mới")
+        self.business_create_button.setObjectName("PrimaryButton")
+        self.business_create_button.setCursor(Qt.PointingHandCursor)
+        self.business_create_button.clicked.connect(self._open_new_business_case)
 
-        authorized_person_button = QPushButton("Thông tin người ủy quyền")
-        authorized_person_button.setObjectName("GhostButton")
-        authorized_person_button.setCursor(Qt.PointingHandCursor)
-        authorized_person_button.clicked.connect(self._open_authorized_person_manager)
+        self.business_authorized_person_button = QPushButton("Thông tin người ủy quyền")
+        self.business_authorized_person_button.setObjectName("GhostButton")
+        self.business_authorized_person_button.setCursor(Qt.PointingHandCursor)
+        self.business_authorized_person_button.clicked.connect(self._open_authorized_person_manager)
 
-        settings_button = QPushButton("⚙")
-        settings_button.setObjectName("SettingsButton")
-        settings_button.setToolTip("Cài đặt ứng dụng")
-        settings_button.setAccessibleName("Cài đặt ứng dụng")
-        settings_button.setCursor(Qt.PointingHandCursor)
-        settings_button.clicked.connect(self._open_settings)
+        self.business_settings_button = QPushButton("⚙")
+        self.business_settings_button.setObjectName("SettingsButton")
+        self.business_settings_button.setToolTip("Cài đặt ứng dụng")
+        self.business_settings_button.setAccessibleName("Cài đặt ứng dụng")
+        self.business_settings_button.setCursor(Qt.PointingHandCursor)
+        self.business_settings_button.clicked.connect(self._open_settings)
 
         header.addLayout(header_text, 1)
-        header.addWidget(settings_button, 0, Qt.AlignTop)
-        header.addWidget(authorized_person_button, 0, Qt.AlignTop)
-        header.addWidget(create_button, 0, Qt.AlignTop)
+        header.addWidget(self.business_settings_button, 0, Qt.AlignTop)
+        header.addWidget(self.business_authorized_person_button, 0, Qt.AlignTop)
+        header.addWidget(self.business_create_button, 0, Qt.AlignTop)
         layout.addLayout(header)
 
         # KPI Row (for executive layout)
@@ -674,12 +674,19 @@ class MainWindow(QMainWindow):
             if is_compact:
                 self._update_detail_preview(getattr(self, "_selected_case_for_detail", None))
 
-        # 7. Margins on business page for centered_focus
+        # 7. Hide page header settings button when already shown in topbar
+        if hasattr(self, "business_settings_button"):
+            has_top_settings = self.current_layout in ("top_nav", "modern_studio")
+            self.business_settings_button.setVisible(not has_top_settings)
+
+        # 8. Optimized margins on business page
         if hasattr(self, "business_page_layout"):
-            if self.current_layout == "centered_focus":
-                self.business_page_layout.setContentsMargins(56, 22, 56, 22)
+            if self.current_layout == "top_nav":
+                self.business_page_layout.setContentsMargins(28, 14, 28, 20)
+            elif self.current_layout == "centered_focus":
+                self.business_page_layout.setContentsMargins(56, 20, 56, 22)
             else:
-                self.business_page_layout.setContentsMargins(24, 22, 24, 22)
+                self.business_page_layout.setContentsMargins(24, 20, 24, 22)
 
         self._select_nav(getattr(self, "_current_nav_key", "business_registration"))
         self._relayout_filters()
@@ -1063,7 +1070,7 @@ class MainWindow(QMainWindow):
 
     def _card_column_count(self) -> int:
         available_width = max(1, self._content_width())
-        max_cols = 5 if getattr(self, "current_layout", "default") == "top_nav" else 4
+        max_cols = 5 if getattr(self, "current_layout", "default") in ("top_nav", "slim_sidebar") else 4
         return max(1, min(max_cols, (available_width + self.CARD_GAP) // (self.CARD_WIDTH + self.CARD_GAP)))
 
     def _content_width(self) -> int:
@@ -1160,6 +1167,8 @@ class MainWindow(QMainWindow):
             item = self.cards_layout.takeAt(0)
             widget = item.widget()
             if widget is not None:
+                widget.hide()
+                widget.setParent(None)
                 widget.deleteLater()
 
     def _delete_case(self, case: CaseSummary) -> None:

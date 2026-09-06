@@ -166,9 +166,14 @@ class ThemeSettingsTest(unittest.TestCase):
         self.assertFalse(win.top_nav_bar.isHidden())
         self.assertTrue(win.sidebar.isHidden())
 
+        win._apply_layout_structure("slim_sidebar")
+        self.assertFalse(win.slim_sidebar.isHidden())
+        self.assertTrue(win.sidebar.isHidden())
+
         win._apply_layout_structure("default")
         self.assertFalse(win.sidebar.isHidden())
         self.assertTrue(win.top_nav_bar.isHidden())
+        self.assertTrue(win.slim_sidebar.isHidden())
 
 
 if __name__ == "__main__":
