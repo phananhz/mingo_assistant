@@ -303,7 +303,7 @@ class IdCardParser:
                     if self._is_new_field(next_line) or self._is_other_address_marker(next_line, folded_keywords):
                         break
                     parts.append(next_line)
-                address = self._dedupe_address_parts(parts)
+                address = self._join_ocr_address_lines(parts)
                 if address:
                     return address
         return self._find_address_by_administrative_sequence(lines, folded_keywords)
@@ -320,7 +320,39 @@ class IdCardParser:
                 break
             if self._looks_like_address_value(line):
                 parts.append(line)
-        return self._dedupe_address_parts(parts)
+        return self._join_ocr_address_lines(parts)
+
+    def _join_ocr_address_lines(self, parts: list[str]) -> str:
+        """Rebuild an OCR address without treating every line break as a comma."""
+        result = ""
+        seen: set[str] = set()
+        for part in parts:
+            clean = part.strip(" ,.;")
+            if not clean or self._is_label_or_document_noise(clean):
+                continue
+            key = self._fold(clean)
+            if key in seen:
+                continue
+            seen.add(key)
+            if not result:
+                result = clean
+                continue
+            if re.search(r"[-/]$", result):
+                result = result.rstrip(" -/") + " " + clean
+            elif self._starts_administrative_address_part(clean):
+                result += ", " + clean
+            else:
+                result += " " + clean
+        return result
+
+    def _starts_administrative_address_part(self, value: str) -> bool:
+        folded = self._fold(value)
+        prefixes = ("xa ", "phuong ", "thi tran ", "huyen ", "quan ", "thi xa ", "tinh ", "thanh pho ", "tp ")
+        if folded.startswith(prefixes):
+            return True
+        # Unlabelled historical tails are accepted only when the administrative
+        # dataset resolves the complete tail unambiguously.
+        return self.place_matcher.analyze_address(value).status in {"converted", "current"}
 
     def _find_noisy_address_marker_index(self, lines: list[str], folded_keywords: list[str]) -> int:
         for index, line in enumerate(lines):

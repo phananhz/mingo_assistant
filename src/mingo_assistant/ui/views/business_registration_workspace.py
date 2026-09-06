@@ -2102,7 +2102,7 @@ class BusinessRegistrationWorkspace(QWidget):
                     "authorized_person_id_number": id_number,
                     "authorized_person_issue_date": data.get("legal_representative_issue_date", ""),
                     "authorized_person_issue_place": data.get("legal_representative_issue_place", ""),
-                    "authorized_person_contact_address": permanent_address,
+                    "authorized_person_contact_address": self._authorization_contact_address(data),
                     "authorized_person_phone": data.get("personal_phone", ""),
                     "authorized_person_email": data.get("personal_email", ""),
                 }
@@ -2114,7 +2114,16 @@ class BusinessRegistrationWorkspace(QWidget):
 
     def _person_data_for_fill(self, person: OcrPerson) -> dict[str, str]:
         if person.data:
-            return self._normalize_person_fill_data(person.data)
+            data = self._normalize_person_fill_data(person.data)
+            identity = self._person_identity(data)
+            # A saved profile is authoritative after edited CCCD data is
+            # stored. The OcrPerson saved in a case can retain an old address.
+            if identity:
+                for profile in reversed(self.personal_profiles):
+                    saved_data = self._normalize_person_fill_data(profile)
+                    if self._person_identity(saved_data) == identity:
+                        return saved_data
+            return data
         values = self.form_values()
         if person.role == "legal_representative":
             return self._normalize_person_fill_data({
@@ -2124,6 +2133,7 @@ class BusinessRegistrationWorkspace(QWidget):
                 "legal_representative_gender": values.get("legal_representative_gender", ""),
                 "legal_representative_nationality": values.get("legal_representative_nationality", ""),
                 "legal_representative_permanent_address": values.get("legal_representative_permanent_address", ""),
+                "legal_representative_contact_address": values.get("legal_representative_contact_address", ""),
                 "legal_representative_issue_date": values.get("legal_representative_issue_date", ""),
                 "legal_representative_expiry_date": values.get("legal_representative_expiry_date", ""),
                 "legal_representative_issue_place": values.get("legal_representative_issue_place", ""),
@@ -2151,6 +2161,20 @@ class BusinessRegistrationWorkspace(QWidget):
                 continue
             normalized[target] = next((str(data.get(source, "") or "") for source in sources if data.get(source)), "")
         return normalized
+
+    @staticmethod
+    def _authorization_contact_address(data: dict[str, str]) -> str:
+        """Use one explicit fallback order for the authorization UI and DOCX."""
+        for key in (
+            "legal_representative_contact_address",
+            "personal_contact_address",
+            "legal_representative_permanent_address",
+            "personal_permanent_address",
+        ):
+            value = str(data.get(key, "") or "").strip()
+            if value:
+                return value
+        return ""
 
     def _set_fields_from_mapping(self, mapping: dict[str, str]) -> None:
         for key, value in mapping.items():
@@ -2214,8 +2238,8 @@ class BusinessRegistrationWorkspace(QWidget):
         if not address:
             return
         parsed = self.address_parser.parse(address)
-        if parsed.normalization_status == "needs_confirmation":
-            return
+        # Confirmation only gates automatic use of an ambiguous CCCD scan. A
+        # user-entered or saved address can still be split when labels are clear.
         detail = self._address_detail_from_result(parsed)
         if not any([detail, parsed.ward, parsed.province]):
             return
@@ -2236,8 +2260,10 @@ class BusinessRegistrationWorkspace(QWidget):
         self.syncing_address_fields = True
         try:
             for key, value in mapping.items():
-                if value:
-                    self._set_field(key, value)
+                # A new profile selection must replace every stored address
+                # component. Otherwise an absent component leaves an old
+                # ward, province, or detail in the case.
+                self._set_field(key, value)
         finally:
             self.syncing_address_fields = False
         self._refresh_preview()
@@ -2944,6 +2970,8 @@ class BusinessRegistrationWorkspace(QWidget):
             )
 
     def _confirm_cccd_address(self) -> None:
+        if not self._require_cccd_issue_place():
+            return
         values = self._cccd_result_values()
         if not values.get("legal_representative_raw_permanent_address") or not values.get(
             "legal_representative_permanent_address"
@@ -2991,6 +3019,19 @@ class BusinessRegistrationWorkspace(QWidget):
         values["legal_representative_address_message"] = self._cccd_address_message
         return values
 
+    def _require_cccd_issue_place(self) -> bool:
+        field = self.ocr_card_fields.get("legal_representative_issue_place")
+        issue_place = field.currentText().strip() if isinstance(field, QComboBox) else ""
+        if issue_place:
+            return True
+        QMessageBox.warning(
+            self,
+            "Cần chọn nơi cấp CCCD",
+            "Chọn nơi cấp CCCD trước khi áp dụng hoặc lưu dữ liệu nhận diện. "
+            "Hồ sơ sẽ không thể xuất khi thiếu nơi cấp.",
+        )
+        return False
+
     def _require_confirmed_cccd_address(self) -> bool:
         if not self._cccd_address_requires_confirmation:
             return True
@@ -3006,7 +3047,7 @@ class BusinessRegistrationWorkspace(QWidget):
         if not any(values.values()):
             QMessageBox.warning(self, "Ch\u01b0a c\u00f3 d\u1eef li\u1ec7u CCCD", "B\u1ea1n c\u1ea7n qu\u00e9t QR ho\u1eb7c nh\u1eadp th\u00f4ng tin CCCD tr\u01b0\u1edbc.")
             return
-        if not self._require_confirmed_cccd_address():
+        if not self._require_confirmed_cccd_address() or not self._require_cccd_issue_place():
             return
         self._apply_cccd_values_to_current_person(values)
 
@@ -3015,8 +3056,10 @@ class BusinessRegistrationWorkspace(QWidget):
         if not any(values.values()):
             QMessageBox.warning(self, "Ch\u01b0a c\u00f3 d\u1eef li\u1ec7u CCCD", "B\u1ea1n c\u1ea7n qu\u00e9t QR ho\u1eb7c nh\u1eadp th\u00f4ng tin CCCD tr\u01b0\u1edbc.")
             return
-        if not self._require_confirmed_cccd_address():
+        if not self._require_confirmed_cccd_address() or not self._require_cccd_issue_place():
             return
+        current_person_data = self._person_data_for_fill(self.ocr_people[self.current_person_index])
+        previous_id_number = current_person_data.get("legal_representative_id_number", "").strip()
         full_name = values.get("legal_representative_full_name", "").strip()
         id_number = values.get("legal_representative_id_number", "").strip()
         if not full_name or not id_number:
@@ -3026,7 +3069,15 @@ class BusinessRegistrationWorkspace(QWidget):
         values["personal_phone"] = self._field_value("legal_representative_phone") or self._field_value("applicant_phone")
         values["personal_email"] = self._field_value("legal_representative_email") or self._field_value("applicant_email")
         saved = dict(values)
-        existing = next((profile for profile in self.personal_profiles if profile.get("legal_representative_id_number") == id_number), None)
+        known_id_numbers = {number for number in (id_number, previous_id_number) if number}
+        existing = next(
+            (
+                profile
+                for profile in self.personal_profiles
+                if profile.get("legal_representative_id_number", "").strip() in known_id_numbers
+            ),
+            None,
+        )
         if existing is None:
             self.personal_profiles.append(saved)
         else:
@@ -3036,7 +3087,74 @@ class BusinessRegistrationWorkspace(QWidget):
         self._refresh_beneficial_owner_list_selector()
         self._refresh_organization_representative_selector()
         self._apply_cccd_values_to_current_person(saved)
+        self._sync_personal_data_to_case(saved, previous_id_number)
         QMessageBox.information(self, "\u0110\u00e3 l\u01b0u d\u1eef li\u1ec7u c\u00e1 nh\u00e2n", f"\u0110\u00e3 l\u01b0u profile {full_name} cho h\u1ed3 s\u01a1 hi\u1ec7n t\u1ea1i.")
+
+    @staticmethod
+    def _same_person_identity(value: object, id_numbers: set[str]) -> bool:
+        digits = re.sub(r"\D", "", str(value or ""))
+        return bool(digits and digits in id_numbers)
+
+    def _sync_personal_data_to_case(self, card_values: dict[str, str], previous_id_number: str) -> None:
+        """Refresh every in-case reference that belongs to the CCCD being edited."""
+        id_numbers = {
+            re.sub(r"\D", "", number)
+            for number in (
+                previous_id_number,
+                card_values.get("legal_representative_id_number", ""),
+            )
+            if re.sub(r"\D", "", number)
+        }
+        if not id_numbers:
+            return
+
+        for person in self.ocr_people:
+            person_id = person.data.get("legal_representative_id_number", "")
+            if not self._same_person_identity(person_id, id_numbers):
+                continue
+            updated_data = dict(person.data)
+            updated_data.update(card_values)
+            person.data = {key: value for key, value in updated_data.items() if value}
+            person.recognition_type = "individual"
+
+        role_id_fields = {
+            "legal_representative": "legal_representative_id_number",
+            "applicant": "applicant_id_number",
+            "authorized_person": "authorized_person_id_number",
+            "beneficial_owner": "beneficial_owner_id_number",
+        }
+        for role, id_field in role_id_fields.items():
+            if self._same_person_identity(self._field_value(id_field), id_numbers):
+                self._apply_person_data_to_role(card_values, role, self.current_person_index + 1, overwrite=True)
+
+        if self._same_person_identity(self._field_value("legal_representative_id_number"), id_numbers):
+            contact_address = (
+                card_values.get("legal_representative_contact_address", "")
+                or card_values.get("legal_representative_permanent_address", "")
+            )
+            if contact_address:
+                self._set_field("legal_representative_contact_address", contact_address)
+
+        if self._same_person_identity(self._field_value("beneficial_owner_list_identity"), id_numbers):
+            self._set_fields_from_mapping(
+                {
+                    "beneficial_owner_list_full_name": card_values.get("legal_representative_full_name", ""),
+                    "beneficial_owner_list_date_of_birth": card_values.get("legal_representative_date_of_birth", ""),
+                    "beneficial_owner_list_gender": card_values.get("legal_representative_gender", ""),
+                    "beneficial_owner_list_identity": self._representative_identity_text(card_values),
+                    "beneficial_owner_list_ethnicity": card_values.get("legal_representative_ethnicity", ""),
+                    "beneficial_owner_list_address": (
+                        card_values.get("legal_representative_contact_address", "")
+                        or card_values.get("legal_representative_permanent_address", "")
+                    ),
+                }
+            )
+
+        self._refresh_people_buttons()
+        self._refresh_person_fill_selectors()
+        self._refresh_beneficial_owner_list_selector()
+        self._refresh_preview()
+
 
     def _apply_cccd_values_to_current_person(
         self,
@@ -3068,7 +3186,10 @@ class BusinessRegistrationWorkspace(QWidget):
         self._update_cccd_result_fields(card_values)
         self._apply_cccd_values_to_current_person(
             self._cccd_result_values(),
-            apply_to_form=not self._cccd_address_requires_confirmation,
+            apply_to_form=(
+                not self._cccd_address_requires_confirmation
+                and bool(self._cccd_result_values().get("legal_representative_issue_place", ""))
+            ),
         )
         self.ocr_people[self.current_person_index].raw_text = text
         self._parse_registration_office_from_text(text)
@@ -3135,7 +3256,7 @@ class BusinessRegistrationWorkspace(QWidget):
                 self._sync_address_parts("legal_representative_permanent_address")
             self._sync_director_from_legal_representative()
         elif role == "authorized_person":
-            address = card_values.get("legal_representative_permanent_address", "")
+            address = self._authorization_contact_address(card_values)
             if address:
                 if overwrite:
                     self._set_field("authorized_person_contact_address", address)
@@ -3167,8 +3288,6 @@ class BusinessRegistrationWorkspace(QWidget):
 
         result = self.address_parser.parse(text)
         self.address_result.setPlainText(result.summary() or "Chưa phân tích được dữ liệu rõ ràng.")
-        if result.normalization_status == "needs_confirmation":
-            return
         if result.company_name:
             self._set_field("company_name", result.company_name)
         if result.normalized_address:
@@ -3576,7 +3695,6 @@ class BusinessRegistrationWorkspace(QWidget):
             values.setdefault("beneficial_owner_address_detail", parsed_owner_address.street_line or parsed_owner_address.village)
             values.setdefault("beneficial_owner_ward", parsed_owner_address.ward)
             values.setdefault("beneficial_owner_province", parsed_owner_address.province)
-        values.setdefault("beneficial_owner_nationality", "Việt Nam")
         if _is_organization_owner(values.get("owner_type", "")):
             representative_defaults = {
                 "beneficial_owner_list_number": "organization_owner_representative_number",
@@ -3584,7 +3702,6 @@ class BusinessRegistrationWorkspace(QWidget):
                 "beneficial_owner_list_date_of_birth": "organization_owner_representative_date_of_birth",
                 "beneficial_owner_list_gender": "organization_owner_representative_gender",
                 "beneficial_owner_list_identity": "organization_owner_representative_identity",
-                "beneficial_owner_list_nationality": "organization_owner_representative_nationality",
                 "beneficial_owner_list_ethnicity": "organization_owner_representative_ethnicity",
                 "beneficial_owner_list_address": "organization_owner_representative_contact_address",
             }
@@ -3787,6 +3904,10 @@ class BusinessRegistrationWorkspace(QWidget):
                     "organization_owner_representative_identity": "Giấy tờ pháp lý của người đại diện vốn",
                 }
             )
+        required["legal_representative_issue_place"] = "Nơi cấp CCCD của người đại diện pháp luật"
+        if values.get("authorized_person_full_name", "").strip() or values.get("authorized_person_id_number", "").strip():
+            required["authorized_person_issue_place"] = "Nơi cấp CCCD của người được ủy quyền"
+            required["authorized_person_contact_address"] = "Địa chỉ liên lạc của người được ủy quyền"
         missing = [label for key, label in required.items() if not values.get(key, "").strip()]
         if any(
             person.recognition_type == "individual"

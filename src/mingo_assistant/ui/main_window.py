@@ -61,6 +61,7 @@ BUILT_IN_AUTHORIZED_PERSON_PROFILES: tuple[dict[str, str], ...] = (
     {
         "id": "builtin-duong-hong-ngoc",
         "authorized_person_full_name": "D\u01b0\u01a1ng H\u1ed3ng Ng\u1ecdc",
+        "authorized_person_gender": "N\u1eef",
         "authorized_person_id_number": "068303008330",
         "authorized_person_issue_date": "12/06/2021",
         "authorized_person_issue_place": "C\u1ee5c C\u1ea3nh s\u00e1t Qu\u1ea3n l\u00fd H\u00e0nh ch\u00ednh v\u1ec1 Tr\u1eadt t\u1ef1 X\u00e3 h\u1ed9i",
@@ -75,16 +76,18 @@ BUILT_IN_AUTHORIZED_PERSON_PROFILES: tuple[dict[str, str], ...] = (
         "authorized_person_id_number": "040095033863",
         "authorized_person_issue_date": "25/09/2022",
         "authorized_person_issue_place": "C\u1ee5c C\u1ea3nh s\u00e1t Qu\u1ea3n l\u00fd H\u00e0nh ch\u00ednh v\u1ec1 Tr\u1eadt t\u1ef1 X\u00e3 h\u1ed9i",
+        "authorized_person_contact_address": "S\u1ed1 43-45 \u0110\u01b0\u1eddng s\u1ed1 7, Khu Ph\u1ed1 1, Ph\u01b0\u1eddng Hi\u1ec7p B\u00ecnh, Th\u00e0nh ph\u1ed1 H\u1ed3 Ch\u00ed Minh",
         "authorized_person_phone": "0973584275",
         "authorized_person_email": "luongmx1710@gmail.com",
     },
     {
         "id": "builtin-nguyen-thi-minh-ngoc",
         "authorized_person_full_name": "Nguy\u1ec5n Th\u1ecb Minh Ng\u1ecdc",
+        "authorized_person_gender": "N\u1eef",
         "authorized_person_id_number": "031199001726",
         "authorized_person_issue_date": "09/12/2024",
         "authorized_person_issue_place": "B\u1ed9 C\u00f4ng an",
-        "authorized_person_contact_address": "43-45 \u0110\u01b0\u1eddng s\u1ed1 7, Khu ph\u1ed1 1, Ph\u01b0\u1eddng Hi\u1ec7p B\u00ecnh, TP. H\u1ed3 Ch\u00ed Minh",
+        "authorized_person_contact_address": "S\u1ed1 43-45 \u0110\u01b0\u1eddng s\u1ed1 7, Khu Ph\u1ed1 1, Ph\u01b0\u1eddng Hi\u1ec7p B\u00ecnh, Th\u00e0nh ph\u1ed1 H\u1ed3 Ch\u00ed Minh",
         "authorized_person_phone": "0879247679",
         "authorized_person_email": "minhhngoc0304.huynh@gmail.com",
     },
@@ -1212,9 +1215,7 @@ class MainWindow(QMainWindow):
         built_in_profiles = self._builtin_authorized_person_profiles()
         saved_profiles = {str(profile.get("id", "")): profile for profile in profiles}
         for profile in built_in_profiles:
-            saved_profile = saved_profiles.pop(profile["id"], None)
-            if saved_profile is not None:
-                profile.update({str(key): str(value) for key, value in saved_profile.items()})
+            saved_profiles.pop(profile["id"], None)
         merged_profiles = built_in_profiles + list(saved_profiles.values())
         if not self._authorized_profile_by_id(merged_profiles, selected_profile_id):
             selected_profile_id = built_in_profiles[0]["id"]

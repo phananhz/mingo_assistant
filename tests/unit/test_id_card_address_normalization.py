@@ -1,4 +1,4 @@
-﻿import unittest
+import unittest
 
 from mingo_assistant.services.normalization.administrative_place_matcher import AdministrativePlaceMatcher
 from mingo_assistant.services.normalization.address_parser import AddressParser
@@ -306,6 +306,14 @@ Nu"""
         self.assertEqual(result.normalized_address, raw_address)
 
 
+    def test_parser_joins_ordinary_ocr_line_wraps_without_inventing_a_comma(self) -> None:
+        parser = IdCardParser()
+
+        address = parser._join_ocr_address_lines(
+            ["S\u1ed1 12 Ng\u00f5 5", "\u0110\u01b0\u1eddng L\u00e1ng"]
+        )
+
+        self.assertEqual(address, "S\u1ed1 12 Ng\u00f5 5 \u0110\u01b0\u1eddng L\u00e1ng")
 if __name__ == "__main__":
     unittest.main()
 

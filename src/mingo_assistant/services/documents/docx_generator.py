@@ -244,9 +244,11 @@ class DocxTemplateGenerator:
         self._replace_manifest_plain_text(document, docx_path.name, values)
         self._apply_charter_legal_representative_gender(document, docx_path.name, values)
         self._apply_beneficial_owner_template_rules(document, docx_path.name, values)
+        self._apply_power_of_attorney_authorized_address(document, docx_path.name, values)
         self._apply_company_contact_fields(document, docx_path.name, values)
         self._remove_file1_owner_name_spacer(document, docx_path.name, values)
         self._apply_document_place_date(document, docx_path.name, values)
+        self._format_beneficial_owner_place_date(document, docx_path.name, values)
         self._apply_organization_charter_document_date(document, docx_path.name, values)
         self._normalize_legal_representative_signature(document, docx_path.name, values)
         if not uses_highlighted_fields:
@@ -263,6 +265,7 @@ class DocxTemplateGenerator:
         self._apply_template_checkbox_rules(document, docx_path.name, values)
         self._normalize_document_fonts(document)
         self._ensure_power_of_attorney_address_font(document, docx_path.name, values)
+        self._ensure_power_of_attorney_place_date_font(document, docx_path.name, values)
         document.save(docx_path)
 
     def _replace_case_type_text(self, document: Document, values: dict[str, str]) -> None:
@@ -428,6 +431,29 @@ class DocxTemplateGenerator:
                 paragraph.add_run(gender)
             return
 
+    def _apply_power_of_attorney_authorized_address(
+        self, document: Document, template_name: str, values: dict[str, str]
+    ) -> None:
+        """Fill Bên B's address even though this template has no highlighted run there."""
+        if not template_name.startswith("4. "):
+            return
+        address = str(values.get("authorized_person_contact_address", "") or "").strip()
+        if not address:
+            return
+        in_authorized_party = False
+        for paragraph in self._iter_paragraphs(document):
+            folded = self._fold(paragraph.text)
+            if "ben nhan uy quyen" in folded:
+                in_authorized_party = True
+                continue
+            if not in_authorized_party:
+                continue
+            if "dieu 1" in folded:
+                return
+            if folded.startswith("dia chi"):
+                self._replace_paragraph_text(paragraph, f"Địa chỉ: {address}")
+                return
+
     def _apply_beneficial_owner_template_rules(self, document: Document, template_name: str, values: dict[str, str]) -> None:
         """Fill the existing beneficial-owner row while preserving the template table geometry."""
         if not template_name.startswith("3."):
@@ -443,8 +469,10 @@ class DocxTemplateGenerator:
             for row in table.rows[numbering_row_index + 1:]:
                 if len(row.cells) < 18:
                     continue
-                for cell, value in zip(row.cells[:8], owner_columns, strict=True):
+                for column, (cell, value) in enumerate(zip(row.cells[:8], owner_columns, strict=True), start=1):
                     self._replace_table_cell_text(cell, value)
+                    if column == 8:
+                        self._format_beneficial_owner_address_cell(cell, value)
                 for column, (cell, value) in enumerate(zip(row.cells[8:18], column_values, strict=True), start=9):
                     self._replace_table_cell_text(cell, value)
                     self._format_beneficial_owner_numeric_cell(cell, value)
@@ -485,6 +513,22 @@ class DocxTemplateGenerator:
         for run in first.runs:
             if run.text:
                 run.font.size = Pt(10)
+                run.font.highlight_color = WD_COLOR_INDEX.YELLOW if str(value or "").strip() else None
+
+    @staticmethod
+    def _format_beneficial_owner_address_cell(cell, value: str) -> None:
+        """Use the required upright Times New Roman 11.5pt address style."""
+        for paragraph in cell.paragraphs:
+            paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            paragraph.paragraph_format.space_before = Pt(0)
+            paragraph.paragraph_format.space_after = Pt(0)
+            for run in paragraph.runs:
+                if not run.text:
+                    continue
+                run.font.name = "Times New Roman"
+                run._element.rPr.rFonts.set(qn("w:eastAsia"), "Times New Roman")
+                run.font.size = Pt(11.5)
+                run.italic = False
                 run.font.highlight_color = WD_COLOR_INDEX.YELLOW if str(value or "").strip() else None
 
     def _replace_table_cell_text(self, cell, text: str) -> None:
@@ -693,9 +737,6 @@ class DocxTemplateGenerator:
             return
         email = str(values.get("company_email", "") or "").strip()
         website = str(values.get("company_website", "") or "").strip()
-        if not email and not website:
-            return
-
         in_organization_owner_section = False
         for paragraph in self._iter_paragraphs(document):
             folded = self._fold(paragraph.text)
@@ -1005,7 +1046,11 @@ class DocxTemplateGenerator:
             return
         addresses = {
             str(values.get(key, "") or "").strip()
-            for key in ("legal_representative_permanent_address", "legal_representative_contact_address")
+            for key in (
+                "legal_representative_permanent_address",
+                "legal_representative_contact_address",
+                "authorized_person_contact_address",
+            )
         } - {""}
         for paragraph in self._iter_paragraphs(document):
             if not any(address in paragraph.text for address in addresses):
@@ -1019,6 +1064,29 @@ class DocxTemplateGenerator:
                     for font_name in ("w:ascii", "w:hAnsi", "w:eastAsia", "w:cs"):
                         fonts.set(qn(font_name), "Times New Roman")
 
+    def _ensure_power_of_attorney_place_date_font(
+        self, document: Document, template_name: str, values: dict[str, str]
+    ) -> None:
+        """Keep the date line in the power-of-attorney template at 13pt."""
+        if not template_name.startswith("4. "):
+            return
+        place = str(values.get("document_place", "") or "").strip()
+        day = str(values.get("document_day", "") or "").strip()
+        month = str(values.get("document_month", "") or "").strip()
+        year = str(values.get("document_year", "") or "").strip()
+        if not (place and day and month and year):
+            return
+        folded_line = self._fold(f"{place}, ngay {day} thang {month} nam {year}")
+        for paragraph in self._iter_paragraphs(document):
+            if self._fold(paragraph.text) != folded_line:
+                continue
+            for run in paragraph.runs:
+                if not run.text:
+                    continue
+                run.font.name = "Times New Roman"
+                run._element.rPr.rFonts.set(qn("w:eastAsia"), "Times New Roman")
+                run.font.size = Pt(13)
+            return
     def _apply_document_place_date(self, document: Document, template_name: str, values: dict[str, str]) -> None:
         place = str(values.get("document_place", "") or "").strip()
         day = str(values.get("document_day", "") or "").strip()
@@ -1032,6 +1100,30 @@ class DocxTemplateGenerator:
             if not (folded.startswith(("thanh pho ", "tinh ")) and "ngay" in folded and "thang" in folded and "nam" in folded):
                 continue
             self._replace_paragraph_text(paragraph, date_line)
+
+    def _format_beneficial_owner_place_date(
+        self, document: Document, template_name: str, values: dict[str, str]
+    ) -> None:
+        if not template_name.startswith("3."):
+            return
+        place = str(values.get("document_place", "") or "").strip()
+        day = str(values.get("document_day", "") or "").strip()
+        month = str(values.get("document_month", "") or "").strip()
+        year = str(values.get("document_year", "") or "").strip()
+        if not (place and day and month and year):
+            return
+        folded_line = self._fold(f"{place}, ngay {day} thang {month} nam {year}")
+        for paragraph in self._iter_paragraphs(document):
+            if self._fold(paragraph.text) != folded_line:
+                continue
+            for run in paragraph.runs:
+                if not run.text:
+                    continue
+                run.font.name = "Times New Roman"
+                run._element.rPr.rFonts.set(qn("w:eastAsia"), "Times New Roman")
+                run.font.size = Pt(11.5)
+                run.italic = True
+            return
 
     def _normalize_legal_representative_signature(
         self, document: Document, template_name: str, values: dict[str, str]
@@ -2724,7 +2816,11 @@ class DocxTemplateGenerator:
                 return value("applicant_address_detail") or value("legal_representative_address_detail")
             return value("company_address_detail") or value("legal_representative_address_detail")
         if "dia chi lien lac" in folded_context:
-            return value("authorized_person_contact_address") or value("legal_representative_contact_address")
+            return (
+                value("authorized_person_contact_address")
+                or value("legal_representative_contact_address")
+                or value("legal_representative_permanent_address")
+            )
         if "dia chi thuong tru" in folded_context:
             return value("legal_representative_permanent_address")
         if "giam doc" in folded_context:

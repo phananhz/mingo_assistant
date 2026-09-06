@@ -42,6 +42,7 @@ class AdministrativePlaceMatcher:
         self.data_path = data_path or self._default_data_path()
         data = self._load_data(str(self.data_path))
         self.province_candidates = self._province_candidates(data)
+        self.legacy_province_candidates = self._legacy_province_candidates(data)
         self.province_by_normalized = self._index_candidates(self.province_candidates)
         self.ward_candidates = self._ward_candidates(data)
         self.current_ward_candidates = [
@@ -63,8 +64,12 @@ class AdministrativePlaceMatcher:
 
     def analyze_address(self, address: str) -> AddressNormalization:
         """Resolve an address from province inward without discarding raw CCCD data."""
-        raw_address = re.sub(r"\s+", " ", address or "").strip(" ,;")
-        repaired_address = self._repair_ocr_administrative_boundaries(raw_address)
+        raw_address = (address or "").strip(" ,;")
+        # Preserve OCR line breaks for display and audit, but analyze a stable
+        # whitespace-normalized copy.
+        repaired_address = self._repair_ocr_administrative_boundaries(
+            re.sub(r"\s+", " ", raw_address)
+        )
         parts = self._split_address_parts(repaired_address)
         if not parts:
             return AddressNormalization("", "", "needs_confirmation", "Ch\u01b0a c\u00f3 \u0111\u1ecba ch\u1ec9 \u0111\u1ec3 \u0111\u1ed1i chi\u1ebfu.")
@@ -158,10 +163,26 @@ class AdministrativePlaceMatcher:
         exact = self._exact_province(value)
         if exact:
             return exact
-        # This is deliberately limited to the terminal province token.  A high
+        legacy_exact = self._exact_legacy_province(value)
+        if legacy_exact:
+            return legacy_exact
+        # This is deliberately limited to the terminal province token. A high
         # threshold repairs minor OCR errors without using an unscoped district.
-        return self._best_match(value, self.province_candidates, threshold=0.92)
+        return self._best_match(
+            value,
+            [*self.province_candidates, *self.legacy_province_candidates],
+            threshold=0.92,
+        )
 
+    def _exact_legacy_province(self, value: str) -> PlaceCandidate | None:
+        folded = self._fold(value)
+        candidates = [
+            candidate
+            for candidate in self.legacy_province_candidates
+            if candidate.normalized in {folded, self._strip_admin_prefix(folded)}
+        ]
+        names = {candidate.name for candidate in candidates}
+        return candidates[0] if len(names) == 1 else None
     def _exact_legacy_mapping_matches(
         self, parts: list[str], province: PlaceCandidate
     ) -> list[tuple[PlaceCandidate, int, int]]:
@@ -624,6 +645,25 @@ class AdministrativePlaceMatcher:
             short_name = str(item.get("short_name", name))
             for alias in self._province_aliases(name, short_name):
                 candidates.append(PlaceCandidate(name=name, normalized=self._fold(alias), kind="province", province_code=code))
+        return self._unique_candidates(candidates)
+
+    def _legacy_province_candidates(self, data: dict[str, object]) -> list[PlaceCandidate]:
+        """Index historical provinces from the migration dataset itself."""
+        candidates: list[PlaceCandidate] = []
+        for item in data.get("ward_mappings", []):
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("old_province_name", "")).strip()
+            if not name:
+                continue
+            for alias in self._province_aliases(name, name):
+                candidates.append(
+                    PlaceCandidate(
+                        name=name,
+                        normalized=self._fold(alias),
+                        kind="legacy_province",
+                    )
+                )
         return self._unique_candidates(candidates)
 
     def _province_aliases(self, name: str, short_name: str) -> list[str]:
