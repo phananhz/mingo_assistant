@@ -697,18 +697,26 @@ class BusinessRegistrationWorkspace(QWidget):
         self.form_nav_layout.setSpacing(8)
 
         nav_widget = QWidget()
+        nav_widget.setObjectName("FormSectionNav")
+        nav_widget.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
         nav_widget.setLayout(self.form_nav_layout)
         self.form_nav_widget = nav_widget
         nav_scroll = QScrollArea()
-        nav_scroll.setWidgetResizable(True)
+        nav_scroll.setObjectName("FormSectionNavScroll")
+        # Keep the navigation at its natural width.  Resizing it to the
+        # viewport squeezes long Vietnamese labels together before the
+        # horizontal scrollbar gets a chance to appear.
+        nav_scroll.setWidgetResizable(False)
         nav_scroll.setFrameShape(QFrame.NoFrame)
         nav_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         nav_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        nav_scroll.setFixedHeight(54)
+        nav_scroll.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        nav_scroll.setFixedHeight(66)
         nav_scroll.setWidget(nav_widget)
+        self.form_nav_scroll = nav_scroll
 
         layout.addWidget(nav_scroll)
-        self.form_stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        self.form_stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         layout.addWidget(self.form_stack, 0, Qt.AlignTop)
 
         ordered_field_groups = list(FIELD_GROUPS)
@@ -724,6 +732,7 @@ class BusinessRegistrationWorkspace(QWidget):
             button.setObjectName("PrimaryButton" if index == 0 else "GhostButton")
             button.setCheckable(True)
             button.setChecked(index == 0)
+            button.setMinimumHeight(38)
             button.clicked.connect(lambda checked=False, selected=index: self._select_form_section(selected))
             self.form_button_group.addButton(button, index)
             self.form_nav_buttons[title] = button
@@ -744,6 +753,8 @@ class BusinessRegistrationWorkspace(QWidget):
             self.form_sections[title] = section
             self.form_stack.addWidget(section)
         self.form_nav_layout.addStretch(1)
+        nav_widget.setFixedHeight(48)
+        nav_widget.setMinimumWidth(self.form_nav_layout.sizeHint().width())
         self._select_form_section(0)
         return group
 
@@ -764,7 +775,9 @@ class BusinessRegistrationWorkspace(QWidget):
     def _sync_form_stack_height(self) -> None:
         current = self.form_stack.currentWidget()
         if current is not None:
-            self.form_stack.setFixedHeight(max(250, current.sizeHint().height() + 10))
+            current.ensurePolished()
+            current.adjustSize()
+            self.form_stack.setFixedHeight(max(280, current.sizeHint().height() + 20))
     def _build_beneficial_owner_list_section(self, fields: list[tuple[str, str]]) -> QWidget:
         section = QGroupBox("Danh sách chủ sở hữu hưởng lợi")
         layout = QVBoxLayout(section)

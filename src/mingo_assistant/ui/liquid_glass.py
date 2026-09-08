@@ -109,6 +109,57 @@ QTableView, QTreeView, QListView, QTableWidget {{
 }}
 QHeaderView::section {{background: {hover}; color: {ink}; padding: 8px; border: none; border-bottom: 1px solid {border};}}
 QTabWidget::pane, QGroupBox {{background: {surface}; border: 1px solid {border}; border-radius: 12px;}}
+QWidget#BusinessWorkspacePage QGroupBox {{
+ margin-top: 14px; padding: 10px 10px 12px 10px;
+}}
+QWidget#BusinessWorkspacePage QGroupBox::title {{
+ subcontrol-origin: margin; subcontrol-position: top left; left: 10px;
+ padding: 0 6px; background: {surface}; color: {ink};
+}}
+QScrollArea#FormSectionNavScroll {{
+ background: transparent; border: none;
+}}
+QScrollArea#FormSectionNavScroll > QWidget > QWidget, QWidget#FormSectionNav {{
+ background: transparent; border: none;
+}}
+QScrollArea#FormSectionNavScroll QScrollBar:horizontal {{
+ background: rgba(113, 84, 182, 40); height: 8px; margin: 3px 10px 1px 10px;
+ border-radius: 4px;
+}}
+QScrollArea#FormSectionNavScroll QScrollBar::handle:horizontal {{
+ background: rgba(113, 84, 182, 150); min-width: 40px; border-radius: 4px;
+}}
+QScrollArea#FormSectionNavScroll QScrollBar::handle:horizontal:hover {{
+ background: {accent};
+}}
+QScrollArea#FormSectionNavScroll QScrollBar::add-line:horizontal,
+QScrollArea#FormSectionNavScroll QScrollBar::sub-line:horizontal {{
+ width: 0; background: transparent;
+}}
+QScrollArea#FormSectionNavScroll QScrollBar::add-page:horizontal,
+QScrollArea#FormSectionNavScroll QScrollBar::sub-page:horizontal {{
+ background: transparent;
+}}
+QTableWidget#IndustryTable {{
+ selection-background-color: #ebe8f8; selection-color: #243247;
+}}
+QTableWidget#IndustryTable::item:selected {{
+ background: #ebe8f8; color: #243247; border: 1px solid #c9c1e8;
+}}
+QTableWidget#IndustryTable QScrollBar:vertical {{
+ background: rgba(113, 84, 182, 35); width: 9px; margin: 4px 2px 4px 1px;
+ border-radius: 4px;
+}}
+QTableWidget#IndustryTable QScrollBar::handle:vertical {{
+ background: rgba(113, 84, 182, 135); min-height: 34px; border-radius: 4px;
+}}
+QTableWidget#IndustryTable QScrollBar::handle:vertical:hover {{
+ background: {accent};
+}}
+QTableWidget#IndustryTable QScrollBar::add-line:vertical,
+QTableWidget#IndustryTable QScrollBar::sub-line:vertical {{
+ height: 0; background: transparent;
+}}
 QTabBar::tab {{background: {canvas}; color: {muted}; padding: 8px 14px; border-bottom: 2px solid transparent;}}
 QTabBar::tab:selected {{background: {surface}; color: {ink}; border-bottom: 2px solid {accent};}}
 QTabBar::tab:hover {{background: {hover}; color: {ink};}}
