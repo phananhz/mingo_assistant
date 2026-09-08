@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""Portable PyInstaller configuration for Mingo Assistant.
+"""Portable PyInstaller configuration for Min Assistant.
 
 Run this spec from the repository root. All paths derive from the spec location,
 so a fresh clone can build without the original developer's local directories.
@@ -54,7 +54,8 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="MingoAssistantQRMaxV3",
+    name="MinAssistant",
+    icon=str(PROJECT_ROOT / "assets" / "branding" / "min-assistant.ico"),
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

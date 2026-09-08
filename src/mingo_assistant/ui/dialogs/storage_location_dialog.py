@@ -21,7 +21,7 @@ class StorageLocationDialog(QDialog):
         self.setMinimumWidth(560)
 
         layout = QVBoxLayout(self)
-        title = QLabel("Chọn nơi lưu tài liệu xuất từ Mingo Assistant")
+        title = QLabel("Chọn nơi lưu tài liệu xuất từ Min Assistant")
         title.setObjectName("DialogTitle")
         description = QLabel(
             "Các file Word, PDF và ZIP sẽ được lưu tại thư mục này. "
@@ -31,7 +31,7 @@ class StorageLocationDialog(QDialog):
 
         row = QHBoxLayout()
         self.path_input = QLineEdit(str(default_path))
-        self.path_input.setPlaceholderText("Ví dụ: C:\\Users\\Ban\\Documents\\Mingo Assistant")
+        self.path_input.setPlaceholderText("Ví dụ: C:\\Users\\Ban\\Documents\\Min Assistant")
         browse = QPushButton("Chọn thư mục")
         browse.clicked.connect(self._browse)
         row.addWidget(self.path_input, 1)

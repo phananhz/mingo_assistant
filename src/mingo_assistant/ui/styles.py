@@ -1,5 +1,8 @@
 from functools import lru_cache
 
+from PySide6.QtGui import QColor, QPalette
+from PySide6.QtWidgets import QApplication
+
 
 APP_STYLESHEET = """
 * {
@@ -13,14 +16,15 @@ QMainWindow {
 }
 
 #Sidebar {
-    background: #c46a93;
+    background: transparent;
+    border-radius: 20px;
 }
 
 #AppEyebrow {
-    color: #fff0f6;
-    font-size: 10px;
+    color: rgba(255, 255, 255, 0.82);
+    font-size: 11px;
     font-weight: 700;
-    letter-spacing: 0px;
+    letter-spacing: 0.5px;
 }
 
 #TopNavBrand {
@@ -32,30 +36,38 @@ QMainWindow {
 
 #AppTitle {
     color: #ffffff;
-    font-size: 20px;
+    font-size: 18px;
     font-weight: 800;
 }
 
 QPushButton#NavButton {
     text-align: left;
-    color: #fff7fb;
+    color: rgba(255, 255, 255, 0.90);
     background: transparent;
-    border: none;
-    border-radius: 6px;
-    padding: 11px 12px;
-    font-weight: 600;
+    border: 1px solid transparent;
+    border-radius: 12px;
+    padding: 11px 14px;
+    font-weight: 500;
+    font-size: 13px;
 }
 
 QPushButton#NavButton:hover {
-    background: rgba(255, 255, 255, 0.14);
+    background: rgba(255, 255, 255, 0.12);
+    color: #ffffff;
 }
 
 QPushButton#NavButton[active="true"] {
-    background: #e38ab0;
-    border: 1px solid rgba(255, 255, 255, 0.24);
+    background: rgba(255, 255, 255, 0.22);
+    border: 1.5px solid rgba(255, 255, 255, 0.45);
+    border-radius: 12px;
+    color: #ffffff;
+    font-weight: 700;
 }
 
-#Content {
+#Content,
+QWidget#BusinessCasesPage,
+QScrollArea#CaseCardsScroll,
+QWidget#CaseCardsContainer {
     background: #fff7fa;
 }
 
@@ -482,7 +494,7 @@ QTableWidget#IndustryTable::item:selected {
 
 
 SETTINGS_STYLESHEET = """
-QDialog#SettingsDialog {
+QDialog#SettingsDialog, QWidget#SettingsView {
     background: #fff7fa;
 }
 
@@ -783,6 +795,68 @@ QTableWidget#CasesTable::item {
     padding: 6px 10px;
     border-bottom: 1px solid #f7eaf0;
 }
+
+/* Business Creation Modal (Frosted Liquid Glass) */
+QDialog#BusinessCreationModal, QDialog#BusinessAmendmentModal, QDialog#DependentUnitModal, QDialog#DissolutionModal {
+    background: transparent;
+}
+QFrame#ModalOverlayContainer {
+    background: rgba(15, 23, 42, 0.45);
+}
+QFrame#BusinessCreationModalBox {
+    background: transparent;
+    border: none;
+    border-radius: 20px;
+}
+QLabel#ModalTitle { font-size: 20px; font-weight: 800; color: #0f172a; }
+QLabel#ModalSubtitle { font-size: 13.5px; color: #64748b; }
+QPushButton#ModalCloseButton {
+    background: rgba(255, 255, 255, 0.75); border: 1px solid rgba(226, 232, 240, 0.9);
+    border-radius: 10px; font-size: 14px; font-weight: 700; color: #334155; padding: 0px;
+}
+QPushButton#ModalCloseButton:hover { background: #ffffff; color: #0f172a; border-color: #cbd5e1; }
+QFrame#CompanyTypeCard {
+    background: rgba(255, 255, 255, 0.72); border: 1.5px solid rgba(255, 255, 255, 0.85); border-radius: 16px;
+}
+QFrame#CompanyTypeCard:hover { border-color: #e38ab0; background: rgba(255, 255, 255, 0.88); }
+QFrame#CompanyTypeCard[active="true"] { border: 2px solid #d4598b; background: rgba(255, 255, 255, 0.90); }
+QLabel#CompanyTypeIcon { font-size: 20px; border-radius: 10px; background: rgba(255, 255, 255, 0.85); border: 1px solid rgba(241, 245, 249, 0.8); }
+QFrame#CompanyTypeCard[active="true"] QLabel#CompanyTypeIcon { background: #ffffff; border-color: #fbcfe8; }
+QLabel#CompanyTypeCheck { background: #c46a93; color: #ffffff; border-radius: 11px; font-size: 11px; font-weight: 900; }
+QLabel#CompanyTypeTitle { font-size: 14px; font-weight: 700; color: #1e293b; }
+QFrame#CompanyTypeCard[active="true"] QLabel#CompanyTypeTitle { color: #9b315f; }
+QLabel#CompanyTypeSubtitle { font-size: 11.5px; color: #64748b; }
+QLabel#DossierSectionTitle { font-size: 15px; font-weight: 800; color: #0f172a; }
+QLabel#DossierSectionSubtitle { font-size: 12.5px; color: #64748b; }
+QLabel#ItemCountBadge { background: rgba(255, 255, 255, 0.8); color: #334155; border: 1px solid rgba(255, 255, 255, 0.9); border-radius: 8px; padding: 3px 10px; font-size: 11.5px; font-weight: 600; }
+QScrollArea#DossierScrollArea, QScrollArea#DossierScrollArea::viewport, QScrollArea#DossierScrollArea > QWidget > QWidget, QWidget#DossierListContainer { background: transparent; border: none; }
+QFrame#DossierListItem { background: rgba(255, 255, 255, 0.72); border: 1.5px solid rgba(255, 255, 255, 0.85); border-radius: 14px; }
+QFrame#DossierListItem:hover { border-color: #e38ab0; background: rgba(255, 255, 255, 0.88); }
+QFrame#DossierListItem[selected="true"] { border: 2px solid #d4598b; background: rgba(255, 255, 255, 0.90); }
+QLabel#DossierItemIcon { font-size: 20px; background: rgba(255, 255, 255, 0.85); border-radius: 10px; border: 1px solid rgba(241, 245, 249, 0.8); }
+QFrame#DossierListItem[selected="true"] QLabel#DossierItemIcon { background: #ffffff; border-color: #fbcfe8; }
+QLabel#DossierItemTitle { font-size: 14.5px; font-weight: 700; color: #0f172a; }
+QFrame#DossierListItem[selected="true"] QLabel#DossierItemTitle { color: #9b315f; }
+QLabel#DossierItemDesc { font-size: 12px; color: #64748b; }
+QLabel#DossierItemBadgeReady { background: rgba(236, 253, 245, 0.9); color: #047857; border: 1px solid #a7f3d0; border-radius: 6px; padding: 2px 7px; font-size: 11px; font-weight: 600; }
+QLabel#DossierItemBadgeDev { background: #fffbeb; color: #b45309; border: 1px solid #fde68a; border-radius: 6px; padding: 2px 7px; font-size: 11px; font-weight: 600; }
+QLabel#DossierItemIndicator { background: #c46a93; color: #ffffff; border-radius: 11px; font-size: 11px; font-weight: 900; }
+QLabel#ModalStatusDot { color: #c46a93; font-size: 12px; }
+QLabel#ModalSelectedSummary { font-size: 12.5px; color: #334155; }
+QFrame#ModalOpacityBox { background: rgba(255, 255, 255, 0.75); border: 1px solid rgba(226, 232, 240, 0.9); border-radius: 10px; padding: 3px 10px; }
+QLabel#ModalOpacityIcon { font-size: 13px; }
+QLabel#ModalOpacityLabel { font-size: 12px; font-weight: 600; color: #475569; }
+QLabel#ModalOpacityValue { font-size: 12px; font-weight: 700; color: #9b315f; min-width: 32px; }
+QSlider#ModalOpacitySlider { height: 20px; }
+QSlider#ModalOpacitySlider::groove:horizontal { height: 4px; background: #cbd5e1; border-radius: 2px; }
+QSlider#ModalOpacitySlider::sub-page:horizontal { background: #c46a93; border-radius: 2px; }
+QSlider#ModalOpacitySlider::handle:horizontal { background: #ffffff; border: 2px solid #c46a93; width: 14px; height: 14px; margin: -5px 0; border-radius: 7px; }
+QSlider#ModalOpacitySlider::handle:horizontal:hover { background: #fff5f8; border: 2px solid #9b315f; }
+QPushButton#ModalDismissButton { background: rgba(255, 255, 255, 0.85); border: 1px solid rgba(203, 213, 225, 0.9); border-radius: 10px; padding: 8px 20px; font-size: 13px; font-weight: 600; color: #475569; }
+QPushButton#ModalDismissButton:hover { background: #ffffff; color: #0f172a; border-color: #94a3b8; }
+QPushButton#ModalCreateButton { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #5b54d6, stop:1 #473dc5); color: #ffffff; border: none; border-radius: 10px; padding: 8px 22px; font-size: 13.5px; font-weight: 700; }
+QPushButton#ModalCreateButton:hover { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #5048cb, stop:1 #3b32b8); }
+QPushButton#ModalCreateButton:disabled { background: #e2e8f0; color: #94a3b8; }
 """
 
 THEME_CATEGORIES = {
@@ -826,10 +900,20 @@ THEME_OPTIONS = {
 }
 
 LAYOUT_OPTIONS = {
+    "liquid_glass": {
+        "title": "Liquid Glass",
+        "description": "Kính mờ, gradient tím cyan và hiệu ứng sáng khi rê chuột",
+        "icon": "✨",
+    },
     "default": {
         "title": "Cổ điển (Classic)",
         "description": "Bố cục nguyên bản quen thuộc, thanh bên 220px màu đồng bộ",
         "icon": "🏛",
+    },
+    "macos_glass": {
+        "title": "macOS 26 Liquid Glass",
+        "description": "Giao diện kính mờ cao cấp, traffic lights Apple, viền ánh sáng siêu mỏng",
+        "icon": "🍎",
     },
     "modern_studio": {
         "title": "Hiện đại Studio",
@@ -838,18 +922,13 @@ LAYOUT_OPTIONS = {
     },
     "top_nav": {
         "title": "Điều hướng trên",
-        "description": "Thanh menu ngang trên đỉnh, không gian 100% full-width thoáng đãng",
+        "description": "Thanh menu ngang trên đỉnh đầy đủ 8 phân hệ, không gian full-width",
         "icon": "🧭",
     },
     "executive": {
         "title": "Bảng điều khiển KPI",
-        "description": "Dải 4 thẻ thống kê số liệu nhanh, quản lý hồ sơ chuyên nghiệp",
+        "description": "Dải 3 thẻ thống kê số liệu nhanh, quản lý hồ sơ chuyên nghiệp",
         "icon": "📊",
-    },
-    "compact_legal": {
-        "title": "Pháp lý 2 Cột",
-        "description": "Cột danh sách bên trái + Khung xem chi tiết & thao tác bên phải",
-        "icon": "⚖",
     },
     "slim_sidebar": {
         "title": "Tối giản Icon Bar",
@@ -866,6 +945,62 @@ LAYOUT_OPTIONS = {
         "description": "Thẻ floating bo cong mềm mại (18px), tươi mới và giàu năng lượng",
         "icon": "🎨",
     },
+    "dock_bottom": {
+        "title": "Thanh Dock OS (Bottom Dock)",
+        "description": "Thanh dock bo tròn trôi nổi đáy màn hình, không gian rộng mở tối đa",
+        "icon": "🚢",
+    },
+    "dual_sidebar": {
+        "title": "Kép Chuyên Nghiệp (Dual Sidebar)",
+        "description": "Rail icon mỏng 48px + thanh nhóm phân hệ 180px phong cách Slack, Linear",
+        "icon": "📑",
+    },
+    "bento_grid": {
+        "title": "Bento Dashboard (Bento Box)",
+        "description": "Bố cục dạng lưới Bento Box hiện đại, thẻ widget đa sắc trực quan",
+        "icon": "🍱",
+    },
+    "glass_morphism": {
+        "title": "Kính Mờ Sang Trọng (Glassmorphism)",
+        "description": "Bề mặt bán trong suốt hiệu ứng kính mờ, viền ánh sáng thanh lịch",
+        "icon": "🪟",
+    },
+    "minimal_zen": {
+        "title": "Tối Giản Zen (Clean Notion Paper)",
+        "description": "Phong cách tối giản Nhật Bản, nền giấy sáng ấm, tab underline tinh tế",
+        "icon": "🍵",
+    },
+    "cyber_hud": {
+        "title": "Công Nghệ Cyber HUD (Neon Dark)",
+        "description": "Giao diện công nghệ tương lai, nền than chì, viền neon cyan phát sáng",
+        "icon": "⚡",
+    },
+    "split_workspace": {
+        "title": "Chia Đôi Studio (Master-Split)",
+        "description": "Cột danh sách bên trái, khung làm việc xem trước trực tiếp bên phải",
+        "icon": "🪞",
+    },
+    "feed_stream": {
+        "title": "Dòng Dữ Liệu (Activity Feed)",
+        "description": "Thẻ sắp xếp theo dòng hoạt động, huy hiệu tròn, hiển thị mượt mà",
+        "icon": "🌊",
+    },
+    "compact_dense": {
+        "title": "Bảng Nén Doanh Nghiệp (Enterprise)",
+        "description": "Bố cục nén mật độ cao, hiển thị tối đa hồ sơ trên một màn hình",
+        "icon": "📋",
+    },
+    "nordic_frost": {
+        "title": "Bắc Âu Nordic (Nordic Frost Clean)",
+        "description": "Gam màu băng tuyết sảng khoái (Ice Blue), nút bo tròn 20px phóng khoáng",
+        "icon": "❄",
+    },
+}
+
+EFFECT_SHADOW_OPTIONS = {
+    "flat": {"label": "Phẳng tinh giản (Flat)", "description": "Không đổ bóng, viền mỏng sắc nét"},
+    "subtle": {"label": "Bóng nhẹ thanh lịch (Subtle)", "description": "Đổ bóng mờ nhẹ tự nhiên chuẩn hiện đại"},
+    "floating": {"label": "Bóng nổi 3D (Floating Glow)", "description": "Độ nổi cao và hiệu ứng phát sáng nhẹ khi hover"},
 }
 
 FONT_SIZE_OPTIONS = {
@@ -1046,7 +1181,7 @@ def resolved_appearance_mode(mode: str | None, system_is_dark: bool = False) -> 
 def _dark_stylesheet(accent: str) -> str:
     return f"""
 * {{ color: #E9EDF1; }}
-QMainWindow, QDialog#SettingsDialog, #Content, #SettingsContent, #SettingsCanvas {{ background: #1A1C1F; }}
+QMainWindow, QDialog#SettingsDialog, QWidget#SettingsView, #Content, #SettingsContent, #SettingsCanvas {{ background: #1A1C1F; }}
 QFrame#Sidebar, #SettingsSidebar {{ background: #202328; border-color: #34383E; }}
 #AppEyebrow, #AppTitle, #SidebarFooter, #SettingsSidebarNote {{ color: #E9EDF1; }}
 QPushButton#NavButton, QPushButton#SettingsCategory, QPushButton#SettingsBackButton {{ color: #E9EDF1; }}
@@ -1223,28 +1358,621 @@ QLabel#KPILabel {{
     border: 1px solid {border_col};
 }}
 """
-    elif layout == "compact_legal":
+    elif layout == "macos_glass":
         return f"""
-/* Compact Legal 2-Column Layout */
-QFrame#Sidebar {{
-    min-width: 190px;
-    max-width: 190px;
+/* ========================================================================= */
+/* macOS 26 Liquid Glass Layout (Apple Control Center Liquid Glass)          */
+/* ========================================================================= */
+
+/* 1. Fluid Liquid Gradient Canvas (Cyan, Azure & Sapphire Liquid Waves) */
+QMainWindow,
+QWidget#Content,
+QWidget#BusinessCasesPage,
+QScrollArea#CaseCardsScroll,
+QWidget#CaseCardsContainer,
+QWidget#BusinessWorkspacePage,
+QWidget#SettingsView,
+QWidget#SettingsContent,
+QScrollArea#SettingsScroll,
+QWidget#SettingsCanvas,
+QWidget#IndustryLookupPage,
+QWidget#CategoryHubPage {{
+    background: qlineargradient(x1:0, y1:0, x2:0.9, y2:1,
+        stop:0 #08214D, stop:0.25 #0C447D, stop:0.50 #0077B6, stop:0.75 #00A6D6, stop:0.90 #38BDF8, stop:1 #67E8F9) !important;
 }}
+
+/* 2. Frosted Ultra-Glass Sidebar */
+QFrame#Sidebar {{
+    background: rgba(8, 28, 65, 0.48) !important;
+    border-right: 1.5px solid rgba(255, 255, 255, 0.28) !important;
+}}
+
+/* Floating Traffic Lights Apple Pill Island */
+QFrame#MacOSTrafficLights {{
+    background: rgba(255, 255, 255, 0.18);
+    border: 1px solid rgba(255, 255, 255, 0.40);
+    border-radius: 14px;
+    min-height: 24px;
+    max-height: 24px;
+    padding: 3px 8px;
+    margin-bottom: 8px;
+}}
+QLabel#MacDotRed {{
+    background: #FF5F56;
+    border-radius: 6px;
+    min-width: 12px;
+    max-width: 12px;
+    min-height: 12px;
+    max-height: 12px;
+    border: 1px solid #E0443E;
+}}
+QLabel#MacDotYellow {{
+    background: #FFBD2E;
+    border-radius: 6px;
+    min-width: 12px;
+    max-width: 12px;
+    min-height: 12px;
+    max-height: 12px;
+    border: 1px solid #DEA123;
+}}
+QLabel#MacDotGreen {{
+    background: #27C93F;
+    border-radius: 6px;
+    min-width: 12px;
+    max-width: 12px;
+    min-height: 12px;
+    max-height: 12px;
+    border: 1px solid #1AAB29;
+}}
+
+/* Sidebar Typography */
+QLabel#AppEyebrow {{
+    color: rgba(255, 255, 255, 0.75) !important;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1px;
+}}
+QLabel#AppTitle {{
+    color: #FFFFFF !important;
+    font-size: 19px;
+    font-weight: 800;
+}}
+QLabel#SidebarFooter {{
+    color: rgba(255, 255, 255, 0.65) !important;
+    font-size: 11.5px;
+}}
+
+/* Sidebar Navigation Capsule Buttons */
 QPushButton#NavButton {{
-    padding: 7px 10px;
+    border-radius: 14px;
+    padding: 10px 14px;
+    font-size: 13px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.92) !important;
+    background: transparent;
+    text-align: left;
+}}
+QPushButton#NavButton:hover {{
+    background: rgba(255, 255, 255, 0.20) !important;
+    color: #FFFFFF !important;
+}}
+QPushButton#NavButton[active="true"] {{
+    background: rgba(255, 255, 255, 0.35) !important;
+    border: 1.5px solid rgba(255, 255, 255, 0.70) !important;
+    border-top: 2px solid #FFFFFF !important;
+    color: #FFFFFF !important;
+    font-weight: 800;
+}}
+
+/* 3. Page Header & Typography */
+QLabel#PageTitle {{
+    color: #FFFFFF !important;
+    font-size: 26px;
+    font-weight: 900;
+}}
+QLabel#PageDescription {{
+    color: rgba(255, 255, 255, 0.88) !important;
+    font-size: 13.5px;
+}}
+
+/* 4. KPI Cards (Control Center Capsule Modules) */
+QFrame#KpiCard {{
+    background: rgba(255, 255, 255, 0.22) !important;
+    border: 1.5px solid rgba(255, 255, 255, 0.45) !important;
+    border-top: 2.5px solid rgba(255, 255, 255, 0.80) !important;
+    border-radius: 22px !important;
+    padding: 12px 16px;
+}}
+QFrame#KpiCard:hover {{
+    background: rgba(255, 255, 255, 0.30) !important;
+    border-color: rgba(255, 255, 255, 0.75) !important;
+}}
+/* Circular Pure White Icon Pill (Like Wi-Fi/Bluetooth pill in Apple Control Center) */
+QLabel#KpiIcon {{
+    background: #FFFFFF !important;
+    color: #0077B6 !important;
+    border-radius: 17px !important;
+    min-width: 34px !important;
+    max-width: 34px !important;
+    min-height: 34px !important;
+    max-height: 34px !important;
+    qproperty-alignment: AlignCenter;
+    font-size: 16px;
+}}
+QLabel#KpiLabel {{
+    color: rgba(255, 255, 255, 0.90) !important;
+    font-size: 12.5px;
+    font-weight: 700;
+}}
+QLabel#KpiValue {{
+    color: #FFFFFF !important;
+    font-size: 24px;
+    font-weight: 900;
+}}
+
+/* 5. Search Bar & Filter Controls */
+QLineEdit#SearchInput, QLineEdit {{
+    background: rgba(255, 255, 255, 0.22) !important;
+    border: 1.5px solid rgba(255, 255, 255, 0.45) !important;
+    border-top: 2px solid rgba(255, 255, 255, 0.75) !important;
+    border-radius: 18px !important;
+    color: #FFFFFF !important;
+    padding: 8px 18px;
+    font-size: 13px;
+}}
+QLineEdit::placeholder {{
+    color: rgba(255, 255, 255, 0.65) !important;
+}}
+QComboBox {{
+    background: rgba(255, 255, 255, 0.22) !important;
+    border: 1.5px solid rgba(255, 255, 255, 0.45) !important;
+    border-top: 2px solid rgba(255, 255, 255, 0.70) !important;
+    border-radius: 16px !important;
+    color: #FFFFFF !important;
+    padding: 6px 14px;
+    font-size: 12.5px;
+    font-weight: 600;
+}}
+QComboBox::drop-down {{
+    border: none;
+    width: 24px;
+}}
+QComboBox QAbstractItemView {{
+    background: #0C3868 !important;
+    color: #FFFFFF !important;
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    border-radius: 12px;
+    selection-background-color: rgba(255, 255, 255, 0.28);
+    selection-color: #FFFFFF;
+}}
+
+/* 6. Case Cards (Liquid Glass Squircles) */
+#Card {{
+    background: rgba(255, 255, 255, 0.22) !important;
+    border: 1.5px solid rgba(255, 255, 255, 0.45) !important;
+    border-top: 2.5px solid rgba(255, 255, 255, 0.80) !important;
+    border-radius: 24px !important;
+}}
+#Card:hover {{
+    background: rgba(255, 255, 255, 0.32) !important;
+    border-color: rgba(255, 255, 255, 0.85) !important;
+}}
+#CardHeader {{
+    background: rgba(255, 255, 255, 0.16) !important;
+    border-top-left-radius: 24px;
+    border-top-right-radius: 24px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.25);
+}}
+QLabel#CardTitle {{
+    color: #FFFFFF !important;
+    font-size: 15px;
+    font-weight: 800;
+}}
+QLabel#CardSubtitle {{
+    color: rgba(255, 255, 255, 0.85) !important;
+    font-size: 12px;
+    font-weight: 700;
+}}
+QLabel#MetaText {{
+    color: rgba(255, 255, 255, 0.75) !important;
     font-size: 12px;
 }}
-QFrame#DetailPreviewPanel {{
-    background: {card_bg};
-    border-left: 1px solid {border_col};
-    min-width: 320px;
-    max-width: 380px;
+QLabel#MetaValue {{
+    color: #FFFFFF !important;
+    font-weight: 700;
+    font-size: 12px;
 }}
-QFrame#DetailSectionBox {{
-    background: {subtle_bg};
+
+/* Capsule Status Badges */
+QLabel#StatusBadge {{
+    background: #FFFFFF !important;
+    color: #0077B6 !important;
+    border-radius: 12px !important;
+    padding: 3px 12px !important;
+    font-weight: 800 !important;
+    font-size: 11px !important;
+}}
+QLabel#WarningBadge {{
+    background: #FFBD2E !important;
+    color: #08214D !important;
+    border-radius: 12px !important;
+    padding: 3px 12px !important;
+    font-weight: 800 !important;
+    font-size: 11px !important;
+}}
+
+/* 7. Action Buttons (Pure White Capsule Pills & Frosted Glasses) */
+QPushButton#PrimaryButton {{
+    background: #FFFFFF !important;
+    color: #0077B6 !important;
+    border-radius: 16px !important;
+    padding: 8px 20px !important;
+    font-weight: 800 !important;
+    font-size: 13px !important;
+    border: none !important;
+}}
+QPushButton#PrimaryButton:hover {{
+    background: rgba(255, 255, 255, 0.92) !important;
+}}
+QPushButton#GhostButton {{
+    background: rgba(255, 255, 255, 0.20) !important;
+    color: #FFFFFF !important;
+    border: 1.5px solid rgba(255, 255, 255, 0.50) !important;
+    border-radius: 14px !important;
+    padding: 6px 16px !important;
+    font-weight: 700 !important;
+}}
+QPushButton#GhostButton:hover {{
+    background: rgba(255, 255, 255, 0.35) !important;
+    border-color: rgba(255, 255, 255, 0.85) !important;
+}}
+QPushButton#SettingsButton {{
+    background: rgba(255, 255, 255, 0.22) !important;
+    color: #FFFFFF !important;
+    border: 1.5px solid rgba(255, 255, 255, 0.45) !important;
+    border-top: 2px solid rgba(255, 255, 255, 0.75) !important;
+    border-radius: 16px !important;
+    font-size: 14px;
+}}
+QPushButton#SettingsButton:hover {{
+    background: rgba(255, 255, 255, 0.35) !important;
+}}
+
+/* 8. Detail Preview Panel */
+QFrame#DetailPreviewPanel {{
+    background: rgba(255, 255, 255, 0.20) !important;
+    border: 1.5px solid rgba(255, 255, 255, 0.45) !important;
+    border-top: 2.5px solid rgba(255, 255, 255, 0.80) !important;
+    border-radius: 24px !important;
+}}
+QLabel#DocumentsEyebrow {{
+    color: rgba(255, 255, 255, 0.80) !important;
+    font-weight: 700;
+}}
+QLabel#DetailTitle {{
+    color: #FFFFFF !important;
+    font-weight: 900;
+    font-size: 18px;
+}}
+QLabel#DetailMetaLabel {{
+    color: rgba(255, 255, 255, 0.75) !important;
+    font-size: 12px;
+}}
+
+/* 9. Settings View & Sub-panels */
+QFrame#SettingsSidebar {{
+    background: rgba(8, 28, 65, 0.48) !important;
+    border-right: 1.5px solid rgba(255, 255, 255, 0.28) !important;
+}}
+QFrame#SettingsFooter {{
+    background: rgba(8, 28, 65, 0.48) !important;
+    border-top: 1.5px solid rgba(255, 255, 255, 0.28) !important;
+}}
+QFrame#VisualThemeTile, QFrame#VisualLayoutCard, QFrame#LayoutBadge {{
+    background: rgba(255, 255, 255, 0.18) !important;
+    border: 1.5px solid rgba(255, 255, 255, 0.40) !important;
+    border-radius: 18px !important;
+}}
+QFrame#VisualThemeTile:hover, QFrame#VisualLayoutCard:hover {{
+    background: rgba(255, 255, 255, 0.30) !important;
+    border-color: rgba(255, 255, 255, 0.80) !important;
+}}
+QLabel#SettingsSectionTitle, QLabel#SectionTitle {{
+    color: #FFFFFF !important;
+    font-weight: 800;
+}}
+QCheckBox {{
+    color: #FFFFFF !important;
+    font-weight: 600;
+}}
+"""
+    elif layout == "dock_bottom":
+        dock_bg = "rgba(26, 30, 38, 0.92)" if is_dark else "rgba(255, 255, 255, 0.9)"
+        return f"""
+/* Bottom Dock OS Layout */
+QFrame#BottomDockBar {{
+    background: {dock_bg};
     border: 1px solid {border_col};
-    border-radius: 5px;
+    border-radius: 22px;
+    min-height: 54px;
+    max-height: 54px;
+    padding: 4px 16px;
+}}
+QPushButton#DockNavButton {{
+    background: transparent;
+    border: none;
+    border-radius: 14px;
+    padding: 6px 14px;
+    font-size: 13px;
+    font-weight: 600;
+    color: {text_muted};
+}}
+QPushButton#DockNavButton:hover {{
+    background: {subtle_bg};
+    color: {text_primary};
+}}
+QPushButton#DockNavButton[active="true"] {{
+    background: {accent};
+    color: #FFFFFF;
+}}
+#Card {{
+    border-radius: 16px;
+    border: 1px solid {border_col};
+}}
+"""
+    elif layout == "dual_sidebar":
+        rail_bg = "#121418" if is_dark else "#F1F3F7"
+        sub_bg = "#1A1D23" if is_dark else "#FFFFFF"
+        return f"""
+/* Dual Sidebar Pro Layout */
+QFrame#DualRailSidebar {{
+    background: {rail_bg};
+    border-right: 1px solid {border_col};
+    min-width: 52px;
+    max-width: 52px;
+}}
+QFrame#DualSubSidebar {{
+    background: {sub_bg};
+    border-right: 1px solid {border_col};
+    min-width: 185px;
+    max-width: 185px;
+}}
+QPushButton#NavButton {{
+    border-radius: 6px;
+    padding: 8px 10px;
+    margin: 1px 4px;
+    font-size: 12.5px;
+}}
+QPushButton#NavButton[active="true"] {{
+    background: {accent};
+    color: #FFFFFF;
+}}
+#Card {{
+    border-radius: 10px;
+    border: 1px solid {border_col};
+}}
+"""
+    elif layout == "bento_grid":
+        return f"""
+/* Bento Dashboard Layout */
+#Card {{
+    border-radius: 16px;
+    border: 1px solid {border_col};
+    background: {card_bg};
+}}
+#CardHeader {{
+    border-top-left-radius: 16px;
+    border-top-right-radius: 16px;
+    background: {accent};
+}}
+QFrame#KPICard {{
+    border-radius: 16px;
+    border: 1.5px solid {accent};
+    background: {subtle_bg};
+    padding: 12px 16px;
+}}
+QLabel#StatusBadge, QLabel#WarningBadge {{
+    border-radius: 10px;
+    padding: 3px 10px;
+    font-weight: 800;
+}}
+"""
+    elif layout == "glass_morphism":
+        f_bg = "rgba(22, 26, 34, 0.8)" if is_dark else "rgba(255, 255, 255, 0.72)"
+        f_border = "rgba(255, 255, 255, 0.1)" if is_dark else "rgba(255, 255, 255, 0.45)"
+        return f"""
+/* Frosted Glassmorphism Layout */
+QFrame#Sidebar {{
+    background: {f_bg};
+    border-right: 1px solid {f_border};
+}}
+#Card {{
+    border-radius: 16px;
+    background: {f_bg};
+    border: 1px solid {f_border};
+}}
+#CardHeader {{
+    border-top-left-radius: 16px;
+    border-top-right-radius: 16px;
+    background: {accent};
+}}
+QPushButton#NavButton[active="true"] {{
+    background: {accent};
+    color: #FFFFFF;
+    border-radius: 10px;
+}}
+"""
+    elif layout == "minimal_zen":
+        zen_bg = "#191919" if is_dark else "#FBFBFA"
+        zen_border = "#2B2B2B" if is_dark else "#EFEFED"
+        zen_card = "#202020" if is_dark else "#FFFFFF"
+        return f"""
+/* Clean Minimal Zen Layout */
+QFrame#Sidebar {{
+    background: {zen_bg};
+    border-right: 1px solid {zen_border};
+}}
+QPushButton#NavButton {{
+    background: transparent;
+    border: none;
+    border-radius: 0px;
+    padding: 10px 14px;
+    color: {text_muted};
+    font-size: 13px;
+}}
+QPushButton#NavButton:hover {{
+    color: {text_primary};
+}}
+QPushButton#NavButton[active="true"] {{
+    color: {accent};
+    border-bottom: 2px solid {accent};
+    font-weight: 800;
+}}
+#Card {{
+    border-radius: 6px;
+    border: 1px solid {zen_border};
+    background: {zen_card};
+}}
+#CardHeader {{
+    border-top-left-radius: 6px;
+    border-top-right-radius: 6px;
+    background: {accent};
+}}
+"""
+    elif layout == "cyber_hud":
+        cyber_bg = "#0D1117" if is_dark else "#121820"
+        cyber_card = "#161B22" if is_dark else "#1A222D"
+        cyber_border = "#30363D"
+        neon_cyan = "#00F2FE"
+        return f"""
+/* Cyber HUD Dark Neon Layout */
+QFrame#Sidebar {{
+    background: {cyber_bg};
+    border-right: 1px solid {cyber_border};
+}}
+QPushButton#NavButton {{
+    border-radius: 4px;
+    padding: 9px 12px;
+    color: #8B949E;
+    font-family: monospace, sans-serif;
+}}
+QPushButton#NavButton:hover {{
+    background: rgba(0, 242, 254, 0.08);
+    color: {neon_cyan};
+}}
+QPushButton#NavButton[active="true"] {{
+    background: rgba(0, 242, 254, 0.15);
+    border-left: 3px solid {neon_cyan};
+    color: {neon_cyan};
+    font-weight: 800;
+}}
+#Card {{
+    border-radius: 4px;
+    border: 1px solid {cyber_border};
+    background: {cyber_card};
+}}
+#Card:hover {{
+    border-color: {neon_cyan};
+}}
+QLabel#StatusBadge {{
+    background: {neon_cyan};
+    color: #000000;
+    font-weight: 800;
+    border-radius: 2px;
+}}
+"""
+    elif layout == "split_workspace":
+        return f"""
+/* Split Workspace Master-Detail Layout */
+QFrame#Sidebar {{
+    min-width: 195px;
+    max-width: 195px;
+}}
+#Card {{
+    border-radius: 10px;
+    border: 1px solid {border_col};
+}}
+#CardHeader {{
+    border-top-left-radius: 10px;
+    border-top-right-radius: 10px;
+    background: {accent};
+}}
+"""
+    elif layout == "feed_stream":
+        return f"""
+/* Feed Stream Activity Layout */
+#Card {{
+    border-radius: 14px;
+    border: 1px solid {border_col};
+    margin-bottom: 6px;
+}}
+#CardHeader {{
+    border-top-left-radius: 14px;
+    border-top-right-radius: 14px;
+    background: {accent};
+}}
+QLabel#StatusBadge {{
+    border-radius: 10px;
+    padding: 2px 8px;
+    font-size: 11px;
+}}
+"""
+    elif layout == "compact_dense":
+        return f"""
+/* High-Density Enterprise Layout */
+QFrame#Sidebar {{
+    min-width: 185px;
+    max-width: 185px;
+}}
+QPushButton#NavButton {{
     padding: 6px 10px;
+    font-size: 12px;
+}}
+#Card {{
+    border-radius: 6px;
+    border: 1px solid {border_col};
+}}
+#CardHeader {{
+    border-top-left-radius: 6px;
+    border-top-right-radius: 6px;
+    min-height: 84px;
+    max-height: 84px;
+    background: {accent};
+}}
+"""
+    elif layout == "nordic_frost":
+        nordic_sidebar = "#0C4A6E" if is_dark else "#F0F9FF"
+        nordic_border = "#0369A1" if is_dark else "#BAE6FD"
+        nordic_card = "#082F49" if is_dark else "#FFFFFF"
+        ice_accent = "#38BDF8"
+        return f"""
+/* Nordic Frost Clean Layout */
+QFrame#Sidebar {{
+    background: {nordic_sidebar};
+    border-right: 1px solid {nordic_border};
+}}
+QPushButton#NavButton {{
+    border-radius: 12px;
+    padding: 9px 14px;
+    color: {text_primary};
+}}
+QPushButton#NavButton:hover {{
+    background: rgba(56, 189, 248, 0.15);
+}}
+QPushButton#NavButton[active="true"] {{
+    background: {ice_accent};
+    color: #0F172A;
+    font-weight: 800;
+}}
+#Card {{
+    border-radius: 16px;
+    border: 1px solid {nordic_border};
+    background: {nordic_card};
+}}
+#CardHeader {{
+    border-top-left-radius: 16px;
+    border-top-right-radius: 16px;
+    background: {ice_accent};
 }}
 """
     elif layout == "slim_sidebar":
@@ -1402,6 +2130,56 @@ QLabel {{
 """
 
 
+def _effects_stylesheet(
+    animations_enabled: bool = True,
+    card_shadow: str = "subtle",
+    hover_glow: bool = True,
+    glassmorphism: bool = False,
+    accent: str = "#C46A93",
+    is_dark: bool = False,
+) -> str:
+    css_parts: list[str] = []
+
+    # 1. Animations & Motion (Qt stylesheets do not support CSS transitions/animations; handled via native QPropertyAnimation)
+
+
+    # 2. Card Shadow & Elevation
+    if card_shadow == "flat":
+        css_parts.append("""
+QFrame#Card, QFrame#KPICard, QFrame#SettingsCard, QFrame#SummaryCard {
+    border-width: 1px;
+}
+""")
+    elif card_shadow == "floating":
+        border_c = "rgba(255, 255, 255, 0.25)" if is_dark else "rgba(0, 0, 0, 0.14)"
+        css_parts.append(f"""
+QFrame#Card, QFrame#KPICard {{
+    border: 1.5px solid {border_c};
+}}
+""")
+
+    # 3. Hover Glow
+    if hover_glow:
+        css_parts.append(f"""
+QFrame#Card:hover, QFrame#KPICard:hover {{
+    border-color: {accent};
+}}
+""")
+
+    # 4. Glassmorphism Surfaces
+    if glassmorphism:
+        glass_bg = "rgba(20, 24, 33, 0.78)" if is_dark else "rgba(255, 255, 255, 0.75)"
+        glass_border = "rgba(255, 255, 255, 0.12)" if is_dark else "rgba(255, 255, 255, 0.45)"
+        css_parts.append(f"""
+QFrame#Sidebar, QFrame#GlobalTopbar, QFrame#TopNavBar, QFrame#SettingsSidebar {{
+    background: {glass_bg};
+    border-right: 1px solid {glass_border};
+}}
+""")
+
+    return "\n".join(css_parts)
+
+
 @lru_cache(maxsize=128)
 def stylesheet_for_theme(
     theme_id: str | None,
@@ -1413,6 +2191,10 @@ def stylesheet_for_theme(
     border_radius: str | None = "rounded",
     high_contrast: bool | str = False,
     custom_color: str | None = None,
+    animations_enabled: bool | str = True,
+    card_shadow: str | None = "subtle",
+    hover_glow: bool | str = True,
+    glassmorphism: bool | str = False,
 ) -> str:
     """Return the stylesheet for a persisted color palette, appearance mode, and layout."""
     is_custom = theme_id == "custom" and custom_color
@@ -1446,7 +2228,7 @@ def stylesheet_for_theme(
     for source, target in replacements.items():
         stylesheet = stylesheet.replace(source, target)
 
-    if selected_theme != "rose" and sidebar:
+    if sidebar:
         sidebar_bg, text, active = sidebar
         stylesheet += f"""
 QFrame#Sidebar {{ background: {sidebar_bg}; }}
@@ -1469,6 +2251,9 @@ QLabel#StatusBadge {{ background: rgba(255, 255, 255, 0.88); color: {card_text};
 """
 
     is_dark = resolved_appearance_mode(appearance_mode, system_is_dark) == "dark"
+    if layout == "liquid_glass":
+        from mingo_assistant.ui.liquid_glass import glass_stylesheet
+        return glass_stylesheet(dark=is_dark)
     if is_dark:
         stylesheet += _dark_stylesheet(theme_accent)
 
@@ -1492,4 +2277,47 @@ QLabel#StatusBadge {{ background: rgba(255, 255, 255, 0.88); color: {card_text};
     if is_high_contrast:
         stylesheet += _high_contrast_stylesheet(is_dark, theme_accent)
 
+    # Visual effects
+    anim_on = str(animations_enabled).lower() in ("true", "1") if isinstance(animations_enabled, (str, bool)) else bool(animations_enabled)
+    glow_on = str(hover_glow).lower() in ("true", "1") if isinstance(hover_glow, (str, bool)) else bool(hover_glow)
+    glass_on = str(glassmorphism).lower() in ("true", "1") if isinstance(glassmorphism, (str, bool)) else bool(glassmorphism)
+    effects_css = _effects_stylesheet(anim_on, str(card_shadow or "subtle"), glow_on, glass_on, theme_accent, is_dark)
+    if effects_css:
+        stylesheet += effects_css
+
     return stylesheet
+
+
+def get_app_palette(is_dark: bool = False, accent: str = "#c46a93") -> QPalette:
+    palette = QPalette()
+    if is_dark:
+        palette.setColor(QPalette.Window, QColor("#1a1c1f"))
+        palette.setColor(QPalette.WindowText, QColor("#f5f7f9"))
+        palette.setColor(QPalette.Base, QColor("#24272c"))
+        palette.setColor(QPalette.AlternateBase, QColor("#1a1c1f"))
+        palette.setColor(QPalette.ToolTipBase, QColor("#24272c"))
+        palette.setColor(QPalette.ToolTipText, QColor("#f5f7f9"))
+        palette.setColor(QPalette.Text, QColor("#f5f7f9"))
+        palette.setColor(QPalette.Button, QColor("#24272c"))
+        palette.setColor(QPalette.ButtonText, QColor("#f5f7f9"))
+        palette.setColor(QPalette.BrightText, QColor("#ff5252"))
+        palette.setColor(QPalette.Highlight, QColor(accent))
+        palette.setColor(QPalette.HighlightedText, QColor("#ffffff"))
+    else:
+        palette.setColor(QPalette.Window, QColor("#fff7fa"))
+        palette.setColor(QPalette.WindowText, QColor("#3d2430"))
+        palette.setColor(QPalette.Base, QColor("#ffffff"))
+        palette.setColor(QPalette.AlternateBase, QColor("#fff0f6"))
+        palette.setColor(QPalette.ToolTipBase, QColor("#ffffff"))
+        palette.setColor(QPalette.ToolTipText, QColor("#3d2430"))
+        palette.setColor(QPalette.Text, QColor("#3d2430"))
+        palette.setColor(QPalette.Button, QColor("#ffffff"))
+        palette.setColor(QPalette.ButtonText, QColor("#3d2430"))
+        palette.setColor(QPalette.BrightText, QColor("#ff5252"))
+        palette.setColor(QPalette.Highlight, QColor(accent))
+        palette.setColor(QPalette.HighlightedText, QColor("#ffffff"))
+    return palette
+
+
+def apply_app_palette(app: QApplication, is_dark: bool = False, accent: str = "#c46a93") -> None:
+    app.setPalette(get_app_palette(is_dark=is_dark, accent=accent))

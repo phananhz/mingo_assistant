@@ -10,7 +10,7 @@ if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
 
 python -c "import PySide6, PyInstaller; print('PySide6', PySide6.__version__); print('PyInstaller', PyInstaller.__version__)"
 
-Write-Host "Building Mingo Assistant with PyInstaller..."
+Write-Host "Building Min Assistant with PyInstaller..."
 python -m PyInstaller --noconfirm --clean $specPath
 
 $iscc = Get-Command iscc.exe -ErrorAction SilentlyContinue

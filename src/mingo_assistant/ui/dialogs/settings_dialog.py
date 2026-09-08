@@ -28,11 +28,16 @@ from PySide6.QtWidgets import (
 from mingo_assistant import __version__
 from mingo_assistant.ui.styles import (
     BORDER_RADIUS_OPTIONS,
+    EFFECT_SHADOW_OPTIONS,
     FONT_SIZE_OPTIONS,
     LAYOUT_OPTIONS,
     THEME_CATEGORIES,
     THEME_OPTIONS,
 )
+
+# Layout choices intentionally exposed in Settings. Legacy layout code remains
+# available for compatibility with existing saved settings, but is not shown.
+VISIBLE_LAYOUT_KEYS = ("default", "modern_studio", "top_nav", "slim_sidebar", "liquid_glass")
 
 
 class VisualThemeModeCard(QFrame):
@@ -273,6 +278,64 @@ class VisualLayoutCard(QFrame):
             prev_l.addWidget(side)
             prev_l.addWidget(main, 1)
 
+        elif layout_id == "macos_glass":
+            main = QFrame()
+            main.setStyleSheet(
+                "background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #08214D, stop:0.5 #0077B6, stop:1 #38BDF8); "
+                "border-radius: 6px;"
+            )
+            main_l = QVBoxLayout(main)
+            main_l.setContentsMargins(4, 4, 4, 4)
+            main_l.setSpacing(3)
+
+            # Top floating pill with Apple traffic lights
+            traffic = QFrame()
+            traffic.setFixedHeight(8)
+            traffic.setStyleSheet("background: rgba(255, 255, 255, 0.25); border-radius: 4px; border: 0.5px solid rgba(255, 255, 255, 0.5);")
+            tr_l = QHBoxLayout(traffic)
+            tr_l.setContentsMargins(3, 0, 3, 0)
+            tr_l.setSpacing(2)
+            for col in ("#FF5F56", "#FFBD2E", "#27C93F"):
+                dot = QFrame()
+                dot.setFixedSize(3, 3)
+                dot.setStyleSheet(f"background: {col}; border-radius: 1.5px;")
+                tr_l.addWidget(dot)
+            tr_l.addStretch(1)
+
+            # Content grid: 2 modular liquid glass capsules (pill + slider)
+            grid = QFrame()
+            grid_l = QHBoxLayout(grid)
+            grid_l.setContentsMargins(0, 0, 0, 0)
+            grid_l.setSpacing(3)
+
+            # Left capsule: Wi-Fi pill with white circle
+            m1 = QFrame()
+            m1.setStyleSheet("background: rgba(255, 255, 255, 0.28); border-radius: 5px; border: 0.5px solid rgba(255, 255, 255, 0.6);")
+            m1_l = QHBoxLayout(m1)
+            m1_l.setContentsMargins(3, 3, 3, 3)
+            w_circle = QFrame()
+            w_circle.setFixedSize(8, 8)
+            w_circle.setStyleSheet("background: #FFFFFF; border-radius: 4px;")
+            m1_l.addWidget(w_circle)
+            m1_l.addStretch(1)
+
+            # Right capsule: slider bar
+            m2 = QFrame()
+            m2.setStyleSheet("background: rgba(255, 255, 255, 0.28); border-radius: 5px; border: 0.5px solid rgba(255, 255, 255, 0.6);")
+            m2_l = QVBoxLayout(m2)
+            m2_l.setContentsMargins(4, 4, 4, 4)
+            bar = QFrame()
+            bar.setFixedHeight(3)
+            bar.setStyleSheet("background: #FFFFFF; border-radius: 1.5px;")
+            m2_l.addWidget(bar)
+
+            grid_l.addWidget(m1, 1)
+            grid_l.addWidget(m2, 1)
+
+            main_l.addWidget(traffic)
+            main_l.addWidget(grid, 1)
+            prev_l.addWidget(main, 1)
+
         elif layout_id == "modern_studio":
             side = QFrame()
             side.setFixedWidth(16)
@@ -337,26 +400,6 @@ class VisualLayoutCard(QFrame):
             prev_l.addWidget(side)
             prev_l.addWidget(main, 1)
 
-        elif layout_id == "compact_legal":
-            side = QFrame()
-            side.setFixedWidth(12)
-            side.setStyleSheet("background: #475569; border-radius: 2px;")
-            left_list = QFrame()
-            left_list.setFixedWidth(24)
-            ll_l = QVBoxLayout(left_list)
-            ll_l.setContentsMargins(0, 0, 0, 0)
-            ll_l.setSpacing(2)
-            for _ in range(3):
-                item = QFrame()
-                item.setFixedHeight(6)
-                item.setStyleSheet("background: #E2E8F0; border-radius: 1px;")
-                ll_l.addWidget(item)
-            right_detail = QFrame()
-            right_detail.setStyleSheet("background: #FFFFFF; border: 1px solid #CBD5E1; border-radius: 2px;")
-            prev_l.addWidget(side)
-            prev_l.addWidget(left_list)
-            prev_l.addWidget(right_detail, 1)
-
         elif layout_id == "slim_sidebar":
             side = QFrame()
             side.setFixedWidth(7)
@@ -388,18 +431,76 @@ class VisualLayoutCard(QFrame):
             main_l.addWidget(card, 1)
             prev_l.addWidget(main, 1)
 
-        else:  # vibrant
+        elif layout_id == "dock_bottom":
+            main = QFrame()
+            main_l = QVBoxLayout(main)
+            main_l.setContentsMargins(2, 2, 2, 2)
+            main_l.setSpacing(3)
+            card = QFrame()
+            card.setStyleSheet("background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 3px;")
+            dock = QFrame()
+            dock.setFixedHeight(8)
+            dock.setStyleSheet("background: #334155; border-radius: 4px;")
+            main_l.addWidget(card, 1)
+            main_l.addWidget(dock, 0, Qt.AlignHCenter)
+            prev_l.addWidget(main, 1)
+
+        elif layout_id == "dual_sidebar":
+            rail = QFrame()
+            rail.setFixedWidth(6)
+            rail.setStyleSheet("background: #0F172A; border-radius: 1px;")
+            sub = QFrame()
+            sub.setFixedWidth(14)
+            sub.setStyleSheet("background: #E2E8F0; border-radius: 2px;")
+            card = QFrame()
+            card.setStyleSheet("background: #FFFFFF; border: 1px solid #CBD5E1; border-radius: 2px;")
+            prev_l.addWidget(rail)
+            prev_l.addWidget(sub)
+            prev_l.addWidget(card, 1)
+
+        elif layout_id == "bento_grid":
+            main = QFrame()
+            main_l = QGridLayout(main)
+            main_l.setContentsMargins(1, 1, 1, 1)
+            main_l.setSpacing(2)
+            for r in range(2):
+                for c in range(2):
+                    b = QFrame()
+                    b.setStyleSheet("background: #EDE9FE; border: 1px solid #DDD6FE; border-radius: 3px;")
+                    main_l.addWidget(b, r, c)
+            prev_l.addWidget(main, 1)
+
+        elif layout_id == "cyber_hud":
+            main = QFrame()
+            main_l = QVBoxLayout(main)
+            main_l.setContentsMargins(2, 2, 2, 2)
+            main_l.setSpacing(2)
+            c = QFrame()
+            c.setStyleSheet("background: #0D1117; border: 1.5px solid #00F2FE; border-radius: 2px;")
+            main_l.addWidget(c, 1)
+            prev_l.addWidget(main, 1)
+
+        elif layout_id == "nordic_frost":
             side = QFrame()
-            side.setFixedWidth(18)
-            side.setStyleSheet("background: #8B5CF6; border-radius: 6px;")
+            side.setFixedWidth(16)
+            side.setStyleSheet("background: #0284C7; border-radius: 4px;")
+            card = QFrame()
+            card.setStyleSheet("background: #F0F9FF; border: 1px solid #BAE6FD; border-radius: 4px;")
+            prev_l.addWidget(side)
+            prev_l.addWidget(card, 1)
+
+        else:
+            side = QFrame()
+            side.setFixedWidth(16)
+            side.setStyleSheet("background: #8B5CF6; border-radius: 4px;")
             main = QFrame()
             main_l = QVBoxLayout(main)
             main_l.setContentsMargins(2, 2, 2, 2)
             main_l.setSpacing(3)
             c1 = QFrame()
-            c1.setStyleSheet("background: #FFF1F2; border: 1px solid #FECDD3; border-radius: 5px;")
+            c1.setStyleSheet("background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 3px;")
             c2 = QFrame()
-            c2.setStyleSheet("background: #F0FDF4; border: 1px solid #BBF7D0; border-radius: 5px;")
+            c2.setStyleSheet("background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 3px;")
             main_l.addWidget(c1)
             main_l.addWidget(c2)
             prev_l.addWidget(side)
@@ -503,19 +604,21 @@ class ColorChipCard(QFrame):
         self.style().polish(self)
 
 
-class SettingsDialog(QDialog):
-    """Application settings with multi-layout, extensive color palettes, and real-time preview."""
+class SettingsView(QWidget):
+    """Application settings view with multi-layout, visual effects, and real-time preview."""
 
-    theme_preview_changed = Signal(str, int, str, str, str, str, bool, str)
+    theme_preview_changed = Signal(str, int, str, str, str, str, bool, str, bool, str, bool, bool)
+    save_requested = Signal()
+    cancel_requested = Signal()
 
     _PAGES = (
         ("general", "Chung"),
-        ("appearance", "Giao di\u1ec7n"),
-        ("storage", "N\u01a1i l\u01b0u tr\u1eef"),
-        ("pets", "Th\u00fa c\u01b0ng"),
-        ("background_music", "Nh\u1ea1c n\u1ec1n"),
+        ("appearance", "Giao diện"),
+        ("storage", "Nơi lưu trữ"),
+        ("pets", "Thú cưng"),
+        ("background_music", "Nhạc nền"),
         ("ai", "AI"),
-        ("about", "Gi\u1edbi thi\u1ec7u"),
+        ("about", "Giới thiệu"),
     )
 
     def __init__(
@@ -529,21 +632,27 @@ class SettingsDialog(QDialog):
         border_radius: str = "rounded",
         high_contrast: bool = False,
         custom_color: str = "",
+        animations_enabled: bool = True,
+        card_shadow: str = "subtle",
+        hover_glow: bool = True,
+        glassmorphism: bool = False,
+        parent: QWidget | None = None,
     ) -> None:
-        super().__init__()
-        self.setObjectName("SettingsDialog")
-        self.setWindowTitle("C\u00e0i \u0111\u1eb7t \u1ee9ng d\u1ee5ng")
-        self.resize(1140, 760)
-        self.setMinimumSize(920, 640)
+        super().__init__(parent)
+        self.setObjectName("SettingsView")
 
-        self._selected_export_root = Path(export_root or Path.home() / "Documents" / "Mingo Assistant")
+        self._selected_export_root = Path(export_root or Path.home() / "Documents" / "Min Assistant")
         self._selected_mode = appearance_mode
-        self._selected_layout = selected_layout if selected_layout in LAYOUT_OPTIONS else "default"
+        self._selected_layout = selected_layout if selected_layout in VISIBLE_LAYOUT_KEYS else "default"
         self._selected_font_size = font_size if font_size in FONT_SIZE_OPTIONS else "medium"
         self._selected_border_radius = border_radius if border_radius in BORDER_RADIUS_OPTIONS else "rounded"
         self._selected_high_contrast = high_contrast
         self._custom_color = custom_color.upper() if custom_color else ""
         self._current_theme_id = selected_theme if (selected_theme in THEME_OPTIONS or selected_theme == "custom") else "rose"
+        self._selected_animations_enabled = animations_enabled
+        self._selected_card_shadow = card_shadow if card_shadow in EFFECT_SHADOW_OPTIONS else "subtle"
+        self._selected_hover_glow = hover_glow
+        self._selected_glassmorphism = glassmorphism
 
         self._category_buttons: dict[str, QPushButton] = {}
         self._preview_timer = QTimer(self)
@@ -577,8 +686,8 @@ class SettingsDialog(QDialog):
         buttons = QDialogButtonBox(QDialogButtonBox.Cancel | QDialogButtonBox.Save)
         buttons.button(QDialogButtonBox.Save).setText("Lưu thay đổi")
         buttons.button(QDialogButtonBox.Cancel).setText("Hủy")
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
+        buttons.button(QDialogButtonBox.Save).clicked.connect(self.save_requested.emit)
+        buttons.button(QDialogButtonBox.Cancel).clicked.connect(self.cancel_requested.emit)
         footer_layout.addWidget(buttons)
         root.addWidget(footer)
         self._select_category("appearance")
@@ -592,7 +701,7 @@ class SettingsDialog(QDialog):
         layout.setSpacing(10)
         back = QPushButton("←  Quay lại ứng dụng")
         back.setObjectName("SettingsBackButton")
-        back.clicked.connect(self.reject)
+        back.clicked.connect(self.cancel_requested.emit)
         layout.addWidget(back)
         self.search_input = QLineEdit()
         self.search_input.setObjectName("SettingsSearch")
@@ -723,16 +832,27 @@ class SettingsDialog(QDialog):
 
         badges = {
             "default": "Classic",
+            "macos_glass": "Apple Glass 26",
             "modern_studio": "Studio IDE",
             "top_nav": "Horizon",
             "executive": "Executive",
-            "compact_legal": "2-Column",
             "slim_sidebar": "Minimal",
             "centered_focus": "Focus Canvas",
             "vibrant": "Creative",
+            "dock_bottom": "macOS Dock",
+            "dual_sidebar": "Dual Pro",
+            "bento_grid": "Bento Grid",
+            "glass_morphism": "Frosted Glass",
+            "minimal_zen": "Zen Paper",
+            "cyber_hud": "Cyber Neon",
+            "split_workspace": "Studio Split",
+            "feed_stream": "Feed Stream",
+            "compact_dense": "Enterprise",
+            "nordic_frost": "Nordic Ice",
         }
 
-        for index, (l_key, l_info) in enumerate(LAYOUT_OPTIONS.items()):
+        for index, l_key in enumerate(VISIBLE_LAYOUT_KEYS):
+            l_info = LAYOUT_OPTIONS[l_key]
             card = VisualLayoutCard(
                 layout_id=l_key,
                 title=l_info["title"],
@@ -889,6 +1009,48 @@ class SettingsDialog(QDialog):
         self.contrast_checkbox.toggled.connect(self._on_contrast_toggled)
         detail_l.addWidget(self.contrast_checkbox)
 
+        # Visual effects section
+        fx_title = QLabel("Hiệu ứng & Tương tác (Visual Effects)")
+        fx_title.setObjectName("SettingsItemTitle")
+        fx_title.setStyleSheet("margin-top: 10px; font-weight: 700;")
+        detail_l.addWidget(fx_title)
+
+        self.animation_checkbox = QCheckBox("Bật hiệu ứng chuyển động mượt mà (Animations & Transitions)")
+        self.animation_checkbox.setStyleSheet("font-size: 13px; font-weight: 600; padding: 3px 0;")
+        self.animation_checkbox.setChecked(self._selected_animations_enabled)
+        self.animation_checkbox.toggled.connect(self._on_animations_toggled)
+        detail_l.addWidget(self.animation_checkbox)
+
+        self.hover_glow_checkbox = QCheckBox("Hiệu ứng phát sáng viền khi rê chuột (Glow Accent Hover)")
+        self.hover_glow_checkbox.setStyleSheet("font-size: 13px; font-weight: 600; padding: 3px 0;")
+        self.hover_glow_checkbox.setChecked(self._selected_hover_glow)
+        self.hover_glow_checkbox.toggled.connect(self._on_hover_glow_toggled)
+        detail_l.addWidget(self.hover_glow_checkbox)
+
+        self.glassmorphism_checkbox = QCheckBox("Bề mặt kính mờ bán trong suốt (Frosted Glass Surfaces)")
+        self.glassmorphism_checkbox.setStyleSheet("font-size: 13px; font-weight: 600; padding: 3px 0;")
+        self.glassmorphism_checkbox.setChecked(self._selected_glassmorphism)
+        self.glassmorphism_checkbox.toggled.connect(self._on_glassmorphism_toggled)
+        detail_l.addWidget(self.glassmorphism_checkbox)
+
+        # Shadow options row
+        shadow_row = QHBoxLayout()
+        shadow_lbl = QLabel("Độ bóng thẻ:")
+        shadow_lbl.setObjectName("SettingsItemTitle")
+        shadow_row.addWidget(shadow_lbl)
+        shadow_row.addSpacing(16)
+        self.shadow_buttons: dict[str, QPushButton] = {}
+        for s_key, s_info in EFFECT_SHADOW_OPTIONS.items():
+            btn = QPushButton(s_info["label"])
+            btn.setObjectName("ColorCategoryTab")
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setProperty("active", s_key == self._selected_card_shadow)
+            btn.clicked.connect(lambda checked=False, k=s_key: self._on_card_shadow_clicked(k))
+            self.shadow_buttons[s_key] = btn
+            shadow_row.addWidget(btn)
+        shadow_row.addStretch(1)
+        detail_l.addLayout(shadow_row)
+
         layout.addWidget(detail_card)
         layout.addStretch(1)
         return page
@@ -938,10 +1100,10 @@ class SettingsDialog(QDialog):
     def _build_about_page(self) -> QWidget:
         page, layout = self._page_shell(
             "Giới thiệu",
-            "Mingo Assistant là ứng dụng làm việc cục bộ, hỗ trợ quét QR CCCD, quản lý dữ liệu hồ sơ thành lập doanh nghiệp và xuất bộ biểu mẫu Word.",
+            "Min Assistant là ứng dụng làm việc cục bộ, hỗ trợ quét QR CCCD, quản lý dữ liệu hồ sơ thành lập doanh nghiệp và xuất bộ biểu mẫu Word.",
         )
         layout.addWidget(self._setting_card(
-            "Mingo Assistant",
+            "Min Assistant",
             "Dữ liệu hồ sơ, profile và cài đặt được lưu trên máy của bạn.",
             f"Phiên bản hiện tại: v{__version__}",
         ))
@@ -1112,6 +1274,33 @@ class SettingsDialog(QDialog):
             self.contrast_checkbox.setChecked(False)
             self.contrast_checkbox.blockSignals(False)
 
+        # Reset visual effects
+        self._selected_animations_enabled = True
+        self._selected_card_shadow = "subtle"
+        self._selected_hover_glow = True
+        self._selected_glassmorphism = False
+
+        if hasattr(self, "animation_checkbox"):
+            self.animation_checkbox.blockSignals(True)
+            self.animation_checkbox.setChecked(True)
+            self.animation_checkbox.blockSignals(False)
+
+        if hasattr(self, "hover_glow_checkbox"):
+            self.hover_glow_checkbox.blockSignals(True)
+            self.hover_glow_checkbox.setChecked(True)
+            self.hover_glow_checkbox.blockSignals(False)
+
+        if hasattr(self, "glassmorphism_checkbox"):
+            self.glassmorphism_checkbox.blockSignals(True)
+            self.glassmorphism_checkbox.setChecked(False)
+            self.glassmorphism_checkbox.blockSignals(False)
+
+        if hasattr(self, "shadow_buttons"):
+            for s_key, btn in self.shadow_buttons.items():
+                btn.setProperty("active", s_key == "subtle")
+                btn.style().unpolish(btn)
+                btn.style().polish(btn)
+
         self._emit_preview_now()
 
     def _on_font_size_clicked(self, font_key: str) -> None:
@@ -1134,6 +1323,26 @@ class SettingsDialog(QDialog):
         self._selected_high_contrast = checked
         self._schedule_preview()
 
+    def _on_animations_toggled(self, checked: bool) -> None:
+        self._selected_animations_enabled = checked
+        self._schedule_preview()
+
+    def _on_hover_glow_toggled(self, checked: bool) -> None:
+        self._selected_hover_glow = checked
+        self._schedule_preview()
+
+    def _on_glassmorphism_toggled(self, checked: bool) -> None:
+        self._selected_glassmorphism = checked
+        self._schedule_preview()
+
+    def _on_card_shadow_clicked(self, shadow_key: str) -> None:
+        self._selected_card_shadow = shadow_key
+        for k, btn in self.shadow_buttons.items():
+            btn.setProperty("active", k == shadow_key)
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
+        self._schedule_preview()
+
     def _update_strength_label(self) -> None:
         self.strength_value.setText(f"{self.color_strength_slider.value()}%")
 
@@ -1153,7 +1362,98 @@ class SettingsDialog(QDialog):
             self.selected_border_radius(),
             self.selected_high_contrast(),
             self.selected_custom_color(),
+            self.selected_animations_enabled(),
+            self.selected_card_shadow(),
+            self.selected_hover_glow(),
+            self.selected_glassmorphism(),
         )
+
+    def reload_settings(
+        self,
+        selected_theme: str,
+        color_strength: int = 100,
+        appearance_mode: str = "light",
+        export_root: Path | None = None,
+        selected_layout: str = "default",
+        font_size: str = "medium",
+        border_radius: str = "rounded",
+        high_contrast: bool = False,
+        custom_color: str = "",
+        animations_enabled: bool = True,
+        card_shadow: str = "subtle",
+        hover_glow: bool = True,
+        glassmorphism: bool = False,
+    ) -> None:
+        self._selected_export_root = Path(export_root or Path.home() / "Documents" / "Min Assistant")
+        self._selected_mode = appearance_mode
+        self._selected_layout = selected_layout if selected_layout in VISIBLE_LAYOUT_KEYS else "default"
+        self._selected_font_size = font_size if font_size in FONT_SIZE_OPTIONS else "medium"
+        self._selected_border_radius = border_radius if border_radius in BORDER_RADIUS_OPTIONS else "rounded"
+        self._selected_high_contrast = high_contrast
+        self._custom_color = custom_color.upper() if custom_color else ""
+        self._current_theme_id = selected_theme if (selected_theme in THEME_OPTIONS or selected_theme == "custom") else "rose"
+        self._selected_animations_enabled = animations_enabled
+        self._selected_card_shadow = card_shadow if card_shadow in EFFECT_SHADOW_OPTIONS else "subtle"
+        self._selected_hover_glow = hover_glow
+        self._selected_glassmorphism = glassmorphism
+
+        if hasattr(self, "visual_mode_cards"):
+            for m_id, card in self.visual_mode_cards.items():
+                card.set_selected(m_id == self._selected_mode)
+
+        if hasattr(self, "layout_tiles"):
+            for l_key, card in self.layout_tiles.items():
+                card.set_selected(l_key == self._selected_layout)
+
+        if hasattr(self, "color_chips"):
+            for theme_id, chip in self.color_chips.items():
+                chip.set_selected(theme_id == self._current_theme_id)
+
+        if hasattr(self, "color_strength_slider"):
+            self.color_strength_slider.blockSignals(True)
+            self.color_strength_slider.setValue(color_strength)
+            self.color_strength_slider.blockSignals(False)
+            self._update_strength_label()
+
+        if hasattr(self, "font_buttons"):
+            for f_key, btn in self.font_buttons.items():
+                btn.setProperty("active", f_key == self._selected_font_size)
+                btn.style().unpolish(btn)
+                btn.style().polish(btn)
+
+        if hasattr(self, "radius_buttons"):
+            for r_key, btn in self.radius_buttons.items():
+                btn.setProperty("active", r_key == self._selected_border_radius)
+                btn.style().unpolish(btn)
+                btn.style().polish(btn)
+
+        if hasattr(self, "contrast_checkbox"):
+            self.contrast_checkbox.blockSignals(True)
+            self.contrast_checkbox.setChecked(self._selected_high_contrast)
+            self.contrast_checkbox.blockSignals(False)
+
+        if hasattr(self, "animation_checkbox"):
+            self.animation_checkbox.blockSignals(True)
+            self.animation_checkbox.setChecked(self._selected_animations_enabled)
+            self.animation_checkbox.blockSignals(False)
+
+        if hasattr(self, "hover_glow_checkbox"):
+            self.hover_glow_checkbox.blockSignals(True)
+            self.hover_glow_checkbox.setChecked(self._selected_hover_glow)
+            self.hover_glow_checkbox.blockSignals(False)
+
+        if hasattr(self, "glassmorphism_checkbox"):
+            self.glassmorphism_checkbox.blockSignals(True)
+            self.glassmorphism_checkbox.setChecked(self._selected_glassmorphism)
+            self.glassmorphism_checkbox.blockSignals(False)
+
+        if hasattr(self, "shadow_buttons"):
+            for s_key, btn in self.shadow_buttons.items():
+                btn.setProperty("active", s_key == self._selected_card_shadow)
+                btn.style().unpolish(btn)
+                btn.style().polish(btn)
+
+        self._update_storage_path_label()
 
     def selected_theme(self) -> str:
         if self._current_theme_id == "custom":
@@ -1193,3 +1493,84 @@ class SettingsDialog(QDialog):
 
     def selected_custom_color(self) -> str:
         return self._custom_color
+
+    def selected_animations_enabled(self) -> bool:
+        return getattr(self, "_selected_animations_enabled", True)
+
+    def selected_card_shadow(self) -> str:
+        return getattr(self, "_selected_card_shadow", "subtle")
+
+    def selected_hover_glow(self) -> bool:
+        return getattr(self, "_selected_hover_glow", True)
+
+    def selected_glassmorphism(self) -> bool:
+        return getattr(self, "_selected_glassmorphism", False)
+
+
+class SettingsDialog(QDialog):
+    """QDialog wrapper for SettingsView to maintain modal and unit test compatibility."""
+
+    _PAGES = SettingsView._PAGES
+    theme_preview_changed = Signal(str, int, str, str, str, str, bool, str, bool, str, bool, bool)
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__()
+        self.setObjectName("SettingsDialog")
+        self.setWindowTitle("Cài đặt ứng dụng")
+        self.resize(1140, 760)
+        self.setMinimumSize(920, 640)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self.view = SettingsView(*args, **kwargs, parent=self)
+        layout.addWidget(self.view)
+        self.view.theme_preview_changed.connect(self.theme_preview_changed.emit)
+        self.view.save_requested.connect(self.accept)
+        self.view.cancel_requested.connect(self.reject)
+
+    def selected_theme(self) -> str:
+        return self.view.selected_theme()
+
+    def selected_accent_color(self) -> str:
+        return self.view.selected_accent_color()
+
+    def selected_strength(self) -> int:
+        return self.view.selected_strength()
+
+    def selected_appearance_mode(self) -> str:
+        return self.view.selected_appearance_mode()
+
+    def selected_export_root(self) -> Path:
+        return self.view.selected_export_root()
+
+    def selected_layout(self) -> str:
+        return self.view.selected_layout()
+
+    def selected_font_size(self) -> str:
+        return self.view.selected_font_size()
+
+    def selected_border_radius(self) -> str:
+        return self.view.selected_border_radius()
+
+    def selected_high_contrast(self) -> bool:
+        return self.view.selected_high_contrast()
+
+    def selected_custom_color(self) -> str:
+        return self.view.selected_custom_color()
+
+    def selected_animations_enabled(self) -> bool:
+        return self.view.selected_animations_enabled()
+
+    def selected_card_shadow(self) -> str:
+        return self.view.selected_card_shadow()
+
+    def selected_hover_glow(self) -> bool:
+        return self.view.selected_hover_glow()
+
+    def selected_glassmorphism(self) -> bool:
+        return self.view.selected_glassmorphism()
+
+    def _reset_to_default_theme(self) -> None:
+        self.view._reset_to_default_theme()
+
+    def _select_category(self, category: str) -> None:
+        self.view._select_category(category)

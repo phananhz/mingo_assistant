@@ -1,4 +1,4 @@
-﻿# Mingo Assistant
+﻿# Min Assistant
 
 á»¨ng dá»¥ng desktop Windows há»— trá»£ táº¡o há»“ sÆ¡ tá»« giáº¥y tá» cÃ¡ nhÃ¢n: OCR áº£nh/PDF, trÃ­ch xuáº¥t dá»¯ liá»‡u cÃ³ cáº¥u trÃºc, kiá»ƒm tra dá»¯ liá»‡u, Ä‘iá»n máº«u Word vÃ  xuáº¥t bá»™ há»“ sÆ¡.
 

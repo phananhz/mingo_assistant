@@ -17,7 +17,7 @@ class StartupSplash(QSplashScreen):
         layout.setContentsMargins(42, 36, 42, 34)
         layout.setSpacing(10)
 
-        eyebrow = QLabel("MINGO ASSISTANT")
+        eyebrow = QLabel("MIN ASSISTANT")
         eyebrow.setObjectName("SplashEyebrow")
         title = QLabel("Hỗ trợ lập hồ sơ")
         title.setObjectName("SplashTitle")

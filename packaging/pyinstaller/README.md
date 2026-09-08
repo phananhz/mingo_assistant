@@ -14,4 +14,4 @@ $env:PYTHONPATH = "src"
   packaging\pyinstaller\MingoAssistantQRMaxV3.spec
 ```
 
-The resulting executable is `dist\MingoAssistantQRMaxV3.exe`. Build output and releases remain local and are intentionally ignored by Git.
+The resulting executable is `dist\MinAssistant.exe`. Build output and releases remain local and are intentionally ignored by Git.

@@ -21,9 +21,9 @@ khi build, tránh tạo ra file `.exe` thiếu thư viện giao diện.
 
 Kết quả:
 
-- `dist/MingoAssistant/`: thư mục ứng dụng đã đóng gói.
-- `dist/installer/MingoAssistantSetup-1.0.0.exe`: bộ cài Windows nếu máy có `iscc.exe`.
+- `dist/MinAssistant/`: thư mục ứng dụng đã đóng gói.
+- `dist/installer/MinAssistantSetup-1.0.0.exe`: bộ cài Windows nếu máy có `iscc.exe`.
 
-Ứng dụng lưu database và cấu hình trong `%APPDATA%\Mingo Assistant`. Hồ sơ
-Word/PDF/ZIP mặc định được lưu trong `Documents\Mingo Assistant`; lần chạy đầu
+Ứng dụng lưu database và cấu hình trong `%APPDATA%\Min Assistant`. Hồ sơ
+Word/PDF/ZIP mặc định được lưu trong `Documents\Min Assistant`; lần chạy đầu
 tiên người dùng có thể chọn thư mục khác.

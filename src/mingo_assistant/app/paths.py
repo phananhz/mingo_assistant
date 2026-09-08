@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 
-APP_NAME = "Mingo Assistant"
+APP_NAME = "Min Assistant"
+LEGACY_APP_NAME = "Mingo Assistant"
 
 
 @dataclass
@@ -52,6 +54,15 @@ def get_app_paths() -> AppPaths:
 
     app_data = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
     user_data_root = app_data / APP_NAME
+    legacy_user_data_root = app_data / LEGACY_APP_NAME
+    # Preserve existing local cases and settings when upgrading from the former
+    # Mingo Assistant brand. The copy runs once, only when the new folder has
+    # not been created yet.
+    if not user_data_root.exists() and legacy_user_data_root.exists():
+        try:
+            shutil.copytree(legacy_user_data_root, user_data_root)
+        except OSError:
+            pass
     documents_root = Path.home() / "Documents" / APP_NAME
     return AppPaths(bundle_root=bundle_root, user_data_root=user_data_root, documents_root=documents_root)
 

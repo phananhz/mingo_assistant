@@ -2,11 +2,17 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
 from mingo_assistant.app.paths import get_app_paths, load_settings, save_settings
 from mingo_assistant.ui.main_window import MainWindow
-from mingo_assistant.ui.styles import stylesheet_for_theme
+from mingo_assistant.ui.styles import (
+    THEME_OPTIONS,
+    apply_app_palette,
+    resolved_appearance_mode,
+    stylesheet_for_theme,
+)
 from mingo_assistant.ui.dialogs.storage_location_dialog import StorageLocationDialog
 from mingo_assistant.ui.splash_screen import show_startup_splash
 
@@ -30,9 +36,12 @@ def _prepare_storage_location(paths) -> None:
 
 def main() -> int:
     app = QApplication(sys.argv)
-    app.setApplicationName("Mingo Assistant")
-    app.setOrganizationName("Mingo Assistant")
     paths = get_app_paths()
+    app.setApplicationName("Min Assistant")
+    app.setOrganizationName("Min Assistant")
+    app_icon_path = paths.bundle_root / "assets" / "branding" / "min-assistant.ico"
+    if app_icon_path.is_file():
+        app.setWindowIcon(QIcon(str(app_icon_path)))
     paths.ensure_user_dirs()
     settings = load_settings(paths)
     system_is_dark = False
@@ -40,17 +49,27 @@ def main() -> int:
         system_is_dark = app.styleHints().colorScheme() == Qt.ColorScheme.Dark
     except AttributeError:
         pass
+    mode = settings.get("appearance_mode", "light")
+    is_dark = resolved_appearance_mode(mode, system_is_dark) == "dark"
+    theme_id = settings.get("theme", "rose")
+    custom_color = settings.get("custom_color", "")
+    raw_accent = custom_color if (theme_id == "custom" and custom_color) else THEME_OPTIONS.get(theme_id, {}).get("color", "#c46a93")
+    apply_app_palette(app, is_dark=is_dark, accent=raw_accent)
     app.setStyleSheet(
         stylesheet_for_theme(
-            theme_id=settings.get("theme", "rose"),
+            theme_id=theme_id,
             strength=settings.get("theme_strength", "100"),
-            appearance_mode=settings.get("appearance_mode", "light"),
+            appearance_mode=mode,
             system_is_dark=system_is_dark,
             layout=settings.get("layout", "default"),
             font_size=settings.get("font_size", "medium"),
             border_radius=settings.get("border_radius", "rounded"),
             high_contrast=settings.get("high_contrast", "false").lower() in ("true", "1"),
-            custom_color=settings.get("custom_color", ""),
+            custom_color=custom_color,
+            animations_enabled=settings.get("animations_enabled", "true").lower() in ("true", "1"),
+            card_shadow=settings.get("card_shadow", "subtle"),
+            hover_glow=settings.get("hover_glow", "true").lower() in ("true", "1"),
+            glassmorphism=settings.get("glassmorphism", "false").lower() in ("true", "1"),
         )
     )
     window = MainWindow(app_paths=paths)

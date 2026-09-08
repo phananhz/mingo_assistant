@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 from uuid import uuid4
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import QRectF, Qt, QUrl
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -32,15 +32,31 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PySide6.QtGui import QDesktopServices, QFontMetrics
+from PySide6.QtGui import (
+    QColor,
+    QDesktopServices,
+    QFontMetrics,
+    QIcon,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPixmap,
+)
 
 from mingo_assistant import __version__
 from mingo_assistant.app.paths import AppPaths, get_app_paths, load_settings, save_settings
 from mingo_assistant.models.case import CaseSummary
 from mingo_assistant.repositories.case_repository import CaseRepository
 from mingo_assistant.services.business_lines.industry_lookup import IndustryCatalog, IndustryRow
-from mingo_assistant.ui.dialogs.settings_dialog import SettingsDialog
-from mingo_assistant.ui.styles import LAYOUT_OPTIONS, stylesheet_for_theme
+from mingo_assistant.ui.dialogs.settings_dialog import SettingsDialog, SettingsView
+from mingo_assistant.ui.styles import (
+    EFFECT_SHADOW_OPTIONS,
+    LAYOUT_OPTIONS,
+    THEME_OPTIONS,
+    apply_app_palette,
+    resolved_appearance_mode,
+    stylesheet_for_theme,
+)
 from mingo_assistant.ui.views.business_registration_documents import BusinessRegistrationDocumentsView
 from mingo_assistant.ui.views.business_registration_workspace import BusinessRegistrationWorkspace
 from mingo_assistant.ui.widgets.combo_box import NoWheelComboBox
@@ -48,15 +64,13 @@ from mingo_assistant.ui.widgets.combo_box import NoWheelComboBox
 
 NAV_ITEMS = [
     ("business_registration", "Hồ sơ thành lập doanh nghiệp"),
-    ("industry_lookup", "Tra cứu ngành nghề kinh doanh"),
-    ("trash", "Thùng rác"),
-    ("capital_change", "Hồ sơ thay đổi vốn điều lệ"),
-    ("legal_representative_change", "Hồ sơ thay đổi đại diện pháp luật"),
-    ("address_change", "Hồ sơ thay đổi địa chỉ trụ sở"),
-    ("business_lines_change", "Hồ sơ bổ sung ngành nghề"),
+    ("business_amendment", "Đăng ký thay đổi ĐKDN"),
+    ("dependent_units", "Thủ tục đơn vị phụ thuộc DN"),
     ("dissolution", "Hồ sơ giải thể doanh nghiệp"),
+    ("industry_lookup", "Tra cứu ngành nghề kinh doanh"),
     ("templates", "Quản lý mẫu Word"),
     ("people", "Kho cá nhân/tổ chức"),
+    ("trash", "Thùng rác"),
 ]
 
 
@@ -97,6 +111,130 @@ BUILT_IN_AUTHORIZED_PERSON_PROFILES: tuple[dict[str, str], ...] = (
 )
 
 
+class TechImageSidebar(QFrame):
+    """
+    Sidebar frame that renders custom wallpaper
+    (assets/branding/sidebar_liquid_glass_bg.jpg or sidebar_tech_bg.jpg)
+    with rounded clipping, smooth transformation, and delicate luminous border.
+    In 'liquid_glass' layout mode, it uses the purple abstract wallpaper
+    (image/1788859280719_...jpg).
+    """
+
+    def __init__(self, parent: QWidget | None = None, layout_mode: str = "liquid_glass") -> None:
+        super().__init__(parent)
+        self.setObjectName("Sidebar")
+        self._layout_mode = layout_mode
+        self._liquid_glass_pixmap: QPixmap | None = None
+        self._cyber_tech_pixmap: QPixmap | None = None
+        self._pixmap: QPixmap | None = None
+        self._load_backgrounds()
+        self._update_styled_bg()
+
+    def set_layout_mode(self, layout: str) -> None:
+        self._layout_mode = layout
+        self._update_styled_bg()
+        self.update()
+
+    def _update_styled_bg(self) -> None:
+        self.setAttribute(Qt.WA_StyledBackground, self._layout_mode != "liquid_glass")
+
+    def _load_backgrounds(self) -> None:
+        bundle = None
+        try:
+            bundle = get_app_paths().bundle_root
+        except Exception:
+            pass
+
+        # 1. Liquid Glass abstract wallpaper (blue sphere glass wallpaper)
+        lg_candidates: list[Path] = [
+            Path("assets/branding/sidebar_liquid_glass_bg.jpg"),
+            Path("image/1788861355930_6680548491042055114_6680548491042055114_58dde08bd7452e42ebcb60615f75606d.jpg"),
+            Path("image/1788859280719_6680548491042055114_6680548491042055114_e28013c5b36f3e0aebc9136086b0a038.jpg"),
+        ]
+        if bundle:
+            lg_candidates.insert(0, bundle / "assets" / "branding" / "sidebar_liquid_glass_bg.jpg")
+            lg_candidates.insert(1, bundle / "image" / "1788861355930_6680548491042055114_6680548491042055114_58dde08bd7452e42ebcb60615f75606d.jpg")
+            lg_candidates.insert(2, bundle / "image" / "1788859280719_6680548491042055114_6680548491042055114_e28013c5b36f3e0aebc9136086b0a038.jpg")
+
+        for p in lg_candidates:
+            if p.exists():
+                pix = QPixmap(str(p))
+                if not pix.isNull():
+                    self._liquid_glass_pixmap = pix
+                    break
+
+        # 2. Cyber tech circuit wallpaper
+        tech_candidates: list[Path] = [
+            Path("assets/branding/sidebar_tech_bg.jpg"),
+            Path("1788856436915_6680548491042055114_6680548491042055114_90b07d86dc6f853f7a7fb6c9dae168b0.jpg"),
+        ]
+        if bundle:
+            tech_candidates.insert(0, bundle / "assets" / "branding" / "sidebar_tech_bg.jpg")
+            tech_candidates.insert(1, bundle / "1788856436915_6680548491042055114_6680548491042055114_90b07d86dc6f853f7a7fb6c9dae168b0.jpg")
+
+        for p in tech_candidates:
+            if p.exists():
+                pix = QPixmap(str(p))
+                if not pix.isNull():
+                    self._cyber_tech_pixmap = pix
+                    break
+
+        # Primary default pixmap reference (ensures self._pixmap is never null)
+        self._pixmap = self._liquid_glass_pixmap or self._cyber_tech_pixmap or QPixmap()
+
+    def paintEvent(self, event) -> None:
+        if self._layout_mode != "liquid_glass":
+            super().paintEvent(event)
+            return
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+
+        rect = QRectF(self.rect())
+        radius = 20.0
+        clip_path = QPainterPath()
+        clip_path.addRoundedRect(rect, radius, radius)
+        painter.setClipPath(clip_path)
+
+        if self._layout_mode == "liquid_glass":
+            pix = self._liquid_glass_pixmap or self._pixmap
+            base_col = QColor(36, 30, 85)
+            border_pen = QPen(QColor(255, 255, 255, 75), 1.2)
+        else:
+            pix = self._cyber_tech_pixmap or self._pixmap
+            base_col = QColor(26, 20, 52)
+            border_pen = QPen(QColor(255, 255, 255, 55), 1.0)
+
+        # 1. Base color fill
+        painter.fillRect(rect, base_col)
+
+        # 2. Draw scaled background image
+        if pix is not None and not pix.isNull():
+            if self._layout_mode == "liquid_glass":
+                # Position the crystal sphere elegantly in the lower-middle region (near Thung rac)
+                # while preserving a clean, deep twilight gradient for the top navigation items.
+                scaled_h = int(self.height() * 0.88)
+                scaled = pix.scaledToHeight(scaled_h, Qt.SmoothTransformation)
+                x = (self.width() - scaled.width()) // 2 - int(scaled.width() * 0.08)
+                y = int(self.height() * 0.32)
+            else:
+                scaled = pix.scaled(
+                    self.size(),
+                    Qt.KeepAspectRatioByExpanding,
+                    Qt.SmoothTransformation,
+                )
+                x = (self.width() - scaled.width()) // 2
+                y = (self.height() - scaled.height()) // 2
+            painter.drawPixmap(x, y, scaled)
+
+        # 3. Soft luminous outer edge border
+        painter.strokePath(clip_path, border_pen)
+        painter.end()
+
+        super().paintEvent(event)
+
+
 class MainWindow(QMainWindow):
     SIDEBAR_WIDTH = 220
     PAGE_HORIZONTAL_MARGIN = 48
@@ -106,7 +244,11 @@ class MainWindow(QMainWindow):
     def __init__(self, app_paths: AppPaths | None = None) -> None:
         super().__init__()
         self.app_paths = app_paths or get_app_paths()
-        self.setWindowTitle(f"Mingo Assistant v{__version__}")
+        self.setWindowTitle(f"Min Assistant v{__version__}")
+        self._app_icon_path = self.app_paths.bundle_root / "assets" / "branding" / "min-assistant.ico"
+        self._brand_mark_path = self.app_paths.bundle_root / "assets" / "branding" / "min-assistant-mark.png"
+        if self._app_icon_path.is_file():
+            self.setWindowIcon(QIcon(str(self._app_icon_path)))
         self.resize(1280, 760)
         self.setMinimumSize(760, 520)
 
@@ -127,6 +269,11 @@ class MainWindow(QMainWindow):
         self.authorized_person_cards_layout: QGridLayout | None = None
         self.authorized_person_save_button: QPushButton | None = None
         self._last_applied_theme: tuple | None = None
+        self.macos_traffic_lights: QFrame | None = None
+        self.settings_page: QWidget | None = None
+        self.settings_view: SettingsView | None = None
+        self._previous_widget_before_settings: QWidget | None = None
+        self._settings_snapshot: dict | None = None
 
         init_settings = load_settings(self.app_paths)
         self.current_layout: str = init_settings.get("layout", "default")
@@ -181,6 +328,13 @@ class MainWindow(QMainWindow):
         self._select_nav("business_registration")
         self._refresh_cases()
 
+        try:
+            q_app = QApplication.instance()
+            if q_app is not None and hasattr(q_app.styleHints(), "colorSchemeChanged"):
+                q_app.styleHints().colorSchemeChanged.connect(self._on_system_color_scheme_changed)
+        except Exception:
+            pass
+
     def _build_global_topbar(self) -> QWidget:
         topbar = QFrame()
         topbar.setObjectName("GlobalTopbar")
@@ -188,7 +342,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(16, 0, 16, 0)
         layout.setSpacing(12)
 
-        logo = QLabel("⚡ MINGO STUDIO")
+        logo = QLabel("MIN ASSISTANT")
         logo.setStyleSheet("font-weight: 800; font-size: 13px; letter-spacing: 0.5px;")
         layout.addWidget(logo)
 
@@ -218,31 +372,43 @@ class MainWindow(QMainWindow):
         bar = QFrame()
         bar.setObjectName("TopNavContainer")
         layout = QHBoxLayout(bar)
-        layout.setContentsMargins(20, 0, 20, 0)
-        layout.setSpacing(8)
+        layout.setContentsMargins(16, 0, 16, 0)
+        layout.setSpacing(6)
 
-        brand = QLabel("MINGO ASSISTANT")
+        brand = QLabel("MIN ASSISTANT")
         brand.setObjectName("TopNavBrand")
         layout.addWidget(brand)
-        layout.addSpacing(12)
+        layout.addSpacing(10)
 
         nav_labels = {
-            "business_registration": "Hồ sơ thành lập",
-            "industry_lookup": "Tra cứu ngành nghề",
+            "business_registration": "Thành lập DN",
+            "business_amendment": "Thay đổi ĐKDN",
+            "dependent_units": "Đơn vị trực thuộc",
+            "dissolution": "Giải thể DN",
+            "industry_lookup": "Tra mã ngành",
+            "templates": "Biểu mẫu",
+            "people": "Cá nhân/Tổ chức",
             "trash": "Thùng rác",
-            "capital_change": "Thay đổi vốn",
         }
 
-        for key, label in NAV_ITEMS[:4]:
+        for key, label in NAV_ITEMS:
             display_label = nav_labels.get(key, label)
             btn = QPushButton(display_label)
             btn.setObjectName("TopNavButton")
             btn.setCursor(Qt.PointingHandCursor)
-            btn.clicked.connect(lambda checked=False, item_key=key: self._select_nav(item_key))
+            btn.clicked.connect(lambda checked=False, item_key=key: self._select_nav(item_key, is_user_action=True))
             self.top_nav_buttons[key] = btn
             layout.addWidget(btn)
 
         layout.addStretch(1)
+
+        top_create_btn = QPushButton("+ Tạo hồ sơ")
+        top_create_btn.setObjectName("PrimaryButton")
+        top_create_btn.setCursor(Qt.PointingHandCursor)
+        top_create_btn.setToolTip("Tạo hồ sơ thành lập mới")
+        top_create_btn.clicked.connect(self._open_business_creation_modal)
+        layout.addWidget(top_create_btn)
+        layout.addSpacing(4)
 
         settings_btn = QPushButton("⚙")
         settings_btn.setObjectName("SettingsButton")
@@ -271,16 +437,14 @@ class MainWindow(QMainWindow):
         layout.addSpacing(6)
 
         icons = {
-            "business_registration": "📁",
-            "industry_lookup": "🔍",
-            "trash": "🗑",
-            "capital_change": "💰",
-            "legal_representative_change": "👤",
-            "address_change": "📍",
-            "business_lines_change": "📋",
+            "business_registration": "🏢",
+            "business_amendment": "📝",
+            "dependent_units": "🏛️",
             "dissolution": "⚠️",
-            "templates": "📝",
+            "industry_lookup": "🔍",
+            "templates": "📄",
             "people": "👥",
+            "trash": "🗑",
         }
 
         for key, label in NAV_ITEMS:
@@ -289,7 +453,7 @@ class MainWindow(QMainWindow):
             btn.setToolTip(label)
             btn.setCursor(Qt.PointingHandCursor)
             btn.setFixedSize(42, 42)
-            btn.clicked.connect(lambda checked=False, item_key=key: self._select_nav(item_key))
+            btn.clicked.connect(lambda checked=False, item_key=key: self._select_nav(item_key, is_user_action=True))
             self.slim_nav_buttons[key] = btn
             layout.addWidget(btn, 0, Qt.AlignHCenter)
 
@@ -305,8 +469,35 @@ class MainWindow(QMainWindow):
 
         return sidebar
 
+    def _build_macos_traffic_lights(self) -> QFrame:
+        lights = QFrame()
+        lights.setObjectName("MacOSTrafficLights")
+        lights_layout = QHBoxLayout(lights)
+        lights_layout.setContentsMargins(4, 2, 4, 8)
+        lights_layout.setSpacing(8)
+
+        red = QLabel()
+        red.setObjectName("MacDotRed")
+        red.setToolTip("Đóng")
+
+        yellow = QLabel()
+        yellow.setObjectName("MacDotYellow")
+        yellow.setToolTip("Thu nhỏ")
+
+        green = QLabel()
+        green.setObjectName("MacDotGreen")
+        green.setToolTip("Phóng to")
+
+        lights_layout.addWidget(red)
+        lights_layout.addWidget(yellow)
+        lights_layout.addWidget(green)
+        lights_layout.addStretch(1)
+        lights.setVisible(False)
+        return lights
+
     def _build_sidebar(self) -> QWidget:
-        sidebar = QFrame()
+        layout_mode = getattr(self, "current_layout", "liquid_glass")
+        sidebar = TechImageSidebar(layout_mode=layout_mode)
         sidebar.setObjectName("Sidebar")
         sidebar.setFixedWidth(self.SIDEBAR_WIDTH)
 
@@ -314,20 +505,38 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(12, 12, 12, 16)
         layout.setSpacing(7)
 
-        eyebrow = QLabel("MINGO ASSISTANT")
+        self.macos_traffic_lights = self._build_macos_traffic_lights()
+        layout.addWidget(self.macos_traffic_lights)
+
+        logo_mark = QLabel()
+        logo_mark.setObjectName("SidebarBrandMark")
+        if self._brand_mark_path.is_file():
+            pixmap = QPixmap(str(self._brand_mark_path))
+            logo_mark.setPixmap(pixmap.scaled(44, 44, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        logo_mark.setFixedSize(44, 44)
+        logo_mark.setAlignment(Qt.AlignCenter)
+
+        eyebrow = QLabel("MIN ASSISTANT")
         eyebrow.setObjectName("AppEyebrow")
         title = QLabel("Quản lý hồ sơ")
         title.setObjectName("AppTitle")
 
-        layout.addWidget(eyebrow)
-        layout.addWidget(title)
+        brand_text = QVBoxLayout()
+        brand_text.setSpacing(2)
+        brand_text.addWidget(eyebrow)
+        brand_text.addWidget(title)
+        brand_row = QHBoxLayout()
+        brand_row.setSpacing(8)
+        brand_row.addWidget(logo_mark)
+        brand_row.addLayout(brand_text, 1)
+        layout.addLayout(brand_row)
         layout.addSpacing(18)
 
         for key, label in NAV_ITEMS:
             button = QPushButton(label)
             button.setObjectName("NavButton")
             button.setCursor(Qt.PointingHandCursor)
-            button.clicked.connect(lambda checked=False, item_key=key: self._select_nav(item_key))
+            button.clicked.connect(lambda checked=False, item_key=key: self._select_nav(item_key, is_user_action=True))
             self.nav_buttons[key] = button
             layout.addWidget(button)
 
@@ -347,21 +556,68 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
 
         self.business_page = self._build_business_registration_page()
+        self.business_amendment_page = self._build_category_hub_page(
+            nav_key="business_amendment",
+            title_text="Đăng ký thay đổi ĐKDN",
+            desc_text="Quản lý và soạn thảo các hồ sơ thay đổi nội dung đăng ký doanh nghiệp (địa chỉ, vốn điều lệ, người đại diện, ngành nghề...).",
+            on_create_clicked=self._open_business_amendment_modal,
+        )
+        self.dependent_units_page = self._build_category_hub_page(
+            nav_key="dependent_units",
+            title_text="Thủ tục đơn vị phụ thuộc DN",
+            desc_text="Quản lý và soạn thảo hồ sơ thành lập, thay đổi, chấm dứt hoạt động cho chi nhánh, văn phòng đại diện và địa điểm kinh doanh.",
+            on_create_clicked=self._open_dependent_unit_modal,
+        )
+        self.dissolution_page = self._build_category_hub_page(
+            nav_key="dissolution",
+            title_text="Hồ sơ giải thể doanh nghiệp",
+            desc_text="Soạn thảo hồ sơ giải thể doanh nghiệp theo từng loại hình công ty và xử lý tình trạng mã số thuế tương ứng.",
+            on_create_clicked=self._open_dissolution_modal,
+        )
         self.authorized_person_page = self._build_authorized_person_page()
         self.industry_lookup_page = self._build_industry_lookup_page()
         self.trash_page = self._build_trash_page()
         self.coming_soon_page = self._build_coming_soon_page()
+        self.settings_page = self._build_settings_page()
 
         self.stack.addWidget(self.business_page)
+        self.stack.addWidget(self.business_amendment_page)
+        self.stack.addWidget(self.dependent_units_page)
+        self.stack.addWidget(self.dissolution_page)
         self.stack.addWidget(self.authorized_person_page)
         self.stack.addWidget(self.industry_lookup_page)
         self.stack.addWidget(self.trash_page)
         self.stack.addWidget(self.coming_soon_page)
+        self.stack.addWidget(self.settings_page)
         layout.addWidget(self.stack)
 
         return content
 
-    def _select_nav(self, key: str) -> None:
+    def _select_nav(self, key: str, is_user_action: bool = False) -> None:
+        if (
+            hasattr(self, "stack")
+            and hasattr(self, "settings_page")
+            and self.settings_page is not None
+            and self.stack.currentWidget() == self.settings_page
+        ):
+            if hasattr(self, "_settings_snapshot") and self._settings_snapshot:
+                s = self._settings_snapshot
+                self._settings_snapshot = None
+                self._apply_theme_preview(
+                    s["theme"],
+                    s["theme_strength"],
+                    s["appearance_mode"],
+                    s["layout"],
+                    s["font_size"],
+                    s["border_radius"],
+                    s["high_contrast"],
+                    s["custom_color"],
+                    s["animations_enabled"],
+                    s["card_shadow"],
+                    s["hover_glow"],
+                    s["glassmorphism"],
+                )
+
         self._current_nav_key = key
         for item_key, button in self.nav_buttons.items():
             button.setProperty("active", item_key == key)
@@ -379,15 +635,35 @@ class MainWindow(QMainWindow):
                 button.style().polish(button)
 
         if key == "business_registration":
-            self.stack.setCurrentWidget(self.business_page)
+            if is_user_action and self.stack.currentWidget() == self.business_page:
+                self._open_business_creation_modal()
+            else:
+                self.stack.setCurrentWidget(self.business_page)
+        elif key == "business_amendment":
+            if is_user_action and self.stack.currentWidget() == self.business_amendment_page:
+                self._open_business_amendment_modal()
+            else:
+                self.stack.setCurrentWidget(self.business_amendment_page)
+        elif key == "dependent_units":
+            if is_user_action and self.stack.currentWidget() == self.dependent_units_page:
+                self._open_dependent_unit_modal()
+            else:
+                self.stack.setCurrentWidget(self.dependent_units_page)
+        elif key == "dissolution":
+            if is_user_action and self.stack.currentWidget() == self.dissolution_page:
+                self._open_dissolution_modal()
+            else:
+                self.stack.setCurrentWidget(self.dissolution_page)
         elif key == "industry_lookup":
             self._refresh_industry_lookup()
             self.stack.setCurrentWidget(self.industry_lookup_page)
         elif key == "trash":
             self._refresh_trash()
             self.stack.setCurrentWidget(self.trash_page)
+        elif key == "people":
+            self._open_authorized_person_manager()
         else:
-            self.stack.setCurrentWidget(self.coming_soon_page)
+            self._show_coming_soon(key, "business_registration")
 
     def _build_business_registration_page(self) -> QWidget:
         page = QWidget()
@@ -412,7 +688,7 @@ class MainWindow(QMainWindow):
         self.business_create_button = QPushButton("+ Tạo hồ sơ mới")
         self.business_create_button.setObjectName("PrimaryButton")
         self.business_create_button.setCursor(Qt.PointingHandCursor)
-        self.business_create_button.clicked.connect(self._open_new_business_case)
+        self.business_create_button.clicked.connect(self._open_business_creation_modal)
 
         self.business_authorized_person_button = QPushButton("Thông tin người ủy quyền")
         self.business_authorized_person_button.setObjectName("GhostButton")
@@ -428,7 +704,6 @@ class MainWindow(QMainWindow):
 
         header.addLayout(header_text, 1)
         header.addWidget(self.business_settings_button, 0, Qt.AlignTop)
-        header.addWidget(self.business_authorized_person_button, 0, Qt.AlignTop)
         header.addWidget(self.business_create_button, 0, Qt.AlignTop)
         layout.addLayout(header)
 
@@ -449,20 +724,19 @@ class MainWindow(QMainWindow):
         self.cards_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
         self.cards_layout.setContentsMargins(0, 0, 0, 0)
-        self.cards_layout.setHorizontalSpacing(18)
-        self.cards_layout.setVerticalSpacing(18)
-        self.cards_scroll.setWidget(self.cards_container)
+        self.cards_layout.setHorizontalSpacing(16)
+        self.cards_layout.setVerticalSpacing(16)
 
-        self.main_work_area = QWidget()
-        work_layout = QHBoxLayout(self.main_work_area)
+        work_layout = QHBoxLayout()
         work_layout.setContentsMargins(0, 0, 0, 0)
-        work_layout.setSpacing(18)
+        work_layout.setSpacing(16)
 
+        self.cards_scroll.setWidget(self.cards_container)
         work_layout.addWidget(self.cards_scroll, 1)
+
         self.detail_preview_panel = self._build_detail_preview_panel()
         work_layout.addWidget(self.detail_preview_panel, 0)
-
-        layout.addWidget(self.main_work_area, 1)
+        layout.addLayout(work_layout, 1)
 
         return page
 
@@ -486,14 +760,10 @@ class MainWindow(QMainWindow):
         c3 = self._kpi_card("✅", "Sẵn sàng tạo", self.kpi_ready_val)
 
         self.kpi_auth_val = QLabel("---")
-        self.kpi_auth_val.setObjectName("KpiValue")
-        self.kpi_auth_val.setStyleSheet("font-size: 14px; font-weight: 700;")
-        c4 = self._kpi_card("👤", "Người ủy quyền", self.kpi_auth_val)
 
         layout.addWidget(c1, 1)
         layout.addWidget(c2, 1)
         layout.addWidget(c3, 1)
-        layout.addWidget(c4, 1)
         return row
 
     def _kpi_card(self, icon: str, label_text: str, value_widget: QLabel) -> QWidget:
@@ -525,12 +795,13 @@ class MainWindow(QMainWindow):
         self.kpi_total_val.setText(str(total))
         self.kpi_draft_val.setText(str(max(0, draft)))
         self.kpi_ready_val.setText(str(ready))
-        auth_name = "---"
-        if self.cases:
-            auth_name = self._authorized_person_name(self.cases[0])
-        elif self.authorized_person_profiles:
-            auth_name = self.authorized_person_profiles[0].get("authorized_person_full_name", "---")
-        self.kpi_auth_val.setText(auth_name[:18] + "..." if len(auth_name) > 18 else auth_name)
+        if hasattr(self, "kpi_auth_val") and self.kpi_auth_val is not None:
+            auth_name = "---"
+            if self.cases:
+                auth_name = self._authorized_person_name(self.cases[0])
+            elif self.authorized_person_profiles:
+                auth_name = self.authorized_person_profiles[0].get("authorized_person_full_name", "---")
+            self.kpi_auth_val.setText(auth_name[:18] + "..." if len(auth_name) > 18 else auth_name)
 
     def _build_detail_preview_panel(self) -> QWidget:
         panel = QFrame()
@@ -566,7 +837,6 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._detail_field("Loại hình:", self.detail_type_val))
         layout.addWidget(self._detail_field("Vốn điều lệ:", self.detail_capital_val))
         layout.addWidget(self._detail_field("Số thành viên:", self.detail_members_val))
-        layout.addWidget(self._detail_field("Người ủy quyền:", self.detail_owner_val))
         layout.addWidget(self._detail_field("Cập nhật:", self.detail_updated_val))
 
         layout.addStretch(1)
@@ -636,47 +906,59 @@ class MainWindow(QMainWindow):
 
     def _apply_layout_structure(self, layout_key: str) -> None:
         self.current_layout = layout_key if layout_key in LAYOUT_OPTIONS else "default"
+        from mingo_assistant.ui.liquid_glass import GlassHover
+        if not hasattr(self, "_glass_hover"):
+            self._glass_hover = GlassHover(self)
+        self._glass_hover.configure(self.current_layout == "liquid_glass")
+
+        # 0. macOS Traffic Lights visibility
+        if hasattr(self, "macos_traffic_lights") and self.macos_traffic_lights is not None:
+            self.macos_traffic_lights.setVisible(self.current_layout == "macos_glass")
 
         # 1. Topbar visibility
         if hasattr(self, "global_topbar"):
-            self.global_topbar.setVisible(self.current_layout == "modern_studio")
+            self.global_topbar.setVisible(self.current_layout in ("modern_studio", "cyber_hud"))
 
         # 2. Top navigation bar visibility
         if hasattr(self, "top_nav_bar"):
             self.top_nav_bar.setVisible(self.current_layout == "top_nav")
 
-        # 3. Sidebar visibility
+        # 3. Sidebar visibility & sizing
         if hasattr(self, "sidebar"):
             show_std_sidebar = self.current_layout not in ("top_nav", "slim_sidebar")
             self.sidebar.setVisible(show_std_sidebar)
-            if self.current_layout == "compact_legal":
-                self.sidebar.setFixedWidth(190)
-            elif self.current_layout == "modern_studio":
+            if hasattr(self.sidebar, "set_layout_mode"):
+                self.sidebar.set_layout_mode(self.current_layout)
+            if self.current_layout == "macos_glass":
+                self.sidebar.setFixedWidth(225)
+            elif self.current_layout in ("modern_studio", "dual_sidebar"):
                 self.sidebar.setFixedWidth(210)
+            elif self.current_layout in ("minimal_zen", "compact_dense"):
+                self.sidebar.setFixedWidth(200)
             else:
                 self.sidebar.setFixedWidth(self.SIDEBAR_WIDTH)
 
         # 4. Slim sidebar visibility
         if hasattr(self, "slim_sidebar"):
-            self.slim_sidebar.setVisible(self.current_layout == "slim_sidebar")
+            self.slim_sidebar.setVisible(self.current_layout in ("slim_sidebar", "dual_sidebar"))
 
         # 5. KPI row visibility
         if hasattr(self, "kpi_row"):
-            is_exec = self.current_layout == "executive"
+            is_exec = self.current_layout in ("executive", "bento_grid", "feed_stream", "macos_glass")
             self.kpi_row.setVisible(is_exec)
             if is_exec:
                 self._update_kpi_metrics()
 
         # 6. Detail preview panel visibility
         if hasattr(self, "detail_preview_panel"):
-            is_compact = self.current_layout == "compact_legal"
-            self.detail_preview_panel.setVisible(is_compact)
-            if is_compact:
+            is_detail_visible = self.current_layout in ("split_workspace", "feed_stream")
+            self.detail_preview_panel.setVisible(is_detail_visible)
+            if is_detail_visible:
                 self._update_detail_preview(getattr(self, "_selected_case_for_detail", None))
 
         # 7. Hide page header settings button when already shown in topbar
         if hasattr(self, "business_settings_button"):
-            has_top_settings = self.current_layout in ("top_nav", "modern_studio")
+            has_top_settings = self.current_layout in ("top_nav", "modern_studio", "cyber_hud")
             self.business_settings_button.setVisible(not has_top_settings)
 
         # 8. Optimized margins on business page
@@ -685,12 +967,26 @@ class MainWindow(QMainWindow):
                 self.business_page_layout.setContentsMargins(28, 14, 28, 20)
             elif self.current_layout == "centered_focus":
                 self.business_page_layout.setContentsMargins(56, 20, 56, 22)
+            elif self.current_layout == "minimal_zen":
+                self.business_page_layout.setContentsMargins(40, 24, 40, 24)
+            elif self.current_layout == "compact_dense":
+                self.business_page_layout.setContentsMargins(16, 12, 16, 14)
+            elif self.current_layout == "macos_glass":
+                self.business_page_layout.setContentsMargins(28, 18, 28, 20)
             else:
                 self.business_page_layout.setContentsMargins(24, 20, 24, 22)
 
-        self._select_nav(getattr(self, "_current_nav_key", "business_registration"))
+        if not (
+            hasattr(self, "settings_page")
+            and self.settings_page is not None
+            and hasattr(self, "stack")
+            and self.stack.currentWidget() == self.settings_page
+        ):
+            self._select_nav(getattr(self, "_current_nav_key", "business_registration"))
         self._relayout_filters()
         self._refresh_cases()
+
+        self._glass_hover.attach()
 
     def _apply_theme_preview(
         self,
@@ -702,16 +998,38 @@ class MainWindow(QMainWindow):
         border_radius: str = "rounded",
         high_contrast: bool = False,
         custom_color: str = "",
+        animations_enabled: bool = True,
+        card_shadow: str = "subtle",
+        hover_glow: bool = True,
+        glassmorphism: bool = False,
     ) -> None:
         self._apply_layout_structure(layout)
+        self._glass_hover.motion = animations_enabled
         app = QApplication.instance()
         if app is None:
             return
         system_is_dark = self._system_prefers_dark(app)
-        key = (theme_id, int(strength), appearance_mode, system_is_dark, layout, font_size, border_radius, bool(high_contrast), custom_color)
+        key = (
+            theme_id,
+            int(strength),
+            appearance_mode,
+            system_is_dark,
+            layout,
+            font_size,
+            border_radius,
+            bool(high_contrast),
+            custom_color,
+            bool(animations_enabled),
+            str(card_shadow),
+            bool(hover_glow),
+            bool(glassmorphism),
+        )
         if key == self._last_applied_theme:
             return
         self._last_applied_theme = key
+        is_dark = resolved_appearance_mode(appearance_mode, system_is_dark) == "dark"
+        raw_accent = custom_color if (theme_id == "custom" and custom_color) else THEME_OPTIONS.get(theme_id, {}).get("color", "#c46a93")
+        apply_app_palette(app, is_dark=is_dark, accent=raw_accent)
         app.setStyleSheet(
             stylesheet_for_theme(
                 theme_id=theme_id,
@@ -723,8 +1041,34 @@ class MainWindow(QMainWindow):
                 border_radius=border_radius,
                 high_contrast=high_contrast,
                 custom_color=custom_color,
+                animations_enabled=animations_enabled,
+                card_shadow=card_shadow,
+                hover_glow=hover_glow,
+                glassmorphism=glassmorphism,
             )
         )
+
+    def _on_system_color_scheme_changed(self, _scheme=None) -> None:
+        settings = load_settings(self.app_paths)
+        if settings.get("appearance_mode", "light") == "system":
+            try:
+                strength = int(settings.get("theme_strength", "100"))
+            except ValueError:
+                strength = 100
+            self._apply_theme_preview(
+                theme_id=settings.get("theme", "rose"),
+                strength=strength,
+                appearance_mode="system",
+                layout=settings.get("layout", "default"),
+                font_size=settings.get("font_size", "medium"),
+                border_radius=settings.get("border_radius", "rounded"),
+                high_contrast=settings.get("high_contrast", "false").lower() in ("true", "1"),
+                custom_color=settings.get("custom_color", ""),
+                animations_enabled=settings.get("animations_enabled", "true").lower() in ("true", "1"),
+                card_shadow=settings.get("card_shadow", "subtle"),
+                hover_glow=settings.get("hover_glow", "true").lower() in ("true", "1"),
+                glassmorphism=settings.get("glassmorphism", "false").lower() in ("true", "1"),
+            )
 
     @staticmethod
     def _system_prefers_dark(app: QApplication) -> bool:
@@ -733,7 +1077,7 @@ class MainWindow(QMainWindow):
         except AttributeError:
             return False
 
-    def _open_settings(self) -> None:
+    def _build_settings_page(self) -> QWidget:
         current_settings = load_settings(self.app_paths)
         current_theme = current_settings.get("theme", "rose")
         try:
@@ -746,8 +1090,12 @@ class MainWindow(QMainWindow):
         current_border_radius = current_settings.get("border_radius", "rounded")
         current_high_contrast = current_settings.get("high_contrast", "false").lower() in ("true", "1")
         current_custom_color = current_settings.get("custom_color", "")
+        current_animations = current_settings.get("animations_enabled", "true").lower() in ("true", "1")
+        current_card_shadow = current_settings.get("card_shadow", "subtle")
+        current_hover_glow = current_settings.get("hover_glow", "true").lower() in ("true", "1")
+        current_glassmorphism = current_settings.get("glassmorphism", "false").lower() in ("true", "1")
 
-        dialog = SettingsDialog(
+        self.settings_view = SettingsView(
             selected_theme=current_theme,
             color_strength=current_strength,
             appearance_mode=current_mode,
@@ -757,30 +1105,90 @@ class MainWindow(QMainWindow):
             border_radius=current_border_radius,
             high_contrast=current_high_contrast,
             custom_color=current_custom_color,
+            animations_enabled=current_animations,
+            card_shadow=current_card_shadow,
+            hover_glow=current_hover_glow,
+            glassmorphism=current_glassmorphism,
         )
-        dialog.theme_preview_changed.connect(self._apply_theme_preview)
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            self._apply_theme_preview(
-                current_theme,
-                current_strength,
-                current_mode,
-                current_layout,
-                current_font_size,
-                current_border_radius,
-                current_high_contrast,
-                current_custom_color,
-            )
-            return
+        self.settings_view.theme_preview_changed.connect(self._apply_theme_preview)
+        self.settings_view.save_requested.connect(self._save_settings_from_view)
+        self.settings_view.cancel_requested.connect(self._cancel_settings_from_view)
+        return self.settings_view
 
-        selected_theme = dialog.selected_theme()
-        selected_strength = dialog.selected_strength()
-        selected_mode = dialog.selected_appearance_mode()
-        selected_layout = dialog.selected_layout()
-        selected_font_size = dialog.selected_font_size()
-        selected_border_radius = dialog.selected_border_radius()
-        selected_high_contrast = dialog.selected_high_contrast()
-        selected_custom_color = dialog.selected_custom_color()
-        selected_export_root = dialog.selected_export_root()
+    def _open_settings(self) -> None:
+        self._previous_widget_before_settings = self.stack.currentWidget()
+        current_settings = load_settings(self.app_paths)
+        try:
+            current_strength = int(current_settings.get("theme_strength", "100"))
+        except ValueError:
+            current_strength = 100
+        self._settings_snapshot = {
+            "theme": current_settings.get("theme", "rose"),
+            "theme_strength": current_strength,
+            "appearance_mode": current_settings.get("appearance_mode", "light"),
+            "layout": current_settings.get("layout", "default"),
+            "font_size": current_settings.get("font_size", "medium"),
+            "border_radius": current_settings.get("border_radius", "rounded"),
+            "high_contrast": current_settings.get("high_contrast", "false").lower() in ("true", "1"),
+            "custom_color": current_settings.get("custom_color", ""),
+            "animations_enabled": current_settings.get("animations_enabled", "true").lower() in ("true", "1"),
+            "card_shadow": current_settings.get("card_shadow", "subtle"),
+            "hover_glow": current_settings.get("hover_glow", "true").lower() in ("true", "1"),
+            "glassmorphism": current_settings.get("glassmorphism", "false").lower() in ("true", "1"),
+        }
+
+        if hasattr(self, "settings_view") and self.settings_view is not None:
+            self.settings_view.reload_settings(
+                selected_theme=self._settings_snapshot["theme"],
+                color_strength=self._settings_snapshot["theme_strength"],
+                appearance_mode=self._settings_snapshot["appearance_mode"],
+                selected_layout=self._settings_snapshot["layout"],
+                font_size=self._settings_snapshot["font_size"],
+                border_radius=self._settings_snapshot["border_radius"],
+                high_contrast=self._settings_snapshot["high_contrast"],
+                custom_color=self._settings_snapshot["custom_color"],
+                animations_enabled=self._settings_snapshot["animations_enabled"],
+                card_shadow=self._settings_snapshot["card_shadow"],
+                hover_glow=self._settings_snapshot["hover_glow"],
+                glassmorphism=self._settings_snapshot["glassmorphism"],
+                export_root=self.app_paths.documents_root,
+            )
+
+        for button in self.nav_buttons.values():
+            button.setProperty("active", False)
+            button.style().unpolish(button)
+            button.style().polish(button)
+        if hasattr(self, "top_nav_buttons"):
+            for button in self.top_nav_buttons.values():
+                button.setProperty("active", False)
+                button.style().unpolish(button)
+                button.style().polish(button)
+        if hasattr(self, "slim_nav_buttons"):
+            for button in self.slim_nav_buttons.values():
+                button.setProperty("active", False)
+                button.style().unpolish(button)
+                button.style().polish(button)
+
+        if hasattr(self, "settings_page") and self.settings_page is not None:
+            self.stack.setCurrentWidget(self.settings_page)
+
+    def _save_settings_from_view(self) -> None:
+        view = self.settings_view
+        if view is None:
+            return
+        selected_theme = view.selected_theme()
+        selected_strength = view.selected_strength()
+        selected_mode = view.selected_appearance_mode()
+        selected_layout = view.selected_layout()
+        selected_font_size = view.selected_font_size()
+        selected_border_radius = view.selected_border_radius()
+        selected_high_contrast = view.selected_high_contrast()
+        selected_custom_color = view.selected_custom_color()
+        selected_animations = view.selected_animations_enabled()
+        selected_card_shadow = view.selected_card_shadow()
+        selected_hover_glow = view.selected_hover_glow()
+        selected_glassmorphism = view.selected_glassmorphism()
+        selected_export_root = view.selected_export_root()
         selected_export_root.mkdir(parents=True, exist_ok=True)
         self.app_paths.documents_root = selected_export_root
         self.current_layout = selected_layout
@@ -794,6 +1202,10 @@ class MainWindow(QMainWindow):
             selected_border_radius,
             selected_high_contrast,
             selected_custom_color,
+            selected_animations,
+            selected_card_shadow,
+            selected_hover_glow,
+            selected_glassmorphism,
         )
 
         save_settings(
@@ -807,10 +1219,45 @@ class MainWindow(QMainWindow):
                 "border_radius": selected_border_radius,
                 "high_contrast": "true" if selected_high_contrast else "false",
                 "custom_color": selected_custom_color,
+                "animations_enabled": "true" if selected_animations else "false",
+                "card_shadow": selected_card_shadow,
+                "hover_glow": "true" if selected_hover_glow else "false",
+                "glassmorphism": "true" if selected_glassmorphism else "false",
                 "export_root": str(selected_export_root),
             },
         )
         self._refresh_cases()
+        self._exit_settings()
+
+    def _cancel_settings_from_view(self) -> None:
+        if hasattr(self, "_settings_snapshot") and self._settings_snapshot:
+            s = self._settings_snapshot
+            self._settings_snapshot = None
+            self._apply_theme_preview(
+                s["theme"],
+                s["theme_strength"],
+                s["appearance_mode"],
+                s["layout"],
+                s["font_size"],
+                s["border_radius"],
+                s["high_contrast"],
+                s["custom_color"],
+                s["animations_enabled"],
+                s["card_shadow"],
+                s["hover_glow"],
+                s["glassmorphism"],
+            )
+        self._exit_settings()
+
+    def _exit_settings(self) -> None:
+        target = getattr(self, "_previous_widget_before_settings", None)
+        if target and self.stack.indexOf(target) != -1 and target != self.settings_page:
+            self.stack.setCurrentWidget(target)
+        else:
+            self.stack.setCurrentWidget(self.business_page)
+
+        current_nav = getattr(self, "_current_nav_key", "business_registration")
+        self._select_nav(current_nav, is_user_action=False)
 
     def _build_trash_page(self) -> QWidget:
         page = QWidget()
@@ -993,7 +1440,7 @@ class MainWindow(QMainWindow):
         layout.setHorizontalSpacing(16)
         layout.setVerticalSpacing(6)
 
-        self.search_input.setPlaceholderText("Tìm theo tên công ty, người ủy quyền...")
+        self.search_input.setPlaceholderText("Tìm theo tên công ty...")
         self.case_type_filter.addItems(
             ["Tất cả loại hình", "TNHH hai thành viên trở lên", "TNHH một thành viên", "Công ty cổ phần"]
         )
@@ -1215,7 +1662,7 @@ class MainWindow(QMainWindow):
         title = QLabel(case.company_name)
         title.setObjectName("CardTitle")
         title.setWordWrap(True)
-        meta = QLabel(f"{case.case_type} | Người ủy quyền: {self._authorized_person_name(case)} | Đã xóa: {case.deleted_at or 'Không rõ'}")
+        meta = QLabel(f"{case.case_type} | Đã xóa: {case.deleted_at or 'Không rõ'}")
         meta.setObjectName("MetaText")
         meta.setWordWrap(True)
         info.addWidget(title)
@@ -1327,7 +1774,6 @@ class MainWindow(QMainWindow):
         body.addWidget(subtitle)
 
         body.addSpacing(4)
-        body.addWidget(self._meta_row("Người ủy quyền", self._authorized_person_name(case)))
         body.addWidget(self._meta_row("Thành viên", str(case.members)))
         body.addWidget(self._meta_row("Vốn điều lệ", case.capital))
         body.addWidget(self._meta_row("Cập nhật", case.updated_at))
@@ -1401,21 +1847,14 @@ class MainWindow(QMainWindow):
         button = QPushButton("Tạo hồ sơ")
         button.setObjectName("PrimaryButton")
         button.setCursor(Qt.PointingHandCursor)
-        button.clicked.connect(self._open_new_business_case)
+        button.clicked.connect(self._open_business_creation_modal)
         layout.addWidget(button)
         layout.addItem(QSpacerItem(1, 34, QSizePolicy.Minimum, QSizePolicy.Expanding))
 
         return card
 
     def _open_create_case_dialog(self) -> None:
-        self._open_new_business_case()
-        return
-        dialog = CreateCaseDialog(self)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            case = dialog.build_case()
-            self.case_repository.save_case(case)
-            self.cases = self.case_repository.list_cases()
-            self._refresh_cases()
+        self._open_business_creation_modal()
 
     def _show_case_info(self, case: CaseSummary) -> None:
         QMessageBox.information(
@@ -1424,7 +1863,6 @@ class MainWindow(QMainWindow):
             (
                 f"Tên doanh nghiệp: {case.company_name}\n"
                 f"Loại hình: {case.case_type}\n"
-                f"Người ủy quyền: {self._authorized_person_name(case)}\n"
                 f"Số thành viên: {case.members}\n"
                 f"Vốn điều lệ: {case.capital}\n"
                 f"Trạng thái: {case.status}"
@@ -1435,23 +1873,221 @@ class MainWindow(QMainWindow):
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(36, 28, 36, 28)
-        layout.setSpacing(10)
+        layout.setSpacing(14)
         layout.setAlignment(Qt.AlignCenter)
 
-        title = QLabel("Ch\u1ee9c n\u0103ng n\u00e0y \u0111ang \u0111\u01b0\u1ee3c ph\u00e1t tri\u1ec3n")
-        title.setObjectName("ComingSoonTitle")
-        title.setAlignment(Qt.AlignCenter)
+        self.coming_soon_title = QLabel("Chức năng này đang được phát triển")
+        self.coming_soon_title.setObjectName("ComingSoonTitle")
+        self.coming_soon_title.setAlignment(Qt.AlignCenter)
 
-        description = QLabel(
-            "T\u00ednh n\u0103ng n\u00e0y s\u1ebd \u0111\u01b0\u1ee3c b\u1ed5 sung trong c\u00e1c phi\u00ean b\u1ea3n s\u1eafp t\u1edbi."
+        self.coming_soon_desc = QLabel(
+            "Tính năng này sẽ được bổ sung trong các phiên bản sắp tới."
         )
-        description.setObjectName("EmptyDescription")
-        description.setAlignment(Qt.AlignCenter)
-        description.setWordWrap(True)
-        description.setMaximumWidth(520)
-        layout.addWidget(title)
-        layout.addWidget(description)
+        self.coming_soon_desc.setObjectName("EmptyDescription")
+        self.coming_soon_desc.setAlignment(Qt.AlignCenter)
+        self.coming_soon_desc.setWordWrap(True)
+        self.coming_soon_desc.setMaximumWidth(520)
+        layout.addWidget(self.coming_soon_title)
+        layout.addWidget(self.coming_soon_desc)
+
+        self.coming_soon_back_nav_key = "business_registration"
+        back_button = QPushButton("← Quay lại danh sách hồ sơ")
+        back_button.setObjectName("GhostButton")
+        back_button.setCursor(Qt.PointingHandCursor)
+        back_button.clicked.connect(lambda: self._select_nav(getattr(self, "coming_soon_back_nav_key", "business_registration")))
+        layout.addWidget(back_button, 0, Qt.AlignCenter)
+
         return page
+
+    def _show_coming_soon(self, feature_name: str = "", back_nav_key: str = "business_registration") -> None:
+        self.coming_soon_back_nav_key = back_nav_key
+        if hasattr(self, "coming_soon_desc") and self.coming_soon_desc is not None:
+            if feature_name:
+                self.coming_soon_desc.setText(
+                    f"Thủ tục \"{feature_name}\" đang được hoàn thiện biểu mẫu và sẽ sớm ra mắt trong phiên bản kế tiếp."
+                )
+            else:
+                self.coming_soon_desc.setText("Tính năng này sẽ được bổ sung trong các phiên bản sắp tới.")
+        self.stack.setCurrentWidget(self.coming_soon_page)
+
+    def _build_category_hub_page(
+        self,
+        nav_key: str,
+        title_text: str,
+        desc_text: str,
+        on_create_clicked,
+    ) -> QWidget:
+        page = QWidget()
+        page.setObjectName("BusinessCasesPage")
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(24, 22, 24, 22)
+        layout.setSpacing(16)
+
+        header = QHBoxLayout()
+        header_text = QVBoxLayout()
+        title = QLabel(title_text)
+        title.setObjectName("PageTitle")
+        description = QLabel(desc_text)
+        description.setObjectName("PageDescription")
+        description.setWordWrap(True)
+        header_text.addWidget(title)
+        header_text.addWidget(description)
+
+        create_btn = QPushButton("+ Tạo hồ sơ mới")
+        create_btn.setObjectName("PrimaryButton")
+        create_btn.setCursor(Qt.PointingHandCursor)
+        create_btn.clicked.connect(on_create_clicked)
+
+        settings_btn = QPushButton("⚙")
+        settings_btn.setObjectName("SettingsButton")
+        settings_btn.setToolTip("Cài đặt ứng dụng")
+        settings_btn.setCursor(Qt.PointingHandCursor)
+        settings_btn.clicked.connect(self._open_settings)
+
+        header.addLayout(header_text, 1)
+        header.addWidget(settings_btn, 0, Qt.AlignTop)
+        header.addWidget(create_btn, 0, Qt.AlignTop)
+        layout.addLayout(header)
+
+        cards_container = QWidget()
+        cards_layout = QHBoxLayout(cards_container)
+        cards_layout.setContentsMargins(0, 20, 0, 0)
+        cards_layout.setSpacing(18)
+        cards_layout.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+
+        card = QFrame()
+        card.setObjectName("CreateCard")
+        card.setFixedSize(220, 344)
+        c_layout = QVBoxLayout(card)
+        c_layout.setContentsMargins(22, 22, 22, 22)
+        c_layout.setSpacing(12)
+        c_layout.addItem(QSpacerItem(1, 34, QSizePolicy.Minimum, QSizePolicy.Expanding))
+
+        c_icon = QLabel("+")
+        c_icon.setObjectName("CreateIcon")
+        c_icon.setAlignment(Qt.AlignCenter)
+        c_layout.addWidget(c_icon)
+
+        c_title = QLabel("Tạo hồ sơ mới")
+        c_title.setObjectName("CreateTitle")
+        c_title.setAlignment(Qt.AlignCenter)
+        c_layout.addWidget(c_title)
+
+        c_desc = QLabel(f"Bấm để mở popup chọn thủ tục cho {title_text.lower()}.")
+        c_desc.setObjectName("CreateDescription")
+        c_desc.setWordWrap(True)
+        c_desc.setAlignment(Qt.AlignCenter)
+        c_layout.addWidget(c_desc)
+
+        action_btn = QPushButton("Tạo hồ sơ")
+        action_btn.setObjectName("PrimaryButton")
+        action_btn.setCursor(Qt.PointingHandCursor)
+        action_btn.clicked.connect(on_create_clicked)
+        c_layout.addWidget(action_btn)
+        c_layout.addItem(QSpacerItem(1, 34, QSizePolicy.Minimum, QSizePolicy.Expanding))
+
+        cards_layout.addWidget(card)
+
+        info_card = QFrame()
+        info_card.setObjectName("CaseCard")
+        info_card.setFixedSize(380, 344)
+        i_layout = QVBoxLayout(info_card)
+        i_layout.setContentsMargins(24, 24, 24, 24)
+        i_layout.setSpacing(12)
+
+        i_badge = QLabel("HỆ THỐNG THỦ TỤC")
+        i_badge.setObjectName("StatusBadge")
+        i_badge.setStyleSheet("font-size: 11px; font-weight: 700; color: #64748B;")
+        i_layout.addWidget(i_badge)
+
+        i_title = QLabel(title_text)
+        i_title.setStyleSheet("font-size: 17px; font-weight: 800; color: #0F172A;")
+        i_layout.addWidget(i_title)
+
+        i_desc = QLabel(
+            f"Bạn có thể khởi tạo nhanh các hồ sơ thuộc nhóm {title_text} bằng cách nhấn nút '+ Tạo hồ sơ mới' ở góc phải hoặc thẻ bên cạnh."
+        )
+        i_desc.setStyleSheet("font-size: 13px; color: #64748B; line-height: 1.4;")
+        i_desc.setWordWrap(True)
+        i_layout.addWidget(i_desc)
+
+        i_layout.addStretch(1)
+
+        launch_btn = QPushButton("Khám phá thủ tục →")
+        launch_btn.setObjectName("GhostButton")
+        launch_btn.setCursor(Qt.PointingHandCursor)
+        launch_btn.clicked.connect(on_create_clicked)
+        i_layout.addWidget(launch_btn)
+
+        cards_layout.addWidget(info_card)
+        cards_layout.addStretch(1)
+
+        layout.addWidget(cards_container, 1)
+        return page
+
+    def _open_business_creation_modal(self) -> None:
+        from mingo_assistant.ui.dialogs.business_creation_modal import BusinessCreationModal
+
+        modal = BusinessCreationModal(self, layout_mode=getattr(self, "current_layout", "default"))
+        chosen: dict[str, object] = {"case_type": None, "is_ready": True}
+
+        def on_chosen(case_type: str, is_ready: bool) -> None:
+            chosen["case_type"] = case_type
+            chosen["is_ready"] = is_ready
+
+        modal.dossier_chosen.connect(on_chosen)
+        result = modal.exec()
+        if result == QDialog.DialogCode.Accepted and chosen["case_type"]:
+            if chosen["is_ready"]:
+                self._open_new_business_case()
+            else:
+                self._show_coming_soon(str(chosen["case_type"]), "business_registration")
+
+    def _open_business_amendment_modal(self) -> None:
+        from mingo_assistant.ui.dialogs.business_amendment_modal import BusinessAmendmentModal
+
+        modal = BusinessAmendmentModal(self)
+        chosen: dict[str, object] = {"id": None, "name": "", "is_ready": False}
+
+        def on_chosen(proc_id: str, proc_name: str, is_ready: bool) -> None:
+            chosen["id"] = proc_id
+            chosen["name"] = proc_name
+            chosen["is_ready"] = is_ready
+
+        modal.procedure_chosen.connect(on_chosen)
+        result = modal.exec()
+        if result == QDialog.DialogCode.Accepted and chosen["name"]:
+            self._show_coming_soon(str(chosen["name"]), "business_amendment")
+
+    def _open_dependent_unit_modal(self) -> None:
+        from mingo_assistant.ui.dialogs.dependent_unit_modal import DependentUnitModal
+
+        modal = DependentUnitModal(self)
+        chosen: dict[str, object] = {"title": "", "is_ready": False}
+
+        def on_chosen(u_type: str, act: str, title: str, is_ready: bool) -> None:
+            chosen["title"] = title
+            chosen["is_ready"] = is_ready
+
+        modal.procedure_chosen.connect(on_chosen)
+        result = modal.exec()
+        if result == QDialog.DialogCode.Accepted and chosen["title"]:
+            self._show_coming_soon(str(chosen["title"]), "dependent_units")
+
+    def _open_dissolution_modal(self) -> None:
+        from mingo_assistant.ui.dialogs.dissolution_modal import DissolutionModal
+
+        modal = DissolutionModal(self)
+        chosen: dict[str, object] = {"title": "", "is_ready": False}
+
+        def on_chosen(c_type: str, tax_id: str, full_title: str, is_ready: bool) -> None:
+            chosen["title"] = full_title
+            chosen["is_ready"] = is_ready
+
+        modal.dissolution_chosen.connect(on_chosen)
+        result = modal.exec()
+        if result == QDialog.DialogCode.Accepted and chosen["title"]:
+            self._show_coming_soon(str(chosen["title"]), "dissolution")
 
     def _open_new_business_case(self) -> None:
         self._open_case_workspace(None)

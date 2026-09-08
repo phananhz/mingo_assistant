@@ -36,7 +36,8 @@ exe = EXE(
     pyz,
     analysis.scripts,
     [],
-    name="MingoAssistant",
+    name="MinAssistant",
+    icon=str(PROJECT_ROOT / "assets" / "branding" / "min-assistant.ico"),
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -50,7 +51,7 @@ coll = COLLECT(
     analysis.datas,
     strip=False,
     upx=True,
-    name="MingoAssistant",
+    name="MinAssistant",
 )
 
 
