@@ -114,8 +114,8 @@ class TestAllModalsAndNavigation(unittest.TestCase):
             [
                 "business_registration",
                 "business_amendment",
-                "dependent_units",
                 "dissolution",
+                "dependent_units",
                 "industry_lookup",
                 "templates",
                 "people",

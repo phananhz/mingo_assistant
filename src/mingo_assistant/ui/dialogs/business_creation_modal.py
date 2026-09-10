@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from PySide6.QtCore import QPoint, QRectF, QTimer, Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPixmap, QRadialGradient
 from PySide6.QtWidgets import (
     QDialog,
     QFrame,
@@ -39,10 +39,9 @@ class LiquidGlassModalBox(QFrame):
         self.setObjectName("BusinessCreationModalBox")
         self._is_liquid_glass = is_liquid_glass
         self.setAttribute(Qt.WA_StyledBackground, not is_liquid_glass)
-        self._bg_opacity = max(0.0, min(1.0, float(initial_opacity))) if is_liquid_glass else 0.0
+        self._bg_opacity = max(0.0, min(1.0, float(initial_opacity)))
         self._pixmap: QPixmap | None = None
-        if is_liquid_glass:
-            self._load_wallpaper()
+        self._load_wallpaper()
 
     def _load_wallpaper(self) -> None:
         candidate_paths: list[Path] = [
@@ -184,36 +183,104 @@ COMPANY_TYPE_SPECS = [
 ]
 
 
+class CompanyTypeIcon(QWidget):
+    """Vector/Symbol icon matching the top category cards."""
+
+    def __init__(self, type_id: str, icon_text: str = "", parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.type_id = type_id
+        self.icon_text = icon_text
+        self.setObjectName("CompanyTypeIcon")
+        self.setFixedSize(66, 66)
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(255, 255, 255, 238))
+        painter.drawEllipse(1, 1, 64, 64)
+
+        colors = {
+            "tnhh_1tv": QColor(242, 93, 132),
+            "amend_basic": QColor(242, 93, 132),
+            "chi_nhanh": QColor(242, 93, 132),
+            "tnhh_2tv": QColor(113, 63, 204),
+            "amend_capital": QColor(113, 63, 204),
+            "vpdd": QColor(113, 63, 204),
+            "co_phan": QColor(19, 183, 222),
+            "amend_legal": QColor(19, 183, 222),
+            "ddkd": QColor(19, 183, 222),
+        }
+        color = colors.get(self.type_id, QColor(113, 84, 182))
+        painter.setBrush(color)
+
+        if self.type_id in ("tnhh_1tv",):
+            painter.drawEllipse(25, 16, 16, 16)
+            painter.drawRoundedRect(18, 34, 30, 19, 11, 11)
+        elif self.type_id in ("tnhh_2tv",):
+            painter.drawEllipse(14, 22, 13, 13)
+            painter.drawEllipse(39, 22, 13, 13)
+            painter.drawEllipse(26, 17, 14, 14)
+            painter.drawRoundedRect(10, 36, 22, 15, 8, 8)
+            painter.drawRoundedRect(34, 36, 22, 15, 8, 8)
+            painter.drawRoundedRect(21, 34, 24, 18, 9, 9)
+        elif self.type_id in ("co_phan",):
+            painter.setPen(QPen(color, 2.4))
+            painter.drawLine(33, 24, 17, 43)
+            painter.drawLine(33, 24, 49, 43)
+            painter.drawLine(17, 43, 49, 43)
+            painter.setPen(Qt.NoPen)
+            for x, y in ((33, 20), (15, 44), (51, 44), (33, 47)):
+                painter.drawEllipse(x - 5, y - 5, 10, 10)
+        else:
+            painter.setPen(color)
+            font = painter.font()
+            font.setPointSize(22)
+            painter.setFont(font)
+            painter.drawText(self.rect(), Qt.AlignCenter, self.icon_text or "★")
+        painter.end()
+
+
 class CompanyTypeCard(QFrame):
-    """Card on the top row representing one of the 3 company types."""
+    """Card on the top row representing one of the 3 category options."""
 
     clicked = Signal(str)
 
-    def __init__(self, type_id: str, title: str, subtitle: str, icon: str, parent: QWidget | None = None) -> None:
+    def __init__(self, type_id: str, title: str, subtitle: str, icon: str = "", parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.type_id = type_id
         self.setObjectName("CompanyTypeCard")
+        self.setProperty("companyType", type_id)
+        self.setProperty("hovered", "false")
         self.setCursor(Qt.PointingHandCursor)
-        self.setMinimumHeight(126)
+        self.setMinimumHeight(238)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self._hover_effect = QGraphicsDropShadowEffect(self)
+        self._hover_effect.setColor(QColor(45, 54, 98, 70))
+        self._hover_effect.setOffset(0, 5)
+        self._hover_effect.setBlurRadius(10)
+        self.setGraphicsEffect(self._hover_effect)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setContentsMargins(24, 22, 24, 20)
         layout.setSpacing(10)
 
         # Top row: icon on left, active check badge on right
         top_row = QHBoxLayout()
         top_row.setContentsMargins(0, 0, 0, 0)
 
-        self.icon_badge = QLabel(icon)
-        self.icon_badge.setObjectName("CompanyTypeIcon")
-        self.icon_badge.setAlignment(Qt.AlignCenter)
-        self.icon_badge.setFixedSize(38, 38)
+        self.icon_badge = CompanyTypeIcon(type_id, icon_text=icon)
         top_row.addWidget(self.icon_badge)
 
         top_row.addStretch(1)
 
         self.check_badge = QLabel("✓")
+        self.arrow_badge = QLabel("\u203a")
+        self.arrow_badge.setObjectName("CompanyTypeArrow")
+        self.arrow_badge.setAlignment(Qt.AlignCenter)
+        self.arrow_badge.setFixedSize(42, 42)
+        top_row.addWidget(self.arrow_badge)
+
         self.check_badge.setObjectName("CompanyTypeCheck")
         self.check_badge.setAlignment(Qt.AlignCenter)
         self.check_badge.setFixedSize(22, 22)
@@ -230,20 +297,79 @@ class CompanyTypeCard(QFrame):
         self.title_label.setObjectName("CompanyTypeTitle")
         self.title_label.setWordWrap(True)
 
+        divider = QFrame()
+        divider.setObjectName("CompanyTypeDivider")
+        divider.setFixedHeight(1)
+
         self.sub_label = QLabel(subtitle)
         self.sub_label.setObjectName("CompanyTypeSubtitle")
 
         text_layout.addWidget(self.title_label)
+        text_layout.addWidget(divider)
         text_layout.addWidget(self.sub_label)
+        self.selection_badge = QLabel("\u0110ang ch\u1ecdn")
+        self.selection_badge.setObjectName("CompanyTypeSelection")
+        self.selection_badge.setAlignment(Qt.AlignCenter)
+        self.selection_badge.setFixedHeight(24)
+        text_layout.addWidget(self.selection_badge, 0, Qt.AlignLeft)
         self.is_active = False
         layout.addLayout(text_layout)
 
     def set_active(self, active: bool) -> None:
         self.is_active = active
         self.setProperty("active", "true" if active else "false")
-        self.check_badge.setVisible(active)
+        self._hover_effect.setColor(QColor(45, 54, 98, 145 if active else 70))
+        self._hover_effect.setOffset(0, 11 if active else 5)
+        self._hover_effect.setBlurRadius(28 if active else 10)
+        self.check_badge.setVisible(False)
+        self.selection_badge.setVisible(active)
         self.style().unpolish(self)
         self.style().polish(self)
+
+    def enterEvent(self, event) -> None:
+        self.setProperty("hovered", "true")
+        self._hover_effect.setColor(QColor(45, 54, 98, 125))
+        self._hover_effect.setOffset(0, 10)
+        self._hover_effect.setBlurRadius(24)
+        self.raise_()
+        self.style().unpolish(self)
+        self.style().polish(self)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self.setProperty("hovered", "false")
+        self._hover_effect.setColor(QColor(45, 54, 98, 145 if self.is_active else 70))
+        self._hover_effect.setOffset(0, 11 if self.is_active else 5)
+        self._hover_effect.setBlurRadius(28 if self.is_active else 10)
+        self.style().unpolish(self)
+        self.style().polish(self)
+        super().leaveEvent(event)
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        clip = QPainterPath()
+        clip.addRoundedRect(QRectF(self.rect()), 24, 24)
+        painter.setClipPath(clip)
+
+        # Glassy specular reflection across the upper-left face.
+        reflection = QRadialGradient(42, 18, max(120, self.width() * 0.52))
+        reflection.setColorAt(0.0, QColor(255, 255, 255, 78))
+        reflection.setColorAt(0.55, QColor(255, 255, 255, 18))
+        reflection.setColorAt(1.0, QColor(255, 255, 255, 0))
+        painter.fillRect(self.rect(), reflection)
+
+        # Quiet translucent bubbles give the lower corner liquid depth without
+        # competing with the type title and subtitle.
+        painter.setBrush(QColor(255, 255, 255, 32))
+        painter.setPen(QPen(QColor(255, 255, 255, 58), 1.2))
+        base_x = self.width() - 56
+        base_y = self.height() - 34
+        painter.drawEllipse(base_x - 80, base_y - 62, 66, 66)
+        painter.drawEllipse(base_x - 26, base_y - 94, 46, 46)
+        painter.drawEllipse(base_x + 12, base_y - 52, 76, 76)
+        painter.end()
 
     def mousePressEvent(self, event) -> None:
         if event is None or event.button() == Qt.LeftButton:
@@ -263,8 +389,14 @@ class DossierListItem(QFrame):
         self.option = option
         self.is_selected = False
         self.setObjectName("DossierListItem")
+        self.setProperty("hovered", "false")
         self.setCursor(Qt.PointingHandCursor)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self._hover_effect = QGraphicsDropShadowEffect(self)
+        self._hover_effect.setColor(QColor(76, 64, 138, 38))
+        self._hover_effect.setOffset(0, 3)
+        self._hover_effect.setBlurRadius(8)
+        self.setGraphicsEffect(self._hover_effect)
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(18, 14, 18, 14)
@@ -308,15 +440,36 @@ class DossierListItem(QFrame):
         self.indicator = QLabel("✓")
         self.indicator.setObjectName("DossierItemIndicator")
         self.indicator.setAlignment(Qt.AlignCenter)
-        self.indicator.setFixedSize(22, 22)
+        self.indicator.setFixedSize(30, 30)
         layout.addWidget(self.indicator)
 
     def set_selected(self, is_selected: bool) -> None:
         self.is_selected = is_selected
         self.setProperty("selected", "true" if is_selected else "false")
         self.indicator.setVisible(is_selected)
+        self._hover_effect.setColor(QColor(90, 70, 174, 128 if is_selected else 38))
+        self._hover_effect.setOffset(0, 7 if is_selected else 3)
+        self._hover_effect.setBlurRadius(22 if is_selected else 8)
         self.style().unpolish(self)
         self.style().polish(self)
+
+    def enterEvent(self, event) -> None:
+        self.setProperty("hovered", "true")
+        self._hover_effect.setColor(QColor(90, 70, 174, 105))
+        self._hover_effect.setOffset(0, 7)
+        self._hover_effect.setBlurRadius(18)
+        self.style().unpolish(self)
+        self.style().polish(self)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self.setProperty("hovered", "false")
+        self._hover_effect.setColor(QColor(90, 70, 174, 128 if self.is_selected else 38))
+        self._hover_effect.setOffset(0, 7 if self.is_selected else 3)
+        self._hover_effect.setBlurRadius(22 if self.is_selected else 8)
+        self.style().unpolish(self)
+        self.style().polish(self)
+        super().leaveEvent(event)
 
     def mousePressEvent(self, event) -> None:
         if event is None or event.button() == Qt.LeftButton:
@@ -553,7 +706,8 @@ class BusinessCreationModal(QDialog):
         opacity_layout.addWidget(self.opacity_val_label)
 
         footer_layout.addWidget(self.opacity_box)
-        self.opacity_box.setVisible(self._is_liquid_glass)
+        # Opacity is configured in Settings so the creation flow stays focused.
+        self.opacity_box.setVisible(False)
 
         self.dismiss_button = QPushButton("Đóng")
         self.dismiss_button.setObjectName("ModalDismissButton")

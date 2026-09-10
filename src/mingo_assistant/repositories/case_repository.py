@@ -7,6 +7,7 @@ from pathlib import Path
 
 from mingo_assistant.models.case import CaseSummary
 from mingo_assistant.app.paths import get_app_paths
+from mingo_assistant.infrastructure.storage import read_json, write_json_atomic
 
 
 class CaseRepository:
@@ -27,7 +28,7 @@ class CaseRepository:
 
     def _read_cases(self) -> list[CaseSummary]:
         self._ensure_file()
-        raw_cases = json.loads(self.data_file.read_text(encoding="utf-8"))
+        raw_cases = read_json(self.data_file)
         return [CaseSummary.from_dict(item) for item in raw_cases]
 
     def save_case(self, case: CaseSummary) -> None:
@@ -67,10 +68,7 @@ class CaseRepository:
 
     def _write_cases(self, cases: list[CaseSummary]) -> None:
         payload = [case.to_dict() for case in cases]
-        self.data_file.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        write_json_atomic(self.data_file, payload)
 
     def _demo_cases(self) -> list[CaseSummary]:
         return [

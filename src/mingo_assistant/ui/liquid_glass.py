@@ -102,6 +102,17 @@ QComboBox QAbstractItemView {{
  padding: 4px; outline: 0;
 }}
 QComboBox QAbstractItemView::item {{min-height: 28px; padding: 4px 8px;}}
+QPushButton#ColorCategoryTab {{
+ background: rgba(255,255,255,155); color: {ink}; border: 1px solid {border};
+ border-radius: 14px; padding: 7px 14px; font-weight: 600;
+}}
+QPushButton#ColorCategoryTab:hover {{
+ background: rgba(255,255,255,220); border-color: {accent};
+}}
+QPushButton#ColorCategoryTab[active="true"] {{
+ background: qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #a88ce0,stop:1 #6e58b6);
+ color: white; border-color: rgba(255,255,255,180); font-weight: 800;
+}}
 QTableView, QTreeView, QListView, QTableWidget {{
  background: {surface}; alternate-background-color: {canvas}; color: {ink};
  border: 1px solid {border}; border-radius: 10px;
@@ -174,6 +185,24 @@ QCheckBox::indicator, QRadioButton::indicator {{width: 16px; height: 16px;}}
     for name in ('Card', 'CreateCard', 'SettingsCard', 'BusinessCreationModalBox',
                  'CompanyTypeCard', 'DossierListItem', 'DetailPreviewPanel'):
         css += f'QFrame#{name} {{background: {glass}; color: {ink}; border: 1px solid {rim}; border-bottom: 1px solid {border}; border-radius: 20px;}}\n'
+    css += """
+QFrame#CompanyTypeCard[companyType="tnhh_1tv"], QFrame#CompanyTypeCard[companyType="amend_basic"], QFrame#CompanyTypeCard[companyType="chi_nhanh"] {background: qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #ff9bad,stop:1 #f17d9f); border: none; border-radius: 24px;}
+QFrame#CompanyTypeCard[companyType="tnhh_2tv"], QFrame#CompanyTypeCard[companyType="amend_capital"], QFrame#CompanyTypeCard[companyType="vpdd"] {background: qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #b58cff,stop:1 #625ae7); border: none; border-radius: 24px;}
+QFrame#CompanyTypeCard[companyType="co_phan"], QFrame#CompanyTypeCard[companyType="amend_legal"], QFrame#CompanyTypeCard[companyType="ddkd"] {background: qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #6bdaf1,stop:1 #309ee4); border: none; border-radius: 24px;}
+QFrame#CompanyTypeCard[hovered="true"] {border: none;}
+QFrame#CompanyTypeCard[active="true"] {border: none;}
+QLabel#CompanyTypeIcon {font-size: 28px; border-radius: 33px; background: rgba(255,255,255,235); border: 1px solid rgba(255,255,255,245);}
+QLabel#CompanyTypeArrow {font-size: 30px; font-weight: 300; color: white; border-radius: 21px; background: rgba(255,255,255,55); border: 1px solid rgba(255,255,255,85);}
+QLabel#CompanyTypeCheck {background: rgba(35,42,70,80); color: white; border-radius: 11px; font-size: 11px; font-weight: 900;}
+QLabel#CompanyTypeTitle {font-size: 19px; font-weight: 800; color: white;}
+QFrame#CompanyTypeDivider {background: rgba(255,255,255,170); border: none;}
+QLabel#CompanyTypeSubtitle {font-size: 13px; color: rgba(255,255,255,225);}
+QLabel#CompanyTypeSelection {color: white; font-size: 10px; font-weight: 800; background: rgba(28,42,80,70); border: 1px solid rgba(255,255,255,115); border-radius: 12px; padding: 2px 10px;}
+QFrame#DossierListItem[hovered="true"] {background: rgba(255,255,255,220); border: 1px solid rgba(164,139,224,190); border-radius: 20px;}
+QFrame#DossierListItem[selected="true"] {background: qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 rgba(249,247,255,238),stop:0.52 rgba(235,229,253,226),stop:1 rgba(224,242,250,220)); border: 2px solid rgba(139,111,207,210); border-radius: 20px;}
+QFrame#DossierListItem[selected="true"] QLabel#DossierItemTitle {color: #553d8d;}
+QLabel#DossierItemIndicator {background: qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #ac92e5,stop:1 #654ba5); color: white; border: 1px solid rgba(255,255,255,210); border-radius: 15px; font-size: 14px; font-weight: 900;}
+"""
     for name in ('PrimaryButton', 'CompactPrimaryButton', 'ModalCreateButton',
                  'GhostButton', 'CompactGhostButton', 'ModalDismissButton',
                  'SettingsBackButton', 'ModalCloseButton'):
@@ -226,9 +255,8 @@ class GlassHover(QObject):
         if not self.active:
             return
         for widget in self.window.findChildren(QWidget):
-            # Transparent navigation buttons cast shadows on their text glyphs.
-            # Keep sidebar text crisp and use background/edge hover styling.
-            if widget.objectName() == 'NavButton':
+            # Transparent navigation buttons and category tabs should remain crisp without blur shadows
+            if widget.objectName() in ('NavButton', 'ColorCategoryTab'):
                 continue
             if not isinstance(widget, (QPushButton, QLineEdit)) or widget.graphicsEffect() is not None:
                 continue

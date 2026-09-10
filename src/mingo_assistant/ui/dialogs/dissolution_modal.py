@@ -17,6 +17,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from mingo_assistant.app.paths import get_app_paths, load_settings
+from mingo_assistant.ui.dialogs.business_creation_modal import (
+    CompanyTypeCard,
+    LiquidGlassModalBox,
+)
+
 
 @dataclass(frozen=True)
 class TaxStatusOption:
@@ -31,14 +37,14 @@ class TaxStatusOption:
 DISSOLUTION_COMPANY_TYPES = [
     {
         "id": "tnhh_1tv",
-        "title": "Công ty TNHH một thành viên",
+        "title": "Công ty TNHH\nmột thành viên",
         "subtitle": "1 chủ sở hữu",
         "icon": "🏢",
         "name": "Công ty TNHH một thành viên",
     },
     {
         "id": "tnhh_2tv",
-        "title": "Công ty TNHH 2TV trở lên",
+        "title": "Công ty TNHH\nhai thành viên trở lên",
         "subtitle": "Từ 2 đến 50 thành viên",
         "icon": "👥",
         "name": "Công ty TNHH hai thành viên trở lên",
@@ -72,71 +78,9 @@ TAX_STATUS_OPTIONS = [
 ]
 
 
-class DissolutionCompanyCard(QFrame):
-    clicked = Signal(str)
-
-    def __init__(self, type_id: str, title: str, subtitle: str, icon: str, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.type_id = type_id
-        self.is_active = False
-        self.setObjectName("CompanyTypeCard")
-        self.setCursor(Qt.PointingHandCursor)
-        self.setMinimumHeight(126)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(18, 16, 18, 16)
-        layout.setSpacing(10)
-
-        top_row = QHBoxLayout()
-        top_row.setContentsMargins(0, 0, 0, 0)
-
-        self.icon_badge = QLabel(icon)
-        self.icon_badge.setObjectName("CompanyTypeIcon")
-        self.icon_badge.setAlignment(Qt.AlignCenter)
-        self.icon_badge.setFixedSize(38, 38)
-        top_row.addWidget(self.icon_badge)
-
-        top_row.addStretch(1)
-
-        self.check_badge = QLabel("✓")
-        self.check_badge.setObjectName("CompanyTypeCheck")
-        self.check_badge.setAlignment(Qt.AlignCenter)
-        self.check_badge.setFixedSize(22, 22)
-        top_row.addWidget(self.check_badge)
-
-        layout.addLayout(top_row)
-
-        text_layout = QVBoxLayout()
-        text_layout.setContentsMargins(0, 0, 0, 0)
-        text_layout.setSpacing(3)
-
-        self.title_label = QLabel(title)
-        self.title_label.setObjectName("CompanyTypeTitle")
-        self.title_label.setWordWrap(True)
-
-        self.sub_label = QLabel(subtitle)
-        self.sub_label.setObjectName("CompanyTypeSubtitle")
-
-        text_layout.addWidget(self.title_label)
-        text_layout.addWidget(self.sub_label)
-        layout.addLayout(text_layout)
-
-    def set_active(self, active: bool) -> None:
-        self.is_active = active
-        self.setProperty("active", "true" if active else "false")
-        self.check_badge.setVisible(active)
-        self.style().unpolish(self)
-        self.style().polish(self)
-
-    def mousePressEvent(self, event) -> None:
-        if event is None or event.button() == Qt.LeftButton:
-            self.clicked.emit(self.type_id)
-        if event is not None:
-            super().mousePressEvent(event)
-
-
 class TaxStatusItem(QFrame):
+    """Horizontal frosted card in the dissolution tax status list."""
+
     selected = Signal(str)
     activated = Signal(str)
 
@@ -145,19 +89,27 @@ class TaxStatusItem(QFrame):
         self.option = option
         self.is_selected = False
         self.setObjectName("DossierListItem")
+        self.setProperty("hovered", "false")
         self.setCursor(Qt.PointingHandCursor)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self._hover_effect = QGraphicsDropShadowEffect(self)
+        self._hover_effect.setColor(QColor(76, 64, 138, 38))
+        self._hover_effect.setOffset(0, 3)
+        self._hover_effect.setBlurRadius(8)
+        self.setGraphicsEffect(self._hover_effect)
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(18, 14, 18, 14)
         layout.setSpacing(14)
 
+        # Left icon badge
         self.icon_label = QLabel(option.icon)
         self.icon_label.setObjectName("DossierItemIcon")
         self.icon_label.setAlignment(Qt.AlignCenter)
         self.icon_label.setFixedSize(42, 42)
         layout.addWidget(self.icon_label)
 
+        # Middle text
         info_layout = QVBoxLayout()
         info_layout.setContentsMargins(0, 0, 0, 0)
         info_layout.setSpacing(4)
@@ -184,18 +136,40 @@ class TaxStatusItem(QFrame):
 
         layout.addLayout(info_layout, 1)
 
+        # Right selection indicator
         self.indicator = QLabel("✓")
         self.indicator.setObjectName("DossierItemIndicator")
         self.indicator.setAlignment(Qt.AlignCenter)
-        self.indicator.setFixedSize(22, 22)
+        self.indicator.setFixedSize(30, 30)
         layout.addWidget(self.indicator)
 
     def set_selected(self, is_selected: bool) -> None:
         self.is_selected = is_selected
         self.setProperty("selected", "true" if is_selected else "false")
         self.indicator.setVisible(is_selected)
+        self._hover_effect.setColor(QColor(90, 70, 174, 128 if is_selected else 38))
+        self._hover_effect.setOffset(0, 7 if is_selected else 3)
+        self._hover_effect.setBlurRadius(22 if is_selected else 8)
         self.style().unpolish(self)
         self.style().polish(self)
+
+    def enterEvent(self, event) -> None:
+        self.setProperty("hovered", "true")
+        self._hover_effect.setColor(QColor(90, 70, 174, 105))
+        self._hover_effect.setOffset(0, 7)
+        self._hover_effect.setBlurRadius(18)
+        self.style().unpolish(self)
+        self.style().polish(self)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self.setProperty("hovered", "false")
+        self._hover_effect.setColor(QColor(90, 70, 174, 128 if self.is_selected else 38))
+        self._hover_effect.setOffset(0, 7 if self.is_selected else 3)
+        self._hover_effect.setBlurRadius(22 if self.is_selected else 8)
+        self.style().unpolish(self)
+        self.style().polish(self)
+        super().leaveEvent(event)
 
     def mousePressEvent(self, event) -> None:
         if event is None or event.button() == Qt.LeftButton:
@@ -212,19 +186,20 @@ class TaxStatusItem(QFrame):
 
 class DissolutionModal(QDialog):
     """
-    Modal for selecting business dissolution by company type and tax status.
+    Modal for selecting business dissolution by company type and tax status,
+    matching the rich 3-card gradient and Liquid Glass design of BusinessCreationModal.
     """
 
     dissolution_chosen = Signal(str, str, str, bool)  # company_type_id, tax_status_id, full_title, is_ready
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None, layout_mode: str | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("DissolutionModal")
         self.setModal(True)
 
         self.current_type_id = "tnhh_1tv"
         self.selected_tax_status: TaxStatusOption | None = None
-        self.company_cards: dict[str, DissolutionCompanyCard] = {}
+        self.company_cards: dict[str, CompanyTypeCard] = {}
         self.tax_status_items: list[TaxStatusItem] = []
 
         if parent is not None:
@@ -233,9 +208,10 @@ class DissolutionModal(QDialog):
             self.resize(parent.size())
             self.move(parent.mapToGlobal(QPoint(0, 0)))
         else:
-            self.setWindowTitle("Hồ sơ giải thể doanh nghiệp")
+            self.setWindowTitle("Bạn muốn tạo hồ sơ giải thể nào?")
             self.resize(1020, 700)
 
+        # Root overlay layout
         root_layout = QVBoxLayout(self)
         root_layout.setContentsMargins(0, 0, 0, 0)
         root_layout.setSpacing(0)
@@ -246,8 +222,32 @@ class DissolutionModal(QDialog):
         container_layout.setContentsMargins(24, 24, 24, 24)
         container_layout.setAlignment(Qt.AlignCenter)
 
-        # Popup Box
-        self.modal_box = QFrame(self.overlay_container)
+        # Determine layout mode: only 'liquid_glass' shows 3D wallpaper
+        paths = get_app_paths()
+        saved_settings = load_settings(paths)
+        if layout_mode is None:
+            if parent is not None and hasattr(parent, "current_layout"):
+                layout_mode = getattr(parent, "current_layout")
+            elif parent is not None and hasattr(parent, "_layout_mode"):
+                layout_mode = getattr(parent, "_layout_mode")
+            else:
+                layout_mode = saved_settings.get("layout", "classic")
+        self._layout_mode = layout_mode
+        self._is_liquid_glass = (self._layout_mode == "liquid_glass")
+
+        initial_opacity_pct = 75
+        try:
+            initial_opacity_pct = int(saved_settings.get("modal_bg_opacity", "75"))
+            initial_opacity_pct = max(0, min(100, initial_opacity_pct))
+        except (ValueError, TypeError):
+            initial_opacity_pct = 75
+
+        # Frosted Glass / Clean White Modal Box (width 980px)
+        self.modal_box = LiquidGlassModalBox(
+            self.overlay_container,
+            initial_opacity=initial_opacity_pct / 100.0,
+            is_liquid_glass=self._is_liquid_glass,
+        )
         self.modal_box.setObjectName("BusinessCreationModalBox")
         self.modal_box.setFixedWidth(980)
         self.modal_box.setMaximumHeight(680)
@@ -262,7 +262,7 @@ class DissolutionModal(QDialog):
         box_layout.setContentsMargins(36, 26, 36, 26)
         box_layout.setSpacing(18)
 
-        # Top Bar
+        # Top Bar: Centered title/subtitle, [X] close button
         top_bar = QHBoxLayout()
         top_bar.setContentsMargins(0, 0, 0, 0)
         top_bar.addSpacing(36)
@@ -276,7 +276,7 @@ class DissolutionModal(QDialog):
         self.title_label.setObjectName("ModalTitle")
         self.title_label.setAlignment(Qt.AlignCenter)
 
-        self.subtitle_label = QLabel("Chọn loại hình doanh nghiệp và tình trạng mã số thuế hiện tại.")
+        self.subtitle_label = QLabel("Chọn loại hình công ty và tình trạng thuế để bắt đầu lập hồ sơ giải thể.")
         self.subtitle_label.setObjectName("ModalSubtitle")
         self.subtitle_label.setAlignment(Qt.AlignCenter)
 
@@ -294,20 +294,20 @@ class DissolutionModal(QDialog):
 
         box_layout.addLayout(top_bar)
 
-        # 3 Company Cards
+        # 3 Top Gradient Cards
         cards_row = QHBoxLayout()
         cards_row.setContentsMargins(0, 4, 0, 4)
         cards_row.setSpacing(14)
 
-        for spec in DISSOLUTION_COMPANY_TYPES:
-            card = DissolutionCompanyCard(
-                type_id=spec["id"],
-                title=spec["title"],
-                subtitle=spec["subtitle"],
-                icon=spec["icon"],
+        for comp in DISSOLUTION_COMPANY_TYPES:
+            card = CompanyTypeCard(
+                type_id=comp["id"],
+                title=comp["title"],
+                subtitle=comp["subtitle"],
+                icon=comp["icon"],
             )
             card.clicked.connect(self._on_type_card_clicked)
-            self.company_cards[spec["id"]] = card
+            self.company_cards[comp["id"]] = card
             cards_row.addWidget(card, 1)
 
         box_layout.addLayout(cards_row)
@@ -315,16 +315,16 @@ class DissolutionModal(QDialog):
         # Section Header
         sec_header = QHBoxLayout()
         sec_header.setContentsMargins(0, 4, 0, 0)
-        sec_title = QLabel("Tình trạng Mã số thuế (MST)")
+        sec_title = QLabel("Tình trạng Mã số thuế doanh nghiệp")
         sec_title.setObjectName("DossierSectionTitle")
         sec_header.addWidget(sec_title, 1)
 
-        self.count_badge = QLabel("2 trường hợp xử lý")
+        self.count_badge = QLabel(f"{len(TAX_STATUS_OPTIONS)} trường hợp khả dụng")
         self.count_badge.setObjectName("ItemCountBadge")
         sec_header.addWidget(self.count_badge, 0, Qt.AlignVCenter)
         box_layout.addLayout(sec_header)
 
-        # Scroll Area for Tax Status
+        # Scroll Area for Tax Status Options
         self.scroll_area = QScrollArea()
         self.scroll_area.setObjectName("DossierScrollArea")
         self.scroll_area.setWidgetResizable(True)
@@ -339,12 +339,12 @@ class DissolutionModal(QDialog):
         self.list_layout.setContentsMargins(0, 4, 4, 4)
         self.list_layout.setSpacing(10)
 
-        for opt in TAX_STATUS_OPTIONS:
-            item_widget = TaxStatusItem(opt)
-            item_widget.selected.connect(self._on_tax_status_selected)
-            item_widget.activated.connect(self._on_tax_status_activated)
-            self.tax_status_items.append(item_widget)
-            self.list_layout.addWidget(item_widget)
+        for option in TAX_STATUS_OPTIONS:
+            item = TaxStatusItem(option)
+            item.selected.connect(self._on_tax_status_selected)
+            item.activated.connect(self._on_tax_status_activated)
+            self.tax_status_items.append(item)
+            self.list_layout.addWidget(item)
 
         self.list_layout.addStretch(1)
         self.scroll_area.setWidget(self.list_container)
@@ -353,6 +353,7 @@ class DissolutionModal(QDialog):
         # Footer
         footer_layout = QHBoxLayout()
         footer_layout.setContentsMargins(0, 8, 0, 0)
+        footer_layout.setSpacing(10)
 
         self.status_icon = QLabel("●")
         self.status_icon.setObjectName("ModalStatusDot")
@@ -381,23 +382,19 @@ class DissolutionModal(QDialog):
         container_layout.addWidget(self.modal_box)
         root_layout.addWidget(self.overlay_container)
 
-        self._select_company_type("tnhh_1tv")
-        if self.tax_status_items:
-            self._on_tax_status_selected(self.tax_status_items[0].option.id)
-
-    def _select_company_type(self, type_id: str) -> None:
-        self.current_type_id = type_id
-        for tid, card in self.company_cards.items():
-            card.set_active(tid == type_id)
-        self._update_selected_summary()
+        # Default selections
+        self._on_type_card_clicked("tnhh_1tv")
+        self._on_tax_status_selected("locked_mst")
 
     def _on_type_card_clicked(self, type_id: str) -> None:
-        if type_id != self.current_type_id:
-            self._select_company_type(type_id)
+        self.current_type_id = type_id
+        for cid, card in self.company_cards.items():
+            card.set_active(cid == type_id)
+        self._update_selected_summary()
 
     def _on_tax_status_selected(self, status_id: str) -> None:
         for item in self.tax_status_items:
-            is_match = item.option.id == status_id
+            is_match = (item.option.id == status_id)
             item.set_selected(is_match)
             if is_match:
                 self.selected_tax_status = item.option
@@ -407,13 +404,10 @@ class DissolutionModal(QDialog):
         self._on_tax_status_selected(status_id)
         self._on_create_clicked()
 
-    def _current_company_name(self) -> str:
-        spec = next((s for s in DISSOLUTION_COMPANY_TYPES if s["id"] == self.current_type_id), DISSOLUTION_COMPANY_TYPES[0])
-        return spec["name"]
-
     def _update_selected_summary(self) -> None:
+        comp_info = next((c for c in DISSOLUTION_COMPANY_TYPES if c["id"] == self.current_type_id), None)
+        comp_name = comp_info["name"] if comp_info else "Doanh nghiệp"
         if self.selected_tax_status:
-            comp_name = self._current_company_name()
             self.selected_summary_label.setText(
                 f"Hồ sơ đang chọn: <b>Giải thể {comp_name} - {self.selected_tax_status.title}</b>"
             )
@@ -425,7 +419,8 @@ class DissolutionModal(QDialog):
     def _on_create_clicked(self) -> None:
         if self.selected_tax_status is None:
             return
-        comp_name = self._current_company_name()
+        comp_info = next((c for c in DISSOLUTION_COMPANY_TYPES if c["id"] == self.current_type_id), None)
+        comp_name = comp_info["name"] if comp_info else "Doanh nghiệp"
         full_title = f"Giải thể {comp_name} ({self.selected_tax_status.title})"
         self.dissolution_chosen.emit(
             self.current_type_id,

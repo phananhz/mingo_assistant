@@ -1051,6 +1051,39 @@ class SettingsView(QWidget):
         shadow_row.addStretch(1)
         detail_l.addLayout(shadow_row)
 
+        # Interactive live preview card for Visual Effects
+        self.fx_preview_card = QFrame()
+        self.fx_preview_card.setObjectName("FxPreviewCard")
+        self.fx_preview_card.setCursor(Qt.PointingHandCursor)
+        self.fx_preview_card.setFixedHeight(82)
+        fx_p_layout = QHBoxLayout(self.fx_preview_card)
+        fx_p_layout.setContentsMargins(18, 14, 18, 14)
+        fx_p_layout.setSpacing(14)
+
+        fx_p_icon = QLabel("✨")
+        fx_p_icon.setStyleSheet("font-size: 26px;")
+        fx_p_layout.addWidget(fx_p_icon)
+
+        fx_p_text = QVBoxLayout()
+        fx_p_text.setSpacing(3)
+        self.fx_preview_title = QLabel("Thẻ xem trước hiệu ứng trực tiếp (Rê chuột vào đây để thử)")
+        self.fx_preview_title.setStyleSheet("font-size: 13px; font-weight: 700; color: #1E293B;")
+        self.fx_preview_desc = QLabel("Đang thể hiện độ bóng, viền phát sáng và kính mờ")
+        self.fx_preview_desc.setStyleSheet("font-size: 11.5px; color: #64748B;")
+        fx_p_text.addWidget(self.fx_preview_title)
+        fx_p_text.addWidget(self.fx_preview_desc)
+        fx_p_layout.addLayout(fx_p_text, 1)
+
+        self.fx_status_chip = QLabel("Floating Glow")
+        self.fx_status_chip.setStyleSheet(
+            "font-size: 11px; font-weight: 700; color: #475569; background: rgba(0,0,0,0.06); "
+            "border-radius: 6px; padding: 4px 10px;"
+        )
+        fx_p_layout.addWidget(self.fx_status_chip)
+        detail_l.addWidget(self.fx_preview_card)
+
+        self._update_fx_preview()
+
         layout.addWidget(detail_card)
         layout.addStretch(1)
         return page
@@ -1323,16 +1356,32 @@ class SettingsView(QWidget):
         self._selected_high_contrast = checked
         self._schedule_preview()
 
+    def _update_fx_preview(self) -> None:
+        if not hasattr(self, "fx_status_chip"):
+            return
+        shadow_labels = {
+            "flat": "Phẳng (Flat)",
+            "subtle": "Bóng nhẹ (Subtle)",
+            "floating": "Bóng nổi 3D (Floating)",
+        }
+        shadow_txt = shadow_labels.get(self._selected_card_shadow, "Subtle")
+        glow_txt = "Glow: Bật" if self._selected_hover_glow else "Glow: Tắt"
+        glass_txt = "Kính mờ: Bật" if self._selected_glassmorphism else "Kính mờ: Tắt"
+        self.fx_status_chip.setText(f"{shadow_txt} • {glow_txt} • {glass_txt}")
+
     def _on_animations_toggled(self, checked: bool) -> None:
         self._selected_animations_enabled = checked
+        self._update_fx_preview()
         self._schedule_preview()
 
     def _on_hover_glow_toggled(self, checked: bool) -> None:
         self._selected_hover_glow = checked
+        self._update_fx_preview()
         self._schedule_preview()
 
     def _on_glassmorphism_toggled(self, checked: bool) -> None:
         self._selected_glassmorphism = checked
+        self._update_fx_preview()
         self._schedule_preview()
 
     def _on_card_shadow_clicked(self, shadow_key: str) -> None:
@@ -1341,6 +1390,7 @@ class SettingsView(QWidget):
             btn.setProperty("active", k == shadow_key)
             btn.style().unpolish(btn)
             btn.style().polish(btn)
+        self._update_fx_preview()
         self._schedule_preview()
 
     def _update_strength_label(self) -> None:

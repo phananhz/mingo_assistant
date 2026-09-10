@@ -113,9 +113,8 @@ class BusinessRegistrationDocumentsView(QWidget):
         grid.setHorizontalSpacing(26)
         grid.setVerticalSpacing(14)
         items = [
-            ("Tên doanh nghiệp", self.case.company_name),
-            ("Người ủy quyền", self._authorized_person_name()),
-            ("Vốn điều lệ", self.case.capital),
+            (("Tên địa điểm kinh doanh" if self.case.case_type == "Địa điểm kinh doanh - Lập mới" else "Tên doanh nghiệp"), self.case.company_name),
+            (("Người nộp hồ sơ" if self.case.case_type == "Địa điểm kinh doanh - Lập mới" else "Người ủy quyền"), self._authorized_person_name()),
             ("Thời gian xuất", self.case.exported_at or "Chưa xuất hồ sơ"),
             ("Thư mục lưu hồ sơ", self.case.export_dir or "Chưa có thư mục xuất"),
         ]
@@ -285,9 +284,8 @@ class BusinessRegistrationDocumentsView(QWidget):
         layout.setVerticalSpacing(8)
 
         items = [
-            ("Tên doanh nghiệp", self.case.company_name),
-            ("Người ủy quyền", self._authorized_person_name()),
-            ("Vốn điều lệ", self.case.capital),
+            (("Tên địa điểm kinh doanh" if self.case.case_type == "Địa điểm kinh doanh - Lập mới" else "Tên doanh nghiệp"), self.case.company_name),
+            (("Người nộp hồ sơ" if self.case.case_type == "Địa điểm kinh doanh - Lập mới" else "Người ủy quyền"), self._authorized_person_name()),
             ("Trạng thái", self.case.status),
             ("Thời gian xuất", self.case.exported_at or "Chưa xuất hồ sơ"),
             ("Thư mục", self.case.export_dir or "Chưa có thư mục xuất"),

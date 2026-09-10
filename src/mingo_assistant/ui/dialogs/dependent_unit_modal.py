@@ -17,6 +17,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from mingo_assistant.app.paths import get_app_paths, load_settings
+from mingo_assistant.ui.dialogs.business_creation_modal import (
+    CompanyTypeCard,
+    LiquidGlassModalBox,
+)
+
 
 @dataclass(frozen=True)
 class DependentProcedureOption:
@@ -119,9 +125,9 @@ UNIT_TYPE_SPECS = [
                 action_id="create",
                 title="Lập địa điểm kinh doanh mới",
                 description="Thông báo lập địa điểm kinh doanh trực thuộc doanh nghiệp hoặc chi nhánh.",
-                badge="Đang phát triển",
+                badge="Sẵn sàng",
                 icon="➕",
-                is_ready=False,
+                is_ready=True,
             ),
             DependentProcedureOption(
                 id="ddkd_update",
@@ -148,73 +154,8 @@ UNIT_TYPE_SPECS = [
 ]
 
 
-class UnitTypeCard(QFrame):
-    """Card on top representing one of the 3 dependent unit types."""
-
-    clicked = Signal(str)
-
-    def __init__(self, type_id: str, title: str, subtitle: str, icon: str, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.type_id = type_id
-        self.is_active = False
-        self.setObjectName("CompanyTypeCard")
-        self.setCursor(Qt.PointingHandCursor)
-        self.setMinimumHeight(126)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(18, 16, 18, 16)
-        layout.setSpacing(10)
-
-        top_row = QHBoxLayout()
-        top_row.setContentsMargins(0, 0, 0, 0)
-
-        self.icon_badge = QLabel(icon)
-        self.icon_badge.setObjectName("CompanyTypeIcon")
-        self.icon_badge.setAlignment(Qt.AlignCenter)
-        self.icon_badge.setFixedSize(38, 38)
-        top_row.addWidget(self.icon_badge)
-
-        top_row.addStretch(1)
-
-        self.check_badge = QLabel("✓")
-        self.check_badge.setObjectName("CompanyTypeCheck")
-        self.check_badge.setAlignment(Qt.AlignCenter)
-        self.check_badge.setFixedSize(22, 22)
-        top_row.addWidget(self.check_badge)
-
-        layout.addLayout(top_row)
-
-        text_layout = QVBoxLayout()
-        text_layout.setContentsMargins(0, 0, 0, 0)
-        text_layout.setSpacing(3)
-
-        self.title_label = QLabel(title)
-        self.title_label.setObjectName("CompanyTypeTitle")
-
-        self.sub_label = QLabel(subtitle)
-        self.sub_label.setObjectName("CompanyTypeSubtitle")
-
-        text_layout.addWidget(self.title_label)
-        text_layout.addWidget(self.sub_label)
-        layout.addLayout(text_layout)
-
-    def set_active(self, active: bool) -> None:
-        self.is_active = active
-        self.setProperty("active", "true" if active else "false")
-        self.check_badge.setVisible(active)
-        self.style().unpolish(self)
-        self.style().polish(self)
-
-    def mousePressEvent(self, event) -> None:
-        if event is None or event.button() == Qt.LeftButton:
-            self.clicked.emit(self.type_id)
-        if event is not None:
-            super().mousePressEvent(event)
-
-
 class DependentProcedureItem(QFrame):
-    """List item for a procedure under the chosen unit type."""
+    """Horizontal frosted card in the dependent unit procedure list."""
 
     selected = Signal(str)
     activated = Signal(str)
@@ -224,19 +165,27 @@ class DependentProcedureItem(QFrame):
         self.option = option
         self.is_selected = False
         self.setObjectName("DossierListItem")
+        self.setProperty("hovered", "false")
         self.setCursor(Qt.PointingHandCursor)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self._hover_effect = QGraphicsDropShadowEffect(self)
+        self._hover_effect.setColor(QColor(76, 64, 138, 38))
+        self._hover_effect.setOffset(0, 3)
+        self._hover_effect.setBlurRadius(8)
+        self.setGraphicsEffect(self._hover_effect)
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(18, 14, 18, 14)
         layout.setSpacing(14)
 
+        # Left icon badge
         self.icon_label = QLabel(option.icon)
         self.icon_label.setObjectName("DossierItemIcon")
         self.icon_label.setAlignment(Qt.AlignCenter)
         self.icon_label.setFixedSize(42, 42)
         layout.addWidget(self.icon_label)
 
+        # Middle text
         info_layout = QVBoxLayout()
         info_layout.setContentsMargins(0, 0, 0, 0)
         info_layout.setSpacing(4)
@@ -263,18 +212,40 @@ class DependentProcedureItem(QFrame):
 
         layout.addLayout(info_layout, 1)
 
+        # Right selection indicator
         self.indicator = QLabel("✓")
         self.indicator.setObjectName("DossierItemIndicator")
         self.indicator.setAlignment(Qt.AlignCenter)
-        self.indicator.setFixedSize(22, 22)
+        self.indicator.setFixedSize(30, 30)
         layout.addWidget(self.indicator)
 
     def set_selected(self, is_selected: bool) -> None:
         self.is_selected = is_selected
         self.setProperty("selected", "true" if is_selected else "false")
         self.indicator.setVisible(is_selected)
+        self._hover_effect.setColor(QColor(90, 70, 174, 128 if is_selected else 38))
+        self._hover_effect.setOffset(0, 7 if is_selected else 3)
+        self._hover_effect.setBlurRadius(22 if is_selected else 8)
         self.style().unpolish(self)
         self.style().polish(self)
+
+    def enterEvent(self, event) -> None:
+        self.setProperty("hovered", "true")
+        self._hover_effect.setColor(QColor(90, 70, 174, 105))
+        self._hover_effect.setOffset(0, 7)
+        self._hover_effect.setBlurRadius(18)
+        self.style().unpolish(self)
+        self.style().polish(self)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self.setProperty("hovered", "false")
+        self._hover_effect.setColor(QColor(90, 70, 174, 128 if self.is_selected else 38))
+        self._hover_effect.setOffset(0, 7 if self.is_selected else 3)
+        self._hover_effect.setBlurRadius(22 if self.is_selected else 8)
+        self.style().unpolish(self)
+        self.style().polish(self)
+        super().leaveEvent(event)
 
     def mousePressEvent(self, event) -> None:
         if event is None or event.button() == Qt.LeftButton:
@@ -291,18 +262,19 @@ class DependentProcedureItem(QFrame):
 
 class DependentUnitModal(QDialog):
     """
-    Modal for selecting a dependent unit procedure (Chi nhánh, VPĐD, Địa điểm KD).
+    Modal for selecting dependent unit procedures (Chi nhánh, Văn phòng đại diện, Địa điểm kinh doanh),
+    matching the rich 3-card gradient and Liquid Glass design of BusinessCreationModal.
     """
 
-    procedure_chosen = Signal(str, str, str, bool)  # unit_type_id, action_id, title, is_ready
+    procedure_chosen = Signal(str, str, str, bool)  # unit_type_id, action_id, full_title, is_ready
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None, layout_mode: str | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("DependentUnitModal")
         self.setModal(True)
 
         self.current_unit_id = "chi_nhanh"
-        self.unit_cards: dict[str, UnitTypeCard] = {}
+        self.unit_cards: dict[str, CompanyTypeCard] = {}
         self.procedure_items: list[DependentProcedureItem] = []
         self.selected_procedure: DependentProcedureOption | None = None
 
@@ -312,9 +284,10 @@ class DependentUnitModal(QDialog):
             self.resize(parent.size())
             self.move(parent.mapToGlobal(QPoint(0, 0)))
         else:
-            self.setWindowTitle("Thủ tục đơn vị phụ thuộc DN")
+            self.setWindowTitle("Bạn muốn thực hiện thủ tục đơn vị phụ thuộc nào?")
             self.resize(1020, 700)
 
+        # Root overlay layout
         root_layout = QVBoxLayout(self)
         root_layout.setContentsMargins(0, 0, 0, 0)
         root_layout.setSpacing(0)
@@ -325,8 +298,32 @@ class DependentUnitModal(QDialog):
         container_layout.setContentsMargins(24, 24, 24, 24)
         container_layout.setAlignment(Qt.AlignCenter)
 
-        # Popup Box
-        self.modal_box = QFrame(self.overlay_container)
+        # Determine layout mode: only 'liquid_glass' shows 3D wallpaper
+        paths = get_app_paths()
+        saved_settings = load_settings(paths)
+        if layout_mode is None:
+            if parent is not None and hasattr(parent, "current_layout"):
+                layout_mode = getattr(parent, "current_layout")
+            elif parent is not None and hasattr(parent, "_layout_mode"):
+                layout_mode = getattr(parent, "_layout_mode")
+            else:
+                layout_mode = saved_settings.get("layout", "classic")
+        self._layout_mode = layout_mode
+        self._is_liquid_glass = (self._layout_mode == "liquid_glass")
+
+        initial_opacity_pct = 75
+        try:
+            initial_opacity_pct = int(saved_settings.get("modal_bg_opacity", "75"))
+            initial_opacity_pct = max(0, min(100, initial_opacity_pct))
+        except (ValueError, TypeError):
+            initial_opacity_pct = 75
+
+        # Frosted Glass / Clean White Modal Box (width 980px)
+        self.modal_box = LiquidGlassModalBox(
+            self.overlay_container,
+            initial_opacity=initial_opacity_pct / 100.0,
+            is_liquid_glass=self._is_liquid_glass,
+        )
         self.modal_box.setObjectName("BusinessCreationModalBox")
         self.modal_box.setFixedWidth(980)
         self.modal_box.setMaximumHeight(680)
@@ -341,7 +338,7 @@ class DependentUnitModal(QDialog):
         box_layout.setContentsMargins(36, 26, 36, 26)
         box_layout.setSpacing(18)
 
-        # Top Bar
+        # Top Bar: Centered title/subtitle, [X] close button
         top_bar = QHBoxLayout()
         top_bar.setContentsMargins(0, 0, 0, 0)
         top_bar.addSpacing(36)
@@ -373,13 +370,13 @@ class DependentUnitModal(QDialog):
 
         box_layout.addLayout(top_bar)
 
-        # 3 Unit Cards
+        # 3 Top Gradient Cards
         cards_row = QHBoxLayout()
         cards_row.setContentsMargins(0, 4, 0, 4)
         cards_row.setSpacing(14)
 
         for spec in UNIT_TYPE_SPECS:
-            card = UnitTypeCard(
+            card = CompanyTypeCard(
                 type_id=spec["id"],
                 title=spec["title"],
                 subtitle=spec["subtitle"],
@@ -403,7 +400,7 @@ class DependentUnitModal(QDialog):
         sec_header.addWidget(self.count_badge, 0, Qt.AlignVCenter)
         box_layout.addLayout(sec_header)
 
-        # Scroll Area
+        # Scroll Area for Procedures
         self.scroll_area = QScrollArea()
         self.scroll_area.setObjectName("DossierScrollArea")
         self.scroll_area.setWidgetResizable(True)
@@ -423,6 +420,7 @@ class DependentUnitModal(QDialog):
         # Footer
         footer_layout = QHBoxLayout()
         footer_layout.setContentsMargins(0, 8, 0, 0)
+        footer_layout.setSpacing(10)
 
         self.status_icon = QLabel("●")
         self.status_icon.setObjectName("ModalStatusDot")
@@ -451,13 +449,15 @@ class DependentUnitModal(QDialog):
         container_layout.addWidget(self.modal_box)
         root_layout.addWidget(self.overlay_container)
 
-        self._select_unit_type("chi_nhanh")
+        # Select first unit type: Chi nhánh
+        self._on_unit_card_clicked("chi_nhanh")
 
-    def _select_unit_type(self, unit_id: str) -> None:
+    def _on_unit_card_clicked(self, unit_id: str) -> None:
         self.current_unit_id = unit_id
         for uid, card in self.unit_cards.items():
             card.set_active(uid == unit_id)
 
+        # Clear and repopulate procedure items
         while self.list_layout.count():
             item = self.list_layout.takeAt(0)
             w = item.widget()
@@ -471,12 +471,8 @@ class DependentUnitModal(QDialog):
         procedures = spec["procedures"]
         self.count_badge.setText(f"{len(procedures)} thủ tục khả dụng")
 
-        self.selected_procedure = procedures[0] if procedures else None
-        self._update_selected_summary()
-
-        for opt in procedures:
-            item_widget = DependentProcedureItem(opt)
-            item_widget.set_selected(self.selected_procedure == opt)
+        for proc in procedures:
+            item_widget = DependentProcedureItem(proc)
             item_widget.selected.connect(self._on_procedure_selected)
             item_widget.activated.connect(self._on_procedure_activated)
             self.procedure_items.append(item_widget)
@@ -484,37 +480,42 @@ class DependentUnitModal(QDialog):
 
         self.list_layout.addStretch(1)
 
-    def _on_unit_card_clicked(self, unit_id: str) -> None:
-        if unit_id != self.current_unit_id:
-            self._select_unit_type(unit_id)
+        # Auto select first procedure
+        if self.procedure_items:
+            self._on_procedure_selected(self.procedure_items[0].option.id)
 
-    def _on_procedure_selected(self, option_id: str) -> None:
+    def _on_procedure_selected(self, proc_id: str) -> None:
         for item in self.procedure_items:
-            is_match = item.option.id == option_id
+            is_match = (item.option.id == proc_id)
             item.set_selected(is_match)
             if is_match:
                 self.selected_procedure = item.option
-        self._update_selected_summary()
 
-    def _on_procedure_activated(self, option_id: str) -> None:
-        self._on_procedure_selected(option_id)
-        self._on_create_clicked()
-
-    def _update_selected_summary(self) -> None:
+        spec = next((s for s in UNIT_TYPE_SPECS if s["id"] == self.current_unit_id), None)
+        unit_name = spec["title"] if spec else "Đơn vị phụ thuộc"
         if self.selected_procedure:
-            self.selected_summary_label.setText(f"Hồ sơ đang chọn: <b>{self.selected_procedure.title}</b>")
+            self.selected_summary_label.setText(
+                f"Hồ sơ đang chọn: <b>{unit_name} - {self.selected_procedure.title}</b>"
+            )
             self.create_button.setEnabled(True)
         else:
-            self.selected_summary_label.setText("Vui lòng chọn một thủ tục")
+            self.selected_summary_label.setText("Vui lòng chọn thủ tục")
             self.create_button.setEnabled(False)
+
+    def _on_procedure_activated(self, proc_id: str) -> None:
+        self._on_procedure_selected(proc_id)
+        self._on_create_clicked()
 
     def _on_create_clicked(self) -> None:
         if self.selected_procedure is None:
             return
+        spec = next((s for s in UNIT_TYPE_SPECS if s["id"] == self.current_unit_id), None)
+        unit_name = spec["title"] if spec else "Đơn vị phụ thuộc"
+        full_title = f"{unit_name} - {self.selected_procedure.title}"
         self.procedure_chosen.emit(
-            self.selected_procedure.unit_type_id,
+            self.current_unit_id,
             self.selected_procedure.action_id,
-            self.selected_procedure.title,
+            full_title,
             self.selected_procedure.is_ready,
         )
         self.accept()

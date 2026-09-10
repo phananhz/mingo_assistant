@@ -17,10 +17,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from mingo_assistant.app.paths import get_app_paths, load_settings
+from mingo_assistant.ui.dialogs.business_creation_modal import (
+    CompanyTypeCard,
+    LiquidGlassModalBox,
+)
+
 
 @dataclass(frozen=True)
 class AmendmentOption:
     id: str
+    category_id: str
     title: str
     description: str
     badge: str
@@ -29,9 +36,31 @@ class AmendmentOption:
     is_ready: bool = False
 
 
+AMENDMENT_CATEGORIES = [
+    {
+        "id": "amend_basic",
+        "title": "Thông tin & Trụ sở",
+        "subtitle": "Địa chỉ, Tên, Ngành nghề",
+        "icon": "🏢",
+    },
+    {
+        "id": "amend_capital",
+        "title": "Vốn & Thành viên",
+        "subtitle": "Vốn điều lệ, Cổ đông",
+        "icon": "💰",
+    },
+    {
+        "id": "amend_legal",
+        "title": "Đại diện & Quản trị",
+        "subtitle": "Người ĐDPL, Chức danh",
+        "icon": "👤",
+    },
+]
+
 AMENDMENT_PROCEDURES: list[AmendmentOption] = [
     AmendmentOption(
         id="amend_address",
+        category_id="amend_basic",
         title="Thay đổi địa chỉ trụ sở chính",
         description="Chuyển trụ sở cùng quận/huyện, khác quận/huyện, hoặc khác tỉnh/thành phố trực thuộc Trung ương.",
         badge="Đang phát triển",
@@ -40,25 +69,8 @@ AMENDMENT_PROCEDURES: list[AmendmentOption] = [
         is_ready=False,
     ),
     AmendmentOption(
-        id="amend_capital",
-        title="Thay đổi vốn điều lệ",
-        description="Tăng vốn điều lệ, giảm vốn điều lệ, thay đổi tỷ lệ phần vốn góp giữa các thành viên.",
-        badge="Đang phát triển",
-        procedure_name="Thay đổi vốn điều lệ",
-        icon="💰",
-        is_ready=False,
-    ),
-    AmendmentOption(
-        id="amend_legal_rep",
-        title="Thay đổi người đại diện theo pháp luật",
-        description="Thay đổi người đại diện theo pháp luật, bổ sung hoặc thay đổi chức danh người đại diện.",
-        badge="Đang phát triển",
-        procedure_name="Thay đổi người đại diện theo pháp luật",
-        icon="👤",
-        is_ready=False,
-    ),
-    AmendmentOption(
         id="amend_business_lines",
+        category_id="amend_basic",
         title="Bổ sung, thay đổi ngành nghề kinh doanh",
         description="Bổ sung ngành nghề mới, rút bớt ngành nghề, cập nhật mã ngành theo hệ thống VSIC chuẩn.",
         badge="Đang phát triển",
@@ -67,7 +79,18 @@ AMENDMENT_PROCEDURES: list[AmendmentOption] = [
         is_ready=False,
     ),
     AmendmentOption(
+        id="amend_capital",
+        category_id="amend_capital",
+        title="Thay đổi vốn điều lệ",
+        description="Tăng vốn điều lệ, giảm vốn điều lệ, thay đổi tỷ lệ phần vốn góp giữa các thành viên.",
+        badge="Đang phát triển",
+        procedure_name="Thay đổi vốn điều lệ",
+        icon="💰",
+        is_ready=False,
+    ),
+    AmendmentOption(
         id="amend_members",
+        category_id="amend_capital",
         title="Thay đổi thành viên góp vốn / Cổ đông",
         description="Chuyển nhượng phần vốn góp, tiếp nhận thành viên mới hoặc cập nhật thông tin thành viên.",
         badge="Đang phát triển",
@@ -75,11 +98,21 @@ AMENDMENT_PROCEDURES: list[AmendmentOption] = [
         icon="👥",
         is_ready=False,
     ),
+    AmendmentOption(
+        id="amend_legal_rep",
+        category_id="amend_legal",
+        title="Thay đổi người đại diện theo pháp luật",
+        description="Thay đổi người đại diện theo pháp luật, bổ sung hoặc thay đổi chức danh người đại diện.",
+        badge="Đang phát triển",
+        procedure_name="Thay đổi người đại diện theo pháp luật",
+        icon="👤",
+        is_ready=False,
+    ),
 ]
 
 
 class AmendmentItemWidget(QFrame):
-    """Horizontal card in the amendment procedure list."""
+    """Horizontal frosted card in the amendment procedure list."""
 
     selected = Signal(str)
     activated = Signal(str)
@@ -89,8 +122,14 @@ class AmendmentItemWidget(QFrame):
         self.option = option
         self.is_selected = False
         self.setObjectName("DossierListItem")
+        self.setProperty("hovered", "false")
         self.setCursor(Qt.PointingHandCursor)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self._hover_effect = QGraphicsDropShadowEffect(self)
+        self._hover_effect.setColor(QColor(76, 64, 138, 38))
+        self._hover_effect.setOffset(0, 3)
+        self._hover_effect.setBlurRadius(8)
+        self.setGraphicsEffect(self._hover_effect)
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(18, 14, 18, 14)
@@ -130,19 +169,40 @@ class AmendmentItemWidget(QFrame):
 
         layout.addLayout(info_layout, 1)
 
-        # Right indicator
+        # Right selection indicator
         self.indicator = QLabel("✓")
         self.indicator.setObjectName("DossierItemIndicator")
         self.indicator.setAlignment(Qt.AlignCenter)
-        self.indicator.setFixedSize(22, 22)
+        self.indicator.setFixedSize(30, 30)
         layout.addWidget(self.indicator)
 
     def set_selected(self, is_selected: bool) -> None:
         self.is_selected = is_selected
         self.setProperty("selected", "true" if is_selected else "false")
         self.indicator.setVisible(is_selected)
+        self._hover_effect.setColor(QColor(90, 70, 174, 128 if is_selected else 38))
+        self._hover_effect.setOffset(0, 7 if is_selected else 3)
+        self._hover_effect.setBlurRadius(22 if is_selected else 8)
         self.style().unpolish(self)
         self.style().polish(self)
+
+    def enterEvent(self, event) -> None:
+        self.setProperty("hovered", "true")
+        self._hover_effect.setColor(QColor(90, 70, 174, 105))
+        self._hover_effect.setOffset(0, 7)
+        self._hover_effect.setBlurRadius(18)
+        self.style().unpolish(self)
+        self.style().polish(self)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self.setProperty("hovered", "false")
+        self._hover_effect.setColor(QColor(90, 70, 174, 128 if self.is_selected else 38))
+        self._hover_effect.setOffset(0, 7 if self.is_selected else 3)
+        self._hover_effect.setBlurRadius(22 if self.is_selected else 8)
+        self.style().unpolish(self)
+        self.style().polish(self)
+        super().leaveEvent(event)
 
     def mousePressEvent(self, event) -> None:
         if event is None or event.button() == Qt.LeftButton:
@@ -159,17 +219,20 @@ class AmendmentItemWidget(QFrame):
 
 class BusinessAmendmentModal(QDialog):
     """
-    Modal for selecting a business registration amendment procedure.
+    Modal for selecting a business registration amendment procedure,
+    matching the rich 3-card gradient and Liquid Glass design of BusinessCreationModal.
     """
 
     procedure_chosen = Signal(str, str, bool)  # procedure_id, procedure_name, is_ready
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None, layout_mode: str | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("BusinessAmendmentModal")
         self.setModal(True)
 
+        self.current_category_id = "amend_basic"
         self.selected_option: AmendmentOption | None = None
+        self.category_cards: dict[str, CompanyTypeCard] = {}
         self.procedure_widgets: list[AmendmentItemWidget] = []
 
         if parent is not None:
@@ -178,9 +241,10 @@ class BusinessAmendmentModal(QDialog):
             self.resize(parent.size())
             self.move(parent.mapToGlobal(QPoint(0, 0)))
         else:
-            self.setWindowTitle("Đăng ký thay đổi ĐKDN")
+            self.setWindowTitle("Bạn muốn thực hiện thủ tục thay đổi nào?")
             self.resize(1020, 700)
 
+        # Root overlay layout
         root_layout = QVBoxLayout(self)
         root_layout.setContentsMargins(0, 0, 0, 0)
         root_layout.setSpacing(0)
@@ -191,8 +255,32 @@ class BusinessAmendmentModal(QDialog):
         container_layout.setContentsMargins(24, 24, 24, 24)
         container_layout.setAlignment(Qt.AlignCenter)
 
-        # Popup Box
-        self.modal_box = QFrame(self.overlay_container)
+        # Determine layout mode: only 'liquid_glass' shows 3D wallpaper
+        paths = get_app_paths()
+        saved_settings = load_settings(paths)
+        if layout_mode is None:
+            if parent is not None and hasattr(parent, "current_layout"):
+                layout_mode = getattr(parent, "current_layout")
+            elif parent is not None and hasattr(parent, "_layout_mode"):
+                layout_mode = getattr(parent, "_layout_mode")
+            else:
+                layout_mode = saved_settings.get("layout", "classic")
+        self._layout_mode = layout_mode
+        self._is_liquid_glass = (self._layout_mode == "liquid_glass")
+
+        initial_opacity_pct = 75
+        try:
+            initial_opacity_pct = int(saved_settings.get("modal_bg_opacity", "75"))
+            initial_opacity_pct = max(0, min(100, initial_opacity_pct))
+        except (ValueError, TypeError):
+            initial_opacity_pct = 75
+
+        # Frosted Glass / Clean White Modal Box (width 980px)
+        self.modal_box = LiquidGlassModalBox(
+            self.overlay_container,
+            initial_opacity=initial_opacity_pct / 100.0,
+            is_liquid_glass=self._is_liquid_glass,
+        )
         self.modal_box.setObjectName("BusinessCreationModalBox")
         self.modal_box.setFixedWidth(980)
         self.modal_box.setMaximumHeight(680)
@@ -207,7 +295,7 @@ class BusinessAmendmentModal(QDialog):
         box_layout.setContentsMargins(36, 26, 36, 26)
         box_layout.setSpacing(18)
 
-        # Top Bar
+        # Top Bar: Centered title/subtitle, [X] close button
         top_bar = QHBoxLayout()
         top_bar.setContentsMargins(0, 0, 0, 0)
         top_bar.addSpacing(36)
@@ -221,7 +309,7 @@ class BusinessAmendmentModal(QDialog):
         self.title_label.setObjectName("ModalTitle")
         self.title_label.setAlignment(Qt.AlignCenter)
 
-        self.subtitle_label = QLabel("Chọn thủ tục thay đổi nội dung đăng ký doanh nghiệp để bắt đầu.")
+        self.subtitle_label = QLabel("Chọn nhóm thủ tục thay đổi nội dung đăng ký doanh nghiệp để bắt đầu.")
         self.subtitle_label.setObjectName("ModalSubtitle")
         self.subtitle_label.setAlignment(Qt.AlignCenter)
 
@@ -239,6 +327,24 @@ class BusinessAmendmentModal(QDialog):
 
         box_layout.addLayout(top_bar)
 
+        # 3 Top Gradient Cards
+        cards_row = QHBoxLayout()
+        cards_row.setContentsMargins(0, 4, 0, 4)
+        cards_row.setSpacing(14)
+
+        for cat in AMENDMENT_CATEGORIES:
+            card = CompanyTypeCard(
+                type_id=cat["id"],
+                title=cat["title"],
+                subtitle=cat["subtitle"],
+                icon=cat["icon"],
+            )
+            card.clicked.connect(self._on_category_card_clicked)
+            self.category_cards[cat["id"]] = card
+            cards_row.addWidget(card, 1)
+
+        box_layout.addLayout(cards_row)
+
         # Section Header
         sec_header = QHBoxLayout()
         sec_header.setContentsMargins(0, 4, 0, 0)
@@ -251,14 +357,14 @@ class BusinessAmendmentModal(QDialog):
         sec_header.addWidget(self.count_badge, 0, Qt.AlignVCenter)
         box_layout.addLayout(sec_header)
 
-        # Scroll Area
+        # Scroll Area for Procedures
         self.scroll_area = QScrollArea()
         self.scroll_area.setObjectName("DossierScrollArea")
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setFrameShape(QFrame.NoFrame)
         self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.scroll_area.viewport().setAutoFillBackground(False)
-        self.scroll_area.setMaximumHeight(350)
+        self.scroll_area.setMaximumHeight(260)
 
         self.list_container = QWidget()
         self.list_container.setObjectName("DossierListContainer")
@@ -280,6 +386,7 @@ class BusinessAmendmentModal(QDialog):
         # Footer
         footer_layout = QHBoxLayout()
         footer_layout.setContentsMargins(0, 8, 0, 0)
+        footer_layout.setSpacing(10)
 
         self.status_icon = QLabel("●")
         self.status_icon.setObjectName("ModalStatusDot")
@@ -308,16 +415,47 @@ class BusinessAmendmentModal(QDialog):
         container_layout.addWidget(self.modal_box)
         root_layout.addWidget(self.overlay_container)
 
-        # Default selection: first procedure
-        if self.procedure_widgets:
-            self._on_procedure_selected(self.procedure_widgets[0].option.id)
+        # Select first category and procedure
+        self._select_category("amend_basic")
+
+    def _on_category_card_clicked(self, category_id: str) -> None:
+        self._select_category(category_id)
+
+    def _select_category(self, category_id: str) -> None:
+        self.current_category_id = category_id
+        for cid, card in self.category_cards.items():
+            card.set_active(cid == category_id)
+
+        # Filter procedure widgets for current category
+        matching_count = 0
+        first_match: AmendmentOption | None = None
+        for w in self.procedure_widgets:
+            is_cat = (w.option.category_id == category_id)
+            w.setVisible(is_cat)
+            if is_cat:
+                matching_count += 1
+                if first_match is None:
+                    first_match = w.option
+
+        self.count_badge.setText(f"{matching_count} thủ tục khả dụng")
+        if first_match:
+            self._on_procedure_selected(first_match.id)
 
     def _on_procedure_selected(self, option_id: str) -> None:
         for w in self.procedure_widgets:
-            is_match = w.option.id == option_id
+            is_match = (w.option.id == option_id)
             w.set_selected(is_match)
             if is_match:
                 self.selected_option = w.option
+                if w.option.category_id != self.current_category_id:
+                    self.current_category_id = w.option.category_id
+                    for cid, card in self.category_cards.items():
+                        card.set_active(cid == self.current_category_id)
+                    for other_w in self.procedure_widgets:
+                        other_w.setVisible(other_w.option.category_id == self.current_category_id)
+                    count = sum(1 for item in self.procedure_widgets if item.option.category_id == self.current_category_id)
+                    self.count_badge.setText(f"{count} thủ tục khả dụng")
+
         if self.selected_option:
             self.selected_summary_label.setText(f"Hồ sơ đang chọn: <b>{self.selected_option.title}</b>")
             self.create_button.setEnabled(True)

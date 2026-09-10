@@ -5,6 +5,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from mingo_assistant.app.paths import get_app_paths
+from mingo_assistant.infrastructure.storage import read_json, write_json_atomic
 
 
 PERSONAL_PROFILE_FIELDS = (
@@ -113,11 +114,10 @@ class PersonalProfileRepository:
         if not self.data_file.exists():
             return {"profiles": []}
         try:
-            loaded = json.loads(self.data_file.read_text(encoding="utf-8"))
+            loaded = read_json(self.data_file)
         except (OSError, json.JSONDecodeError):
             return {"profiles": []}
         return loaded if isinstance(loaded, dict) else {"profiles": []}
 
     def _write_payload(self, payload: dict[str, object]) -> None:
-        self.data_file.parent.mkdir(parents=True, exist_ok=True)
-        self.data_file.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        write_json_atomic(self.data_file, payload)

@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from time import monotonic
 from uuid import uuid4
 
-from PySide6.QtCore import QObject, QRegularExpression, QSignalBlocker, QThread, QTimer, QUrl, Qt, Signal, Slot, QStringListModel
+from PySide6.QtCore import QRegularExpression, QSignalBlocker, QThread, QTimer, QUrl, Qt, Slot, QStringListModel
 from PySide6.QtGui import QDesktopServices, QPixmap, QRegularExpressionValidator
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -38,12 +37,28 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from mingo_assistant.app.paths import get_app_paths, save_settings
+from mingo_assistant.application.business_registration import BusinessRegistrationServices
 from mingo_assistant.models.case import CaseSummary
 from mingo_assistant.services.documents.docx_generator import DocxTemplateGenerator
 from mingo_assistant.services.business_lines.industry_lookup import IndustryCatalog, IndustryRow
-from mingo_assistant.services.normalization.address_parser import AddressParser
-from mingo_assistant.services.ocr.id_card_parser import IdCardParser
-from mingo_assistant.services.ocr.ocr_service import OcrService
+from mingo_assistant.models.business_registration import OcrPerson
+from mingo_assistant.ui.widgets.combo_box import NoWheelComboBox
+from mingo_assistant.ui.views.business_registration.components import BusinessLineRow, ClickableImageLabel
+from mingo_assistant.ui.views.business_registration.export_worker import DocxExportWorker
+from mingo_assistant.ui.views.business_registration.schema import (
+    ASSET_CONTRIBUTION_LABELS,
+    BUSINESS_LINE_FIELD_DEFINITIONS,
+    CAPITAL_SOURCE_LABELS,
+    FIELD_DEFINITIONS,
+    FIELD_GROUPS,
+    HIDDEN_FIELD_DEFINITIONS,
+    INDIVIDUAL_OWNER_FIELD_KEYS,
+    MULTILINE_FIELDS,
+    ORGANIZATION_OWNER_FIELD_KEYS,
+    ORGANIZATION_OWNER_REPRESENTATIVE_FIELD_KEYS,
+    PERSON_ROLES,
+    POSITION_OPTIONS,
+)
 
 
 AUTO_FILL_PROMPT = "\u0043h\u1ecdn \u0111\u1ec3 t\u1ef1 \u0111\u1ed9ng \u0111i\u1ec1n"
@@ -59,192 +74,6 @@ def _is_organization_owner(value: object) -> bool:
     text = unicodedata.normalize("NFD", text)
     text = "".join(character for character in text if unicodedata.category(character) != "Mn")
     return text == "to chuc"
-from mingo_assistant.services.organization_documents import OrganizationDocumentService
-from mingo_assistant.services.personal_profiles import PersonalProfileRepository
-from mingo_assistant.services.registration_offices import RegistrationOfficeCatalog
-from mingo_assistant.ui.widgets.combo_box import NoWheelComboBox
-
-PERSON_ROLES = [
-    ("beneficial_owner", "Chủ sở hữu"),
-    ("legal_representative", "Đại diện pháp luật/Giám đốc"),
-    ("member", "Thành viên/chủ sở hữu góp vốn"),
-    ("applicant", "Người đăng ký/nộp hồ sơ"),
-    ("authorized_person", "Người được ủy quyền"),
-]
-
-
-FIELD_GROUPS = [
-    ("Thông tin cơ quan tiếp nhận và thời gian ký", [("business_registration_office", "Phòng đăng ký kinh doanh"), ("document_place", "Nơi ký"), ("document_day", "Ngày ký"), ("document_month", "Tháng ký"), ("document_year", "Năm ký"), ("document_place_date", "Dòng địa điểm/ngày tháng")]),
-    ("Thông tin người đăng ký/nộp hồ sơ", [("applicant_full_name", "Họ tên người đăng ký"), ("applicant_date_of_birth", "Ngày sinh"), ("applicant_gender", "Giới tính"), ("applicant_id_number", "Số CCCD"), ("applicant_address_detail", "Số nhà/đường/thôn"), ("applicant_ward", "Xã/Phường"), ("applicant_province", "Tỉnh/Thành phố"), ("applicant_phone", "Điện thoại"), ("applicant_email", "Thư điện tử (nếu có)")]),
-    ("Thông tin doanh nghiệp", [("company_name", "Tên doanh nghiệp"), ("company_english_name", "Tên tiếng Anh (nếu có)"), ("company_short_name", "Tên viết tắt (nếu có)"), ("company_address", "Địa chỉ trụ sở đầy đủ"), ("company_address_detail", "Số nhà/đường/thôn"), ("company_ward", "Xã/Phường"), ("company_province", "Tỉnh/Thành phố"), ("company_phone", "Số điện thoại công ty"), ("company_email", "Email công ty (nếu có)"), ("company_fax", "Số fax (nếu có)"), ("company_website", "Website (nếu có)"), ("company_land_use_certificate", "Có giấy chứng nhận quyền sử dụng đất thuộc khu vực quốc phòng, an ninh")]),
-    ("Ngành nghề kinh doanh", []),
-    ("Thông tin chủ sở hữu", [
-        ("beneficial_owner_full_name", "Họ tên chủ sở hữu"),
-        ("beneficial_owner_date_of_birth", "Ngày sinh"),
-        ("beneficial_owner_gender", "Giới tính"),
-        ("beneficial_owner_ethnicity", "Dân tộc"),
-        ("beneficial_owner_id_number", "Số CCCD"),
-        ("beneficial_owner_issue_date", "Ngày cấp CCCD"),
-        ("beneficial_owner_address", "Địa chỉ liên lạc"),
-        ("organization_owner_name", "Tên tổ chức (ghi bằng chữ in hoa)"),
-        ("organization_owner_registration_number", "Mã số doanh nghiệp/Số quyết định thành lập"),
-        ("organization_owner_issue_date", "Ngày cấp"),
-        ("organization_owner_issue_place", "Nơi cấp"),
-        ("organization_owner_address_detail", "Số nhà/phòng, ngách/hẻm, ngõ/kiệt, đường/phố/đại lộ, tổ/xóm/ấp/thôn"),
-        ("organization_owner_ward", "Xã/Phường/Đặc khu"),
-        ("organization_owner_province", "Tỉnh/Thành phố trực thuộc trung ương"),
-        ("organization_owner_country", "Quốc gia"),
-        ("organization_owner_phone", "Điện thoại (nếu có)"),
-        ("organization_owner_fax", "Số fax (nếu có)"),
-        ("organization_owner_email", "Thư điện tử (nếu có)"),
-        ("organization_owner_website", "Website (nếu có)"),
-    ]),
-    ("Vốn điều lệ và vốn góp", [("charter_capital_number", "Vốn điều lệ bằng số"), ("charter_capital_text", "Vốn điều lệ bằng chữ"), ("charter_capital_full_text", "Vốn điều lệ đầy đủ"), ("cash_capital_text", "Vốn bằng tiền mặt"), ("asset_capital_text", "Vốn bằng tài sản"), ("member_capital_amount", "Vốn góp thành viên"), ("member_capital_ratio", "Tỷ lệ góp vốn"), ("capital_zero", "Giá trị 0 trong bảng vốn")]),
-    ("Thông tin người đại diện pháp luật", [("legal_representative_full_name", "Họ tên"), ("legal_representative_id_number", "Số CCCD"), ("legal_representative_date_of_birth", "Ngày sinh"), ("legal_representative_gender", "Giới tính"), ("legal_representative_nationality", "Quốc tịch"), ("legal_representative_ethnicity", "Dân tộc"), ("legal_representative_permanent_address", "Địa chỉ thường trú đầy đủ"), ("legal_representative_address_detail", "Số nhà/đường/thôn"), ("legal_representative_ward", "Xã/Phường"), ("legal_representative_province", "Tỉnh/Thành phố"), ("legal_representative_contact_address", "Địa chỉ liên lạc"), ("legal_representative_issue_date", "Ngày cấp"), ("legal_representative_expiry_date", "Ngày hết hạn"), ("legal_representative_position", "Chức danh"), ("legal_representative_phone", "Điện thoại"), ("legal_representative_email", "Thư điện tử (nếu có)"), ("legal_representative_issue_place", "Nơi cấp CCCD")]),
-    ("Thông tin giám đốc/Tổng giám đốc", [("director_full_name", "Họ tên giám đốc"), ("director_date_of_birth", "Ngày sinh"), ("director_gender", "Giới tính"), ("director_id_number", "Số CCCD"), ("director_phone", "Điện thoại"), ("director_position", "Chức danh")]),
-    ("Thông tin đăng ký thuế và bảo hiểm xã hội", [("tax_accounting_method", "Hình thức hạch toán"), ("tax_consolidated_financial_statement", "Có báo cáo tài chính hợp nhất"), ("tax_fiscal_year_start", "Năm tài chính bắt đầu (ngày/tháng)"), ("tax_fiscal_year_end", "Năm tài chính kết thúc (ngày/tháng)"), ("tax_labor_count", "Tổng số lao động dự kiến"), ("tax_bot_project", "Hoạt động theo dự án BOT/BTO/BT/BOO, BLT, BTL, O&M"), ("tax_vat_method", "Phương pháp tính thuế GTGT"), ("tax_declaration_period", "Phương thức đóng bảo hiểm xã hội")]),
-    ("Danh s\u00e1ch ch\u1ee7 s\u1edf h\u1eefu h\u01b0\u1edfng l\u1ee3i", [("beneficial_owner_list_capital_direct", "9. V\u1ed1n \u0111i\u1ec1u l\u1ec7 tr\u1ef1c ti\u1ebfp"), ("beneficial_owner_list_capital_indirect", "10. V\u1ed1n \u0111i\u1ec1u l\u1ec7 gi\u00e1n ti\u1ebfp"), ("beneficial_owner_list_capital_total", "11. T\u1ed5ng v\u1ed1n \u0111i\u1ec1u l\u1ec7"), ("beneficial_owner_list_voting_direct", "12. Bi\u1ec3u quy\u1ebft tr\u1ef1c ti\u1ebfp"), ("beneficial_owner_list_voting_indirect", "13. Bi\u1ec3u quy\u1ebft gi\u00e1n ti\u1ebfp"), ("beneficial_owner_list_voting_total", "14. T\u1ed5ng bi\u1ec3u quy\u1ebft"), ("beneficial_owner_list_general_partner", "15. Th\u00e0nh vi\u00ean h\u1ee3p danh"), ("beneficial_owner_list_related_group", "16. Nh\u00f3m c\u00e1 nh\u00e2n li\u00ean quan"), ("beneficial_owner_list_control", "17. Ki\u1ec3m so\u00e1t doanh nghi\u1ec7p"), ("beneficial_owner_list_manager", "18. Ng\u01b0\u1eddi qu\u1ea3n l\u00fd doanh nghi\u1ec7p")]),
-    ("Thông tin người được ủy quyền", [("authorized_person_full_name", "Họ tên"), ("authorized_person_date_of_birth", "Ngày sinh"), ("authorized_person_gender", "Giới tính"), ("authorized_person_id_number", "Số CCCD"), ("authorized_person_issue_date", "Ngày cấp CCCD"), ("authorized_person_issue_place", "Nơi cấp CCCD"), ("authorized_person_contact_address", "Địa chỉ liên lạc"), ("authorized_person_phone", "Điện thoại"), ("authorized_person_email", "Email (nếu có)")]),
-]
-
-BUSINESS_LINE_FIELD_DEFINITIONS = [
-    (f"business_line_{index}_name", f"Ngành {index}") for index in range(1, 11)
-] + [
-    (f"business_line_{index}_code", f"Mã ngành {index}") for index in range(1, 11)
-] + [
-    (f"business_line_{index}_is_main", f"Ngành chính {index}") for index in range(1, 11)
-] + [
-    (f"business_line_{index}_detail", f"Mô tả chi tiết ngành {index}") for index in range(1, 11)
-]
-
-HIDDEN_FIELD_DEFINITIONS = [
-    ("business_lines", "Ghi chú ngành nghề"),
-    ("signature_initial_note", "Ghi chú ký"),
-]
-
-FIELD_DEFINITIONS = [field for _, fields in FIELD_GROUPS for field in fields] + BUSINESS_LINE_FIELD_DEFINITIONS + HIDDEN_FIELD_DEFINITIONS
-
-
-MULTILINE_FIELDS = {
-    "company_address",
-    "business_lines",
-    "legal_representative_permanent_address",
-    "legal_representative_contact_address",
-    "beneficial_owner_address",
-    "authorized_person_contact_address",
-}
-
-INDIVIDUAL_OWNER_FIELD_KEYS = (
-    "beneficial_owner_full_name",
-    "beneficial_owner_date_of_birth",
-    "beneficial_owner_gender",
-    "beneficial_owner_id_number",
-    "beneficial_owner_issue_date",
-    "beneficial_owner_address",
-)
-
-ORGANIZATION_OWNER_FIELD_KEYS = (
-    "organization_owner_name",
-    "organization_owner_registration_number",
-    "organization_owner_issue_date",
-    "organization_owner_issue_place",
-    "organization_owner_address_detail",
-    "organization_owner_ward",
-    "organization_owner_province",
-    "organization_owner_country",
-    "organization_owner_phone",
-    "organization_owner_fax",
-    "organization_owner_email",
-    "organization_owner_website",
-)
-
-ORGANIZATION_OWNER_REPRESENTATIVE_FIELD_KEYS = (
-    "organization_owner_representative_number",
-    "organization_owner_representative_full_name",
-    "organization_owner_representative_date_of_birth",
-    "organization_owner_representative_gender",
-    "organization_owner_representative_identity",
-    "organization_owner_representative_nationality",
-    "organization_owner_representative_ethnicity",
-    "organization_owner_representative_contact_address",
-    "organization_owner_representative_authorized_capital_value",
-    "organization_owner_representative_authorized_capital_ratio",
-    "organization_owner_representative_authorized_capital_date",
-    "organization_owner_representative_signature",
-    "organization_owner_representative_notes",
-)
-
-@dataclass
-class OcrPerson:
-    name: str
-    role: str = "member"
-    front_path: str = ""
-    back_path: str = ""
-    data: dict[str, str] = field(default_factory=dict)
-    recognition_type: str = ""
-    raw_text: str = ""
-    organization_data: dict[str, str] = field(default_factory=dict)
-    organization_extraction_method: str = ""
-
-
-@dataclass
-class BusinessLineRow:
-    name_field: QLineEdit
-    detail_field: QTextEdit
-    code_field: QLineEdit
-    main_checkbox: QCheckBox
-    delete_button: QPushButton
-    cells: list[QFrame]
-
-
-CAPITAL_SOURCE_LABELS = (
-    "Vốn ngân sách nhà nước",
-    "Vốn tư nhân",
-    "Vốn nước ngoài",
-    "Vốn khác",
-)
-ASSET_CONTRIBUTION_LABELS = (
-    "Đồng Việt Nam",
-    "Ngoại tệ tự do chuyển đổi",
-    "Vàng",
-    "Quyền sử dụng đất",
-    "Quyền sở hữu trí tuệ",
-    "Các tài sản khác",
-)
-POSITION_OPTIONS = ("Giám đốc", "Tổng giám đốc")
-
-
-class ClickableImageLabel(QLabel):
-    clicked = Signal()
-
-    def mousePressEvent(self, event) -> None:
-        if event.button() == Qt.LeftButton:
-            self.clicked.emit()
-        super().mousePressEvent(event)
-
-
-class DocxExportWorker(QObject):
-    finished = Signal(object)
-
-    def __init__(self, template_dir: Path, export_root: Path, values: dict[str, str], case_name: str, output_dir: Path) -> None:
-        super().__init__()
-        self.template_dir = template_dir
-        self.export_root = export_root
-        self.values = values
-        self.case_name = case_name
-        self.output_dir = output_dir
-
-    def run(self) -> None:
-        try:
-            generator = DocxTemplateGenerator(template_dir=self.template_dir, export_root=self.export_root)
-            template_issues = generator.validate_templates(self.values)
-            if template_issues:
-                self.finished.emit({"template_issues": template_issues})
-                return
-            result = generator.generate(self.values, self.case_name, output_dir=self.output_dir)
-            self.finished.emit({"result": result})
-        except Exception as exc:
-            self.finished.emit({"error": str(exc)})
 
 
 class BusinessRegistrationWorkspace(QWidget):
@@ -258,6 +87,7 @@ class BusinessRegistrationWorkspace(QWidget):
         industry_catalog: IndustryCatalog | None = None,
         bundle_root: Path | None = None,
         default_export_root: Path | None = None,
+        services: BusinessRegistrationServices | None = None,
     ) -> None:
         super().__init__()
         self.on_back = on_back
@@ -267,13 +97,14 @@ class BusinessRegistrationWorkspace(QWidget):
         self.case_id = case.id if case else str(uuid4())
         self.bundle_root = bundle_root or get_app_paths().bundle_root
         self.default_export_root = default_export_root or get_app_paths().documents_root
-        self.ocr_service = OcrService()
-        self.id_parser = IdCardParser()
-        self.organization_document_service = OrganizationDocumentService()
-        self.profile_repository = PersonalProfileRepository()
-        self.address_parser = AddressParser()
-        self.industry_catalog = industry_catalog or IndustryCatalog.load_from_project(self.bundle_root)
-        self.registration_office_catalog = RegistrationOfficeCatalog.load_from_project(self.bundle_root)
+        self.services = services or BusinessRegistrationServices.from_project(self.bundle_root)
+        self.ocr_service = self.services.ocr_service
+        self.id_parser = self.services.id_card_parser
+        self.organization_document_service = self.services.organization_document_service
+        self.profile_repository = self.services.profile_repository
+        self.address_parser = self.services.address_parser
+        self.industry_catalog = industry_catalog or self.services.industry_catalog
+        self.registration_office_catalog = self.services.registration_office_catalog
         self.fields: dict[str, QLineEdit | QTextEdit | QCheckBox | QComboBox] = {}
         self.beneficial_owner_list_auto_fields: dict[str, QLineEdit | QTextEdit] = {}
         self.beneficial_owner_list_selector: QComboBox | None = None
@@ -775,8 +606,16 @@ class BusinessRegistrationWorkspace(QWidget):
     def _sync_form_stack_height(self) -> None:
         current = self.form_stack.currentWidget()
         if current is not None:
+            # QStackedWidget otherwise honours QGroupBox's default Preferred
+            # width and leaves a large unused area beside short two-column forms.
+            current.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+            current.setMinimumWidth(0)
             current.ensurePolished()
             current.adjustSize()
+            stack_layout = self.form_stack.layout()
+            if stack_layout is not None:
+                stack_layout.invalidate()
+                stack_layout.activate()
             self.form_stack.setFixedHeight(max(280, current.sizeHint().height() + 20))
     def _build_beneficial_owner_list_section(self, fields: list[tuple[str, str]]) -> QWidget:
         section = QGroupBox("Danh sách chủ sở hữu hưởng lợi")
@@ -1551,7 +1390,7 @@ class BusinessRegistrationWorkspace(QWidget):
         table_layout = QGridLayout(table)
         table_layout.setContentsMargins(0, 0, 0, 0)
         table_layout.setHorizontalSpacing(0)
-        table_layout.setVerticalSpacing(0)
+        table_layout.setVerticalSpacing(8)
 
         headers = ["Thông tin ngành nghề", "Mã ngành nghề", "Ngành nghề chính", "Xóa"]
         for column, header_text in enumerate(headers):
@@ -1763,17 +1602,17 @@ class BusinessRegistrationWorkspace(QWidget):
 
     def _add_business_line_row(self, parent_layout: QGridLayout, index: int, visible: bool) -> None:
         name_field = QLineEdit()
-        name_field.setPlaceholderText("Ten nganh nghe")
+        name_field.setPlaceholderText("Tên ngành nghề")
         name_field.textChanged.connect(self._refresh_preview)
 
         detail_field = QTextEdit()
-        detail_field.setPlaceholderText("Mo ta chi tiet hoac ngoai le (neu co)")
+        detail_field.setPlaceholderText("Mô tả chi tiết hoặc ngoại lệ (nếu có)")
         detail_field.setFixedHeight(58)
         detail_field.textChanged.connect(self._refresh_preview)
 
         code_field = QLineEdit()
         code_field.setAlignment(Qt.AlignCenter)
-        code_field.setPlaceholderText("4 chu so")
+        code_field.setPlaceholderText("4 chữ số")
         code_field.setValidator(QRegularExpressionValidator(QRegularExpression(r"\d{0,4}"), code_field))
         code_field.setFixedHeight(40)
         code_field.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
@@ -1781,29 +1620,57 @@ class BusinessRegistrationWorkspace(QWidget):
         code_field.editingFinished.connect(lambda selected=index: self._warn_duplicate_business_line_code(selected))
 
         main_checkbox = QCheckBox()
-        main_checkbox.setToolTip("Danh dau nganh nghe chinh")
+        main_checkbox.setToolTip("Đánh dấu ngành nghề chính")
         main_checkbox.stateChanged.connect(lambda state, selected=index: self._set_main_business_line(selected, state))
 
-        delete_button = QPushButton("Xoa")
+        delete_button = QPushButton("Xóa")
         delete_button.setObjectName("GhostButton")
         delete_button.setFixedHeight(40)
         delete_button.clicked.connect(lambda checked=False, selected=index: self._delete_business_line_row(selected))
 
-        cells = [
-            self._build_business_line_info_cell(name_field, detail_field),
-            self._build_table_cell(code_field, Qt.AlignCenter),
-            self._build_table_cell(main_checkbox, Qt.AlignCenter),
-            self._build_table_cell(delete_button, Qt.AlignCenter),
-        ]
-        for column, cell in enumerate(cells):
-            parent_layout.addWidget(cell, index, column)
+        # A complete business line is one card, not four disconnected cells.
+        # This makes individual lines easy to scan and gives every line a clear border.
+        row_frame = QFrame()
+        row_frame.setObjectName("BusinessLineRow")
+        # Keep the group border on the row itself. App-wide themes may restyle
+        # ordinary frames, so this local rule protects the dossier row boundary.
+        row_frame.setFrameShape(QFrame.Box)
+        row_frame.setLineWidth(2)
+        row_frame.setStyleSheet(
+            "QFrame#BusinessLineRow {"
+            " background-color: rgba(242, 247, 255, 0.72);"
+            " border: 2px solid #557fae !important;"
+            " border-radius: 12px;"
+            "}"
+        )
+        # Leave room for both stacked editors and the card border under the active stylesheet.
+        row_frame.setFixedHeight(156)
+        row_layout = QGridLayout(row_frame)
+        row_layout.setContentsMargins(12, 9, 12, 9)
+        row_layout.setHorizontalSpacing(16)
+        row_layout.setVerticalSpacing(0)
+        row_layout.setColumnStretch(0, 5)
+        row_layout.setColumnStretch(1, 2)
+        row_layout.setColumnStretch(2, 1)
+        row_layout.setColumnStretch(3, 1)
+
+        info = QWidget()
+        info_layout = QVBoxLayout(info)
+        info_layout.setContentsMargins(0, 0, 0, 0)
+        info_layout.setSpacing(5)
+        info_layout.addWidget(name_field)
+        info_layout.addWidget(detail_field)
+        row_layout.addWidget(info, 0, 0)
+        row_layout.addWidget(code_field, 0, 1, Qt.AlignCenter)
+        row_layout.addWidget(main_checkbox, 0, 2, Qt.AlignCenter)
+        row_layout.addWidget(delete_button, 0, 3, Qt.AlignCenter)
+        parent_layout.addWidget(row_frame, index, 0, 1, 4)
 
         self.fields[f"business_line_{index}_name"] = name_field
         self.fields[f"business_line_{index}_detail"] = detail_field
         self.fields[f"business_line_{index}_code"] = code_field
-        self.business_line_rows.append(BusinessLineRow(name_field, detail_field, code_field, main_checkbox, delete_button, cells))
+        self.business_line_rows.append(BusinessLineRow(name_field, detail_field, code_field, main_checkbox, delete_button, [row_frame]))
         self._set_business_line_row_visible(index, visible)
-
     def _build_business_line_info_cell(self, name_field: QLineEdit, detail_field: QTextEdit) -> QFrame:
         cell = QFrame()
         cell.setObjectName("TableCell")
@@ -1876,7 +1743,7 @@ class BusinessRegistrationWorkspace(QWidget):
         if self.business_line_table is None:
             return
         visible_rows = sum(1 for row in self.business_line_rows if not row.cells[0].isHidden())
-        height = 42 + max(1, visible_rows) * 124 + 2
+        height = 42 + max(1, visible_rows) * 164 + 2
         self.business_line_table.setMinimumHeight(height)
         self.business_line_table.setMaximumHeight(height)
         QTimer.singleShot(0, self._sync_form_stack_height)
@@ -3387,6 +3254,25 @@ class BusinessRegistrationWorkspace(QWidget):
         self.case = saved_case
         QMessageBox.information(self, "Đã lưu", "Hồ sơ nháp đã được lưu vào danh sách.")
 
+    def _document_generator_class(self) -> type:
+        """Return the generator class used by this dossier procedure."""
+        return DocxTemplateGenerator
+
+    def _export_case_name(self, values: dict[str, str]) -> str:
+        return values.get("company_name", "") or "ho_so_thanh_lap"
+    def _export_version_label(self, case_export_dir: Path) -> str:
+        return f"b\u1ea3n {self._next_export_version_number(case_export_dir)}"
+
+    def _export_output_dir(
+        self,
+        case_export_dir: Path,
+        values: dict[str, str],
+        case_name: str,
+        version_name: str,
+    ) -> Path:
+        company_folder = self._safe_export_folder_name(case_name)
+        return case_export_dir / version_name / company_folder
+
     def _export_documents(self) -> None:
         if self._export_thread is not None and self._export_thread.isRunning():
             return
@@ -3398,10 +3284,9 @@ class BusinessRegistrationWorkspace(QWidget):
 
         template_dir, export_root = self._template_and_export_dirs()
         case_export_dir = self._case_export_dir(export_root, values)
-        version_number = self._next_export_version_number(case_export_dir)
-        version_name = f"bản {version_number}"
-        company_folder = self._safe_export_folder_name(values.get("company_name", "") or "HO SO THANH LAP")
-        version_dir = case_export_dir / version_name / company_folder
+        version_name = self._export_version_label(case_export_dir)
+        case_name = self._export_case_name(values)
+        version_dir = self._export_output_dir(case_export_dir, values, case_name, version_name)
 
         self._set_export_busy(True)
         self._export_case_dir = case_export_dir
@@ -3411,8 +3296,9 @@ class BusinessRegistrationWorkspace(QWidget):
             template_dir,
             export_root,
             values,
-            values.get("company_name", "ho_so_thanh_lap"),
+            case_name,
             version_dir,
+            generator_class=self._document_generator_class(),
         )
         self._export_worker.moveToThread(self._export_thread)
         self._export_thread.started.connect(self._export_worker.run)
@@ -3492,7 +3378,7 @@ class BusinessRegistrationWorkspace(QWidget):
     def _check_templates(self) -> None:
         values = self.form_values()
         template_dir, export_root = self._template_and_export_dirs()
-        generator = DocxTemplateGenerator(template_dir=template_dir, export_root=export_root)
+        generator = self._document_generator_class()(template_dir=template_dir, export_root=export_root)
         try:
             template_issues = generator.validate_templates(values)
         except Exception as exc:

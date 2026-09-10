@@ -45,6 +45,7 @@ from PySide6.QtGui import (
 
 from mingo_assistant import __version__
 from mingo_assistant.app.paths import AppPaths, get_app_paths, load_settings, save_settings
+from mingo_assistant.infrastructure.storage import read_json, write_json_atomic
 from mingo_assistant.models.case import CaseSummary
 from mingo_assistant.repositories.case_repository import CaseRepository
 from mingo_assistant.services.business_lines.industry_lookup import IndustryCatalog, IndustryRow
@@ -59,14 +60,15 @@ from mingo_assistant.ui.styles import (
 )
 from mingo_assistant.ui.views.business_registration_documents import BusinessRegistrationDocumentsView
 from mingo_assistant.ui.views.business_registration_workspace import BusinessRegistrationWorkspace
+from mingo_assistant.ui.views.location_business_workspace import LOCATION_CASE_TYPE, LocationBusinessWorkspace
 from mingo_assistant.ui.widgets.combo_box import NoWheelComboBox
 
 
 NAV_ITEMS = [
-    ("business_registration", "Hồ sơ thành lập doanh nghiệp"),
-    ("business_amendment", "Đăng ký thay đổi ĐKDN"),
-    ("dependent_units", "Thủ tục đơn vị phụ thuộc DN"),
-    ("dissolution", "Hồ sơ giải thể doanh nghiệp"),
+    ("business_registration", "1. Thủ tục thành lập doanh nghiệp"),
+    ("business_amendment", "2. Thủ tục thay đổi ĐKDN"),
+    ("dissolution", "3. Thủ tục giải thể DN"),
+    ("dependent_units", "4. Thủ tục của đơn vị phụ thuộc"),
     ("industry_lookup", "Tra cứu ngành nghề kinh doanh"),
     ("templates", "Quản lý mẫu Word"),
     ("people", "Kho cá nhân/tổ chức"),
@@ -304,6 +306,9 @@ class MainWindow(QMainWindow):
         self.global_topbar = self._build_global_topbar()
         self.top_nav_bar = self._build_top_nav_bar()
         self.content_stack_wrapper = self._build_content_stack()
+        # Keep sidebar state tied to the page actually shown, not to whichever
+        # workflow happened to hide it most recently.
+        self.stack.currentChanged.connect(self._sync_navigation_visibility)
 
         root = QWidget()
         root_layout = QVBoxLayout(root)
@@ -564,13 +569,13 @@ class MainWindow(QMainWindow):
         )
         self.dependent_units_page = self._build_category_hub_page(
             nav_key="dependent_units",
-            title_text="Thủ tục đơn vị phụ thuộc DN",
+            title_text="Thủ tục của đơn vị phụ thuộc",
             desc_text="Quản lý và soạn thảo hồ sơ thành lập, thay đổi, chấm dứt hoạt động cho chi nhánh, văn phòng đại diện và địa điểm kinh doanh.",
             on_create_clicked=self._open_dependent_unit_modal,
         )
         self.dissolution_page = self._build_category_hub_page(
             nav_key="dissolution",
-            title_text="Hồ sơ giải thể doanh nghiệp",
+            title_text="Thủ tục giải thể DN",
             desc_text="Soạn thảo hồ sơ giải thể doanh nghiệp theo từng loại hình công ty và xử lý tình trạng mã số thuế tương ứng.",
             on_create_clicked=self._open_dissolution_modal,
         )
@@ -904,6 +909,25 @@ class MainWindow(QMainWindow):
         elif self.cases:
             self._open_case_workspace(self.cases[0])
 
+    def _sync_navigation_visibility(self, _stack_index: int | None = None) -> None:
+        """Show navigation again whenever the user returns to a hub/main page."""
+        if not hasattr(self, "stack"):
+            return
+        current = self.stack.currentWidget()
+        workspace = getattr(self, "current_workspace", None)
+        documents = getattr(self, "current_documents_view", None)
+        is_fullscreen_workflow = current is workspace or current is documents
+
+        if hasattr(self, "sidebar") and self.sidebar is not None:
+            self.sidebar.setVisible(
+                not is_fullscreen_workflow
+                and getattr(self, "current_layout", "default") not in ("top_nav", "slim_sidebar")
+            )
+        if hasattr(self, "slim_sidebar") and self.slim_sidebar is not None:
+            self.slim_sidebar.setVisible(
+                not is_fullscreen_workflow
+                and getattr(self, "current_layout", "default") in ("slim_sidebar", "dual_sidebar")
+            )
     def _apply_layout_structure(self, layout_key: str) -> None:
         self.current_layout = layout_key if layout_key in LAYOUT_OPTIONS else "default"
         from mingo_assistant.ui.liquid_glass import GlassHover
@@ -985,6 +1009,7 @@ class MainWindow(QMainWindow):
             self._select_nav(getattr(self, "_current_nav_key", "business_registration"))
         self._relayout_filters()
         self._refresh_cases()
+        self._sync_navigation_visibility()
 
         self._glass_hover.attach()
 
@@ -1046,6 +1071,17 @@ class MainWindow(QMainWindow):
                 hover_glow=hover_glow,
                 glassmorphism=glassmorphism,
             )
+        )
+        if not hasattr(self, "_visual_effects_manager") or self._visual_effects_manager is None:
+            from mingo_assistant.ui.visual_effects import VisualEffectsManager
+            self._visual_effects_manager = VisualEffectsManager(self)
+        self._visual_effects_manager.apply(
+            animations_enabled=animations_enabled,
+            card_shadow=card_shadow,
+            hover_glow=hover_glow,
+            glassmorphism=glassmorphism,
+            accent_color=raw_accent,
+            is_dark=is_dark,
         )
 
     def _on_system_color_scheme_changed(self, _scheme=None) -> None:
@@ -1171,6 +1207,8 @@ class MainWindow(QMainWindow):
 
         if hasattr(self, "settings_page") and self.settings_page is not None:
             self.stack.setCurrentWidget(self.settings_page)
+            if hasattr(self, "_visual_effects_manager") and self._visual_effects_manager is not None:
+                self._visual_effects_manager.refresh()
 
     def _save_settings_from_view(self) -> None:
         view = self.settings_view
@@ -1506,6 +1544,8 @@ class MainWindow(QMainWindow):
 
         for column in range(columns):
             self.cards_layout.setColumnStretch(column, 1)
+        if hasattr(self, "_visual_effects_manager") and self._visual_effects_manager is not None:
+            self._visual_effects_manager.refresh()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -2036,7 +2076,19 @@ class MainWindow(QMainWindow):
             chosen["is_ready"] = is_ready
 
         modal.dossier_chosen.connect(on_chosen)
-        result = modal.exec()
+        was_visible = self.sidebar.isVisible() if hasattr(self, "sidebar") and self.sidebar else False
+        if hasattr(self, "sidebar") and self.sidebar:
+            self.sidebar.setVisible(False)
+        if hasattr(self, "slim_sidebar") and self.slim_sidebar:
+            self.slim_sidebar.setVisible(False)
+        try:
+            result = modal.exec()
+        finally:
+            if getattr(self, "current_workspace", None) is None and getattr(self, "current_documents_view", None) is None:
+                if hasattr(self, "sidebar") and self.sidebar:
+                    self.sidebar.setVisible(was_visible)
+                if hasattr(self, "_apply_layout_structure") and hasattr(self, "current_layout"):
+                    self._apply_layout_structure(self.current_layout)
         if result == QDialog.DialogCode.Accepted and chosen["case_type"]:
             if chosen["is_ready"]:
                 self._open_new_business_case()
@@ -2046,7 +2098,7 @@ class MainWindow(QMainWindow):
     def _open_business_amendment_modal(self) -> None:
         from mingo_assistant.ui.dialogs.business_amendment_modal import BusinessAmendmentModal
 
-        modal = BusinessAmendmentModal(self)
+        modal = BusinessAmendmentModal(self, layout_mode=getattr(self, "current_layout", "default"))
         chosen: dict[str, object] = {"id": None, "name": "", "is_ready": False}
 
         def on_chosen(proc_id: str, proc_name: str, is_ready: bool) -> None:
@@ -2055,29 +2107,62 @@ class MainWindow(QMainWindow):
             chosen["is_ready"] = is_ready
 
         modal.procedure_chosen.connect(on_chosen)
-        result = modal.exec()
+        was_visible = self.sidebar.isVisible() if hasattr(self, "sidebar") and self.sidebar else False
+        if hasattr(self, "sidebar") and self.sidebar:
+            self.sidebar.setVisible(False)
+        if hasattr(self, "slim_sidebar") and self.slim_sidebar:
+            self.slim_sidebar.setVisible(False)
+        try:
+            result = modal.exec()
+        finally:
+            if getattr(self, "current_workspace", None) is None and getattr(self, "current_documents_view", None) is None:
+                if hasattr(self, "sidebar") and self.sidebar:
+                    self.sidebar.setVisible(was_visible)
+                if hasattr(self, "_apply_layout_structure") and hasattr(self, "current_layout"):
+                    self._apply_layout_structure(self.current_layout)
         if result == QDialog.DialogCode.Accepted and chosen["name"]:
             self._show_coming_soon(str(chosen["name"]), "business_amendment")
 
     def _open_dependent_unit_modal(self) -> None:
         from mingo_assistant.ui.dialogs.dependent_unit_modal import DependentUnitModal
 
-        modal = DependentUnitModal(self)
-        chosen: dict[str, object] = {"title": "", "is_ready": False}
+        modal = DependentUnitModal(self, layout_mode=getattr(self, "current_layout", "default"))
+        chosen: dict[str, object] = {"unit_type": "", "action": "", "title": "", "is_ready": False}
 
         def on_chosen(u_type: str, act: str, title: str, is_ready: bool) -> None:
+            chosen["unit_type"] = u_type
+            chosen["action"] = act
             chosen["title"] = title
             chosen["is_ready"] = is_ready
 
         modal.procedure_chosen.connect(on_chosen)
-        result = modal.exec()
-        if result == QDialog.DialogCode.Accepted and chosen["title"]:
+        was_visible = self.sidebar.isVisible() if hasattr(self, "sidebar") and self.sidebar else False
+        if hasattr(self, "sidebar") and self.sidebar:
+            self.sidebar.setVisible(False)
+        if hasattr(self, "slim_sidebar") and self.slim_sidebar:
+            self.slim_sidebar.setVisible(False)
+        try:
+            result = modal.exec()
+        finally:
+            if getattr(self, "current_workspace", None) is None and getattr(self, "current_documents_view", None) is None:
+                if hasattr(self, "sidebar") and self.sidebar:
+                    self.sidebar.setVisible(was_visible)
+                if hasattr(self, "_apply_layout_structure") and hasattr(self, "current_layout"):
+                    self._apply_layout_structure(self.current_layout)
+        if (
+            result == QDialog.DialogCode.Accepted
+            and chosen["unit_type"] == "ddkd"
+            and chosen["action"] == "create"
+            and chosen["is_ready"]
+        ):
+            self._open_location_business_workspace(None)
+        elif result == QDialog.DialogCode.Accepted and chosen["title"]:
             self._show_coming_soon(str(chosen["title"]), "dependent_units")
 
     def _open_dissolution_modal(self) -> None:
         from mingo_assistant.ui.dialogs.dissolution_modal import DissolutionModal
 
-        modal = DissolutionModal(self)
+        modal = DissolutionModal(self, layout_mode=getattr(self, "current_layout", "default"))
         chosen: dict[str, object] = {"title": "", "is_ready": False}
 
         def on_chosen(c_type: str, tax_id: str, full_title: str, is_ready: bool) -> None:
@@ -2085,7 +2170,19 @@ class MainWindow(QMainWindow):
             chosen["is_ready"] = is_ready
 
         modal.dissolution_chosen.connect(on_chosen)
-        result = modal.exec()
+        was_visible = self.sidebar.isVisible() if hasattr(self, "sidebar") and self.sidebar else False
+        if hasattr(self, "sidebar") and self.sidebar:
+            self.sidebar.setVisible(False)
+        if hasattr(self, "slim_sidebar") and self.slim_sidebar:
+            self.slim_sidebar.setVisible(False)
+        try:
+            result = modal.exec()
+        finally:
+            if getattr(self, "current_workspace", None) is None and getattr(self, "current_documents_view", None) is None:
+                if hasattr(self, "sidebar") and self.sidebar:
+                    self.sidebar.setVisible(was_visible)
+                if hasattr(self, "_apply_layout_structure") and hasattr(self, "current_layout"):
+                    self._apply_layout_structure(self.current_layout)
         if result == QDialog.DialogCode.Accepted and chosen["title"]:
             self._show_coming_soon(str(chosen["title"]), "dissolution")
 
@@ -2369,7 +2466,7 @@ class MainWindow(QMainWindow):
         profiles: list[dict[str, str]] = []
         if self.authorized_person_path.exists():
             try:
-                raw = json.loads(self.authorized_person_path.read_text(encoding="utf-8"))
+                raw = read_json(self.authorized_person_path)
             except (OSError, json.JSONDecodeError):
                 raw = {}
             if isinstance(raw, dict) and isinstance(raw.get("profiles"), list):
@@ -2391,14 +2488,9 @@ class MainWindow(QMainWindow):
     def _save_authorized_person_profiles(self, payload: dict[str, object]) -> None:
         selected_profile_id = str(payload.get("selected_profile_id", ""))
         profiles = [profile for profile in payload.get("profiles", []) if isinstance(profile, dict)]
-        self.authorized_person_path.parent.mkdir(parents=True, exist_ok=True)
-        self.authorized_person_path.write_text(
-            json.dumps(
-                {"selected_profile_id": selected_profile_id, "profiles": profiles},
-                ensure_ascii=False,
-                indent=2,
-            ),
-            encoding="utf-8",
+        write_json_atomic(
+            self.authorized_person_path,
+            {"selected_profile_id": selected_profile_id, "profiles": profiles},
         )
 
     def _save_authorized_person(self, values: dict[str, str]) -> None:
@@ -2408,6 +2500,9 @@ class MainWindow(QMainWindow):
     def _open_case_workspace(self, case: CaseSummary | None) -> None:
         if case is not None:
             case = self.case_repository.get_case(case.id) or case
+        if case is not None and case.case_type == LOCATION_CASE_TYPE:
+            self._open_location_business_workspace(case)
+            return
         if self.current_workspace is not None:
             self.stack.removeWidget(self.current_workspace)
             self.current_workspace.deleteLater()
@@ -2429,7 +2524,38 @@ class MainWindow(QMainWindow):
         )
         self.stack.addWidget(self.current_workspace)
         self.stack.setCurrentWidget(self.current_workspace)
+        if hasattr(self, "sidebar") and self.sidebar is not None:
+            self.sidebar.setVisible(False)
+        if hasattr(self, "slim_sidebar") and self.slim_sidebar is not None:
+            self.slim_sidebar.setVisible(False)
 
+    def _open_location_business_workspace(self, case: CaseSummary | None) -> None:
+        if case is not None:
+            case = self.case_repository.get_case(case.id) or case
+        if self.current_workspace is not None:
+            self.stack.removeWidget(self.current_workspace)
+            self.current_workspace.deleteLater()
+            self.current_workspace = None
+        if self.current_documents_view is not None:
+            self.stack.removeWidget(self.current_documents_view)
+            self.current_documents_view.deleteLater()
+            self.current_documents_view = None
+        self.current_workspace = LocationBusinessWorkspace(
+            on_back=self._return_to_dependent_units,
+            on_save=self._save_case_from_workspace,
+            case=case,
+            on_export=self._open_case_documents,
+            authorized_person_defaults=self._load_authorized_person(),
+            industry_catalog=self.industry_catalog,
+            bundle_root=self.app_paths.bundle_root,
+            default_export_root=self.app_paths.documents_root,
+        )
+        self.stack.addWidget(self.current_workspace)
+        self.stack.setCurrentWidget(self.current_workspace)
+        if hasattr(self, "sidebar") and self.sidebar is not None:
+            self.sidebar.setVisible(False)
+        if hasattr(self, "slim_sidebar") and self.slim_sidebar is not None:
+            self.slim_sidebar.setVisible(False)
     def _open_case_documents(self, case: CaseSummary) -> None:
         case = self.case_repository.get_case(case.id) or case
         if self.current_workspace is not None:
@@ -2443,17 +2569,25 @@ class MainWindow(QMainWindow):
 
         self.current_documents_view = BusinessRegistrationDocumentsView(
             case=case,
-            on_back=self._return_to_business_list,
+            on_back=self._return_to_dependent_units if case.case_type == LOCATION_CASE_TYPE else self._return_to_business_list,
             on_edit=lambda selected_id=case.id: self._open_case_workspace(self.case_repository.get_case(selected_id) or case),
         )
         self.stack.addWidget(self.current_documents_view)
         self.stack.setCurrentWidget(self.current_documents_view)
+        if hasattr(self, "sidebar") and self.sidebar is not None:
+            self.sidebar.setVisible(False)
+        if hasattr(self, "slim_sidebar") and self.slim_sidebar is not None:
+            self.slim_sidebar.setVisible(False)
 
     def _return_to_business_list(self) -> None:
         self.cases = self.case_repository.list_cases()
         self._refresh_cases()
         self.stack.setCurrentWidget(self.business_page)
+        self._apply_layout_structure(self.current_layout)
 
+    def _return_to_dependent_units(self) -> None:
+        self.stack.setCurrentWidget(self.dependent_units_page)
+        self._apply_layout_structure(self.current_layout)
     def _save_case_from_workspace(self, case: CaseSummary) -> None:
         self.case_repository.save_case(case)
         self.cases = self.case_repository.list_cases()

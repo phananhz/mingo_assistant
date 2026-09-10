@@ -313,6 +313,15 @@ QGroupBox#CccdResultCard QTextEdit:focus {
     border: 1px solid #efc4d6;
 }
 
+QFrame#BusinessLineRow {
+    background: rgba(255, 255, 255, 0.76);
+    border: 2px solid #8fa9cc;
+    border-radius: 12px;
+}
+
+QFrame#BusinessLineRow:hover {
+    border-color: #7862c6;
+}
 #StatusBadge {
     background: #ffe5ef;
     color: #9b315f;
@@ -706,6 +715,7 @@ QPushButton#ColorCategoryTab {
     font-size: 12px;
     font-weight: 600;
     color: #475569;
+    min-height: 28px;
 }
 QPushButton#ColorCategoryTab:hover {
     background: #f1f5f9;
@@ -2088,23 +2098,54 @@ def _font_scale_stylesheet(font_size: str) -> str:
     p_title = round(25 * scale)
     sec_title = round(16 * scale)
     app_title = round(20 * scale)
+    control_height = round(20 + 1.55 * float(base.removesuffix("px")))
     return f"""
-* {{ font-size: {base}; }}
+/* Global font scale: includes navigation, editors, forms, tables and dialogs. */
+QWidget, QLabel, QPushButton, QLineEdit, QComboBox, QTextEdit, QPlainTextEdit,
+QSpinBox, QDoubleSpinBox, QDateEdit, QTableWidget, QTableView, QTreeView,
+QListView, QCheckBox, QRadioButton, QGroupBox {{
+    font-size: {base};
+}}
+QPushButton#NavButton, QPushButton#TopNavButton, QPushButton#GhostButton,
+QPushButton#PrimaryButton, QPushButton#CompactPrimaryButton,
+QPushButton#ModalCreateButton, QPushButton#ModalDismissButton {{
+    font-size: {base};
+}}
+QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QDateEdit {{
+    min-height: {control_height}px;
+}}
+QTableWidget::item, QTableView::item, QTreeView::item, QListView::item,
+QHeaderView::section {{
+    font-size: {base};
+}}
 #PageTitle {{ font-size: {p_title}px; }}
-#SectionTitle, #SettingsSectionTitle {{ font-size: {sec_title}px; }}
+#SectionTitle, #SettingsSectionTitle, #DossierSectionTitle {{ font-size: {sec_title}px; }}
 #AppTitle {{ font-size: {app_title}px; }}
+QPushButton#NavButton {{ min-height: {round(control_height * 1.28)}px; }}
 """
 
 
 def _border_radius_stylesheet(border_radius: str) -> str:
     rad = BORDER_RADIUS_OPTIONS.get(border_radius, BORDER_RADIUS_OPTIONS["rounded"])["radius"]
+    small_rad = "2px" if rad == "4px" else ("8px" if rad == "12px" else "12px")
+    btn_rad = "4px" if rad == "4px" else ("10px" if rad == "12px" else "16px")
     return f"""
-#Card, #SummaryCard, #DocumentsPanel, #SettingsCard {{
-    border-radius: {rad};
+/* Border radius override: {border_radius} ({rad}) */
+#Card, #SummaryCard, #DocumentsPanel, #SettingsCard,
+#VisualThemeTile, #LayoutTile, #KPICard, #CccdResultCard {{
+    border-radius: {rad} !important;
 }}
 #CardHeader {{
-    border-top-left-radius: {rad};
-    border-top-right-radius: {rad};
+    border-top-left-radius: {rad} !important;
+    border-top-right-radius: {rad} !important;
+}}
+QPushButton, QPushButton#NavButton, QPushButton#PrimaryButton, QPushButton#GhostButton,
+QPushButton#TopNavButton, QPushButton#CompactPrimaryButton, QPushButton#ColorCategoryTab,
+QPushButton#ModalDismissButton, QPushButton#ModalCreateButton {{
+    border-radius: {btn_rad} !important;
+}}
+QLineEdit, QComboBox, QTextEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox, QDateEdit {{
+    border-radius: {small_rad} !important;
 }}
 """
 
@@ -2113,14 +2154,15 @@ def _high_contrast_stylesheet(is_dark: bool, accent: str) -> str:
     border_color = "#FFFFFF" if is_dark else "#0F172A"
     return f"""
 /* High Contrast Mode */
-#Card, #SummaryCard, #DocumentsPanel, #SettingsCard, QLineEdit, QComboBox, QTextEdit, QTableWidget {{
+#Card, #SummaryCard, #DocumentsPanel, #SettingsCard, #VisualThemeTile, #LayoutTile, #KPICard,
+QLineEdit, QComboBox, QTextEdit, QPlainTextEdit, QTableWidget {{
     border: 2px solid {border_color} !important;
 }}
-QPushButton#PrimaryButton {{
+QPushButton#PrimaryButton, QPushButton#ModalCreateButton {{
     border: 2px solid {border_color} !important;
     font-weight: 800 !important;
 }}
-QPushButton#GhostButton {{
+QPushButton#GhostButton, QPushButton#NavButton, QPushButton#TopNavButton, QPushButton#ModalDismissButton {{
     border: 2px solid {border_color} !important;
     font-weight: 700 !important;
 }}
@@ -2140,40 +2182,74 @@ def _effects_stylesheet(
 ) -> str:
     css_parts: list[str] = []
 
-    # 1. Animations & Motion (Qt stylesheets do not support CSS transitions/animations; handled via native QPropertyAnimation)
-
-
-    # 2. Card Shadow & Elevation
-    if card_shadow == "flat":
-        css_parts.append("""
-QFrame#Card, QFrame#KPICard, QFrame#SettingsCard, QFrame#SummaryCard {
-    border-width: 1px;
-}
-""")
-    elif card_shadow == "floating":
-        border_c = "rgba(255, 255, 255, 0.25)" if is_dark else "rgba(0, 0, 0, 0.14)"
+    # 1. Card Shadow & Elevation Borders
+    norm_shadow = str(card_shadow or "subtle").lower()
+    if norm_shadow == "flat":
+        border_c = "rgba(255, 255, 255, 0.14)" if is_dark else "rgba(0, 0, 0, 0.14)"
         css_parts.append(f"""
-QFrame#Card, QFrame#KPICard {{
-    border: 1.5px solid {border_c};
+QFrame#Card, QFrame#KPICard, QFrame#KpiCard, QFrame#CreateCard,
+QFrame#SettingsCard, QFrame#SummaryCard, QFrame#VisualThemeTile,
+QFrame#LayoutTile, QFrame#ColorChipCard, QFrame#FxPreviewCard {{
+    border: 1px solid {border_c} !important;
+}}
+""")
+    elif norm_shadow == "floating":
+        border_c = "rgba(255, 255, 255, 0.22)" if is_dark else "rgba(0, 0, 0, 0.06)"
+        css_parts.append(f"""
+QFrame#Card, QFrame#KPICard, QFrame#KpiCard, QFrame#CreateCard,
+QFrame#SettingsCard, QFrame#SummaryCard, QFrame#VisualThemeTile,
+QFrame#LayoutTile, QFrame#ColorChipCard, QFrame#FxPreviewCard {{
+    border: 1.5px solid {border_c} !important;
+}}
+""")
+    else:  # subtle
+        border_c = "rgba(255, 255, 255, 0.15)" if is_dark else "rgba(0, 0, 0, 0.08)"
+        css_parts.append(f"""
+QFrame#Card, QFrame#KPICard, QFrame#KpiCard, QFrame#CreateCard,
+QFrame#SettingsCard, QFrame#SummaryCard, QFrame#VisualThemeTile,
+QFrame#LayoutTile, QFrame#ColorChipCard, QFrame#FxPreviewCard {{
+    border: 1px solid {border_c} !important;
 }}
 """)
 
-    # 3. Hover Glow
+    # 2. Hover Glow
     if hover_glow:
         css_parts.append(f"""
-QFrame#Card:hover, QFrame#KPICard:hover {{
-    border-color: {accent};
+QFrame#Card:hover, QFrame#KPICard:hover, QFrame#KpiCard:hover, QFrame#CreateCard:hover,
+QFrame#VisualThemeTile:hover, QFrame#LayoutTile:hover, QFrame#ColorChipCard:hover,
+QFrame#SettingsCard:hover, QFrame#FxPreviewCard:hover,
+QPushButton#PrimaryButton:hover, QPushButton#ModalCreateButton:hover, QPushButton#GhostButton:hover {{
+    border: 2px solid {accent} !important;
 }}
 """)
 
-    # 4. Glassmorphism Surfaces
+    # 3. Glassmorphism Surfaces
     if glassmorphism:
+        card_glass_bg = "rgba(28, 33, 44, 0.72)" if is_dark else "rgba(255, 255, 255, 0.72)"
+        card_glass_border = "rgba(255, 255, 255, 0.16)" if is_dark else "rgba(255, 255, 255, 0.90)"
         glass_bg = "rgba(20, 24, 33, 0.78)" if is_dark else "rgba(255, 255, 255, 0.75)"
-        glass_border = "rgba(255, 255, 255, 0.12)" if is_dark else "rgba(255, 255, 255, 0.45)"
+        glass_border = "rgba(255, 255, 255, 0.12)" if is_dark else "rgba(255, 255, 255, 0.50)"
+        canvas_grad = (
+            "qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #0F141C, stop:0.5 #151B26, stop:1 #111722)"
+            if is_dark
+            else "qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #F1F5F9, stop:0.45 #E8EFF8, stop:1 #F4F0F8)"
+        )
         css_parts.append(f"""
+/* Frosted Glass Acrylic Surfaces */
+QFrame#Card, QFrame#CreateCard, QFrame#KPICard, QFrame#KpiCard,
+QFrame#SettingsCard, QFrame#SummaryCard, QFrame#VisualThemeTile,
+QFrame#LayoutTile, QFrame#ColorChipCard, QFrame#IndustryLookupPanel,
+QFrame#FxPreviewCard {{
+    background-color: {card_glass_bg} !important;
+    border: 1.5px solid {card_glass_border} !important;
+}}
 QFrame#Sidebar, QFrame#GlobalTopbar, QFrame#TopNavBar, QFrame#SettingsSidebar {{
-    background: {glass_bg};
-    border-right: 1px solid {glass_border};
+    background: {glass_bg} !important;
+    border-right: 1.5px solid {glass_border} !important;
+}}
+QWidget#BusinessCasesPage, QScrollArea#CaseCardsScroll, QWidget#CaseCardsContainer,
+QWidget#SettingsCanvas, QWidget#SettingsContent {{
+    background: {canvas_grad} !important;
 }}
 """)
 
@@ -2253,23 +2329,24 @@ QLabel#StatusBadge {{ background: rgba(255, 255, 255, 0.88); color: {card_text};
     is_dark = resolved_appearance_mode(appearance_mode, system_is_dark) == "dark"
     if layout == "liquid_glass":
         from mingo_assistant.ui.liquid_glass import glass_stylesheet
-        return glass_stylesheet(dark=is_dark)
-    if is_dark:
-        stylesheet += _dark_stylesheet(theme_accent)
+        stylesheet = glass_stylesheet(dark=is_dark)
+    else:
+        if is_dark:
+            stylesheet += _dark_stylesheet(theme_accent)
 
-    # Layout specific overrides
-    normalized_layout = layout or "default"
-    current_sidebar_bg = "#181A1F" if is_dark else (sidebar[0] if sidebar else theme_accent)
-    layout_css = _layout_stylesheet(normalized_layout, theme_accent, is_dark, current_sidebar_bg)
-    if layout_css:
-        stylesheet += layout_css
+        # Layout specific overrides
+        normalized_layout = layout or "default"
+        current_sidebar_bg = "#181A1F" if is_dark else (sidebar[0] if sidebar else theme_accent)
+        layout_css = _layout_stylesheet(normalized_layout, theme_accent, is_dark, current_sidebar_bg)
+        if layout_css:
+            stylesheet += layout_css
 
     # Font sizing
     if font_size:
         stylesheet += _font_scale_stylesheet(font_size)
 
     # Border radius
-    if border_radius and border_radius != "rounded":
+    if border_radius:
         stylesheet += _border_radius_stylesheet(border_radius)
 
     # High contrast

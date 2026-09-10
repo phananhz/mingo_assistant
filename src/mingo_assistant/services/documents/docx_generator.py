@@ -358,7 +358,9 @@ class DocxTemplateGenerator:
                 if run.font.highlight_color != WD_COLOR_INDEX.YELLOW:
                     continue
                 target = field_map.get(str(highlighted_index))
-                if target is not None:
+                if target is not None and not self._should_preserve_highlighted_placeholder(
+                    template_name, str(target), values
+                ):
                     replacement = "" if self._clear_file1_individual_owner_field(
                         template_name, str(target), values
                     ) else self._value_for_template_target(str(target), values)
@@ -372,6 +374,12 @@ class DocxTemplateGenerator:
                         run.text = replacement
                 highlighted_index += 1
         return True
+
+    def _should_preserve_highlighted_placeholder(
+        self, template_name: str, target: str, values: dict[str, str]
+    ) -> bool:
+        """Allow a procedure to retain a highlighted template default unchanged."""
+        return False
 
     def _clear_file1_individual_owner_field(
         self, template_name: str, target: str, values: dict[str, str]

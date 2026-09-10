@@ -6,6 +6,7 @@ import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from mingo_assistant.infrastructure.storage import read_json, write_json_atomic
 
 
 APP_NAME = "Min Assistant"
@@ -71,7 +72,7 @@ def load_settings(paths: AppPaths) -> dict[str, str]:
     if not paths.settings_file.exists():
         return {}
     try:
-        raw = json.loads(paths.settings_file.read_text(encoding="utf-8"))
+        raw = read_json(paths.settings_file)
     except (OSError, json.JSONDecodeError):
         return {}
     return {str(key): str(value) for key, value in raw.items()} if isinstance(raw, dict) else {}
@@ -81,7 +82,4 @@ def save_settings(paths: AppPaths, values: dict[str, str]) -> None:
     paths.ensure_user_dirs()
     current = load_settings(paths)
     current.update({str(key): str(value) for key, value in values.items()})
-    paths.settings_file.write_text(
-        json.dumps(current, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    write_json_atomic(paths.settings_file, current)
