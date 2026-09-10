@@ -293,6 +293,9 @@ class MainWindow(QMainWindow):
         self.cards_container = QWidget()
         self.cards_layout = QGridLayout(self.cards_container)
         self.current_card_columns = 0
+        self.dependent_cases_scroll: QScrollArea | None = None
+        self.dependent_cases_container: QWidget | None = None
+        self.dependent_cases_layout: QGridLayout | None = None
         self.trash_container = QWidget()
         self.trash_layout = QVBoxLayout(self.trash_container)
         self.industry_catalog = IndustryCatalog.load_from_project(self.app_paths.bundle_root)
@@ -538,7 +541,13 @@ class MainWindow(QMainWindow):
         layout.addSpacing(18)
 
         for key, label in NAV_ITEMS:
-            button = QPushButton(label)
+            button_text = label
+            if key == "dependent_units":
+                button_text = "4. Thủ tục của\nđơn vị phụ thuộc"
+            button = QPushButton(button_text)
+            button.setToolTip(label)
+            if key == "dependent_units":
+                button.setMinimumHeight(58)
             button.setObjectName("NavButton")
             button.setCursor(Qt.PointingHandCursor)
             button.clicked.connect(lambda checked=False, item_key=key: self._select_nav(item_key, is_user_action=True))
@@ -1529,6 +1538,7 @@ class MainWindow(QMainWindow):
         filtered_cases = self._filtered_cases()
         self.result_text.setText(f"{len(filtered_cases)} hồ sơ được tìm thấy")
         self._clear_cards()
+        self._refresh_dependent_cases()
 
         columns = self._card_column_count()
         self.current_card_columns = columns
@@ -1637,6 +1647,8 @@ class MainWindow(QMainWindow):
 
         result = []
         for case in self.cases:
+            if self._is_dependent_case(case):
+                continue
             haystack = f"{case.company_name} {self._authorized_person_name(case)} {case.case_type} {case.status}".lower()
             if search_text and search_text not in haystack:
                 continue
@@ -2062,8 +2074,62 @@ class MainWindow(QMainWindow):
         cards_layout.addWidget(info_card)
         cards_layout.addStretch(1)
 
-        layout.addWidget(cards_container, 1)
+        if nav_key == "dependent_units":
+            layout.addWidget(cards_container)
+            layout.addWidget(self._build_dependent_cases_section(), 1)
+        else:
+            layout.addWidget(cards_container, 1)
         return page
+
+    def _build_dependent_cases_section(self) -> QWidget:
+        group = QGroupBox("Hồ sơ đã tạo")
+        group_layout = QVBoxLayout(group)
+        group_layout.setContentsMargins(12, 12, 12, 12)
+        group_layout.setSpacing(8)
+
+        self.dependent_cases_scroll = QScrollArea()
+        self.dependent_cases_scroll.setObjectName("DependentCasesScroll")
+        self.dependent_cases_scroll.setWidgetResizable(True)
+        self.dependent_cases_scroll.setFrameShape(QFrame.NoFrame)
+        self.dependent_cases_container = QWidget()
+        self.dependent_cases_layout = QGridLayout(self.dependent_cases_container)
+        self.dependent_cases_layout.setContentsMargins(0, 0, 0, 0)
+        self.dependent_cases_layout.setHorizontalSpacing(16)
+        self.dependent_cases_layout.setVerticalSpacing(16)
+        self.dependent_cases_scroll.setWidget(self.dependent_cases_container)
+        group_layout.addWidget(self.dependent_cases_scroll)
+        self._refresh_dependent_cases()
+        return group
+
+    @staticmethod
+    def _is_dependent_case(case: CaseSummary) -> bool:
+        return case.case_type == LOCATION_CASE_TYPE
+
+    def _refresh_dependent_cases(self) -> None:
+        layout = self.dependent_cases_layout
+        if layout is None:
+            return
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.hide()
+                widget.setParent(None)
+                widget.deleteLater()
+
+        dependent_cases = [case for case in self.cases if self._is_dependent_case(case)]
+        if not dependent_cases:
+            empty = QLabel("Chưa có hồ sơ thuộc đơn vị phụ thuộc.")
+            empty.setObjectName("EmptyDescription")
+            empty.setAlignment(Qt.AlignCenter)
+            layout.addWidget(empty, 0, 0, 1, 4)
+            return
+
+        columns = 4
+        for index, case in enumerate(dependent_cases):
+            layout.addWidget(self._build_case_card(case), index // columns, index % columns)
+        for column in range(columns):
+            layout.setColumnStretch(column, 1)
 
     def _open_business_creation_modal(self) -> None:
         from mingo_assistant.ui.dialogs.business_creation_modal import BusinessCreationModal
@@ -2586,8 +2652,11 @@ class MainWindow(QMainWindow):
         self._apply_layout_structure(self.current_layout)
 
     def _return_to_dependent_units(self) -> None:
+        self.cases = self.case_repository.list_cases()
+        self._refresh_cases()
         self.stack.setCurrentWidget(self.dependent_units_page)
         self._apply_layout_structure(self.current_layout)
     def _save_case_from_workspace(self, case: CaseSummary) -> None:
         self.case_repository.save_case(case)
         self.cases = self.case_repository.list_cases()
+        self._refresh_cases()

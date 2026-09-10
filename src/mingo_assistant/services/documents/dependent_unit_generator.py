@@ -117,6 +117,18 @@ class DependentUnitTemplateGenerator(DocxTemplateGenerator):
         """Keep Section 6 optional fields exactly as the protected template shows them."""
         return target in self._TAX_OPTIONAL_TEXT_FIELDS and not str(values.get(target, "") or "").strip()
 
+    def _empty_highlighted_placeholder(self, run, target: str, values: dict[str, str]) -> str:
+        """Keep visible dotted placeholders for empty location-dossier fields."""
+        if target == "__clear" or target.endswith("_x") or target.endswith("_is_main"):
+            return ""
+        template_text = str(getattr(run, "text", "") or "")
+        stripped = template_text.strip()
+        if stripped and re.fullmatch(r"[\s.…/·_-]+", stripped):
+            return template_text
+        if any(part in target for part in ("date", "day", "month", "year")):
+            return "……/……/……"
+        width = min(max(len(stripped), 10), 48)
+        return "." * width
     def _replace_highlighted_runs(self, docx_path: Path, template_name: str, values: dict[str, str]) -> None:
         """Use the company-dossier writer, then apply this form's protected tables."""
         document = Document(docx_path)

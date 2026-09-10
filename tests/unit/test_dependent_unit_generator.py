@@ -158,6 +158,34 @@ class DependentUnitTemplateGeneratorTest(unittest.TestCase):
                         guide_text += "\n" + "\n".join(paragraph.text for paragraph in cell.paragraphs)
             self.assertEqual(2, guide_text.count("LEGAL REP"))
 
+    def test_empty_location_fields_keep_dotted_placeholders(self) -> None:
+        project_root = Path(__file__).resolve().parents[2]
+        template_dir = project_root / "assets" / "templates" / "word" / "dependent_units" / "ddkd_create"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir) / "output"
+            DependentUnitTemplateGenerator(template_dir, Path(temp_dir)).generate(
+                {"location_business_name": "LOCATION"},
+                "location",
+                output_dir,
+            )
+            document = Document(output_dir / next(template_dir.glob("1.*.docx")).name)
+            paragraphs = list(document.paragraphs)
+            for table in document.tables:
+                for row in table.rows:
+                    for cell in row.cells:
+                        paragraphs.extend(cell.paragraphs)
+            highlighted = [
+                run
+                for paragraph in paragraphs
+                for run in paragraph.runs
+                if run.font.highlight_color == WD_COLOR_INDEX.YELLOW
+            ]
+            for index in (4, 5, 10, 11, 13, 15):
+                self.assertTrue(highlighted[index].text.strip(), index)
+                self.assertTrue(
+                    set(highlighted[index].text.strip()) <= set(".…/"),
+                    (index, highlighted[index].text),
+                )
     def test_runtime_template_writes_only_actual_industry_rows_and_foreign_highlights(self) -> None:
         project_root = Path(__file__).resolve().parents[2]
         template_dir = project_root / "assets" / "templates" / "word" / "dependent_units" / "ddkd_create"

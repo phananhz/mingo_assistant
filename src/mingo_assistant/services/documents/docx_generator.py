@@ -364,6 +364,8 @@ class DocxTemplateGenerator:
                     replacement = "" if self._clear_file1_individual_owner_field(
                         template_name, str(target), values
                     ) else self._value_for_template_target(str(target), values)
+                    if not str(replacement or "").strip():
+                        replacement = self._empty_highlighted_placeholder(run, str(target), values)
                     if str(target) == "company_english_name":
                         prefix = "".join(previous_run.text for previous_run in paragraph.runs[:run_index])
                         suffix = "".join(next_run.text for next_run in paragraph.runs[run_index + 1 :])
@@ -381,6 +383,9 @@ class DocxTemplateGenerator:
         """Allow a procedure to retain a highlighted template default unchanged."""
         return False
 
+    def _empty_highlighted_placeholder(self, run, target: str, values: dict[str, str]) -> str:
+        """Return a procedure-specific fallback when an editable field is empty."""
+        return ""
     def _clear_file1_individual_owner_field(
         self, template_name: str, target: str, values: dict[str, str]
     ) -> bool:
