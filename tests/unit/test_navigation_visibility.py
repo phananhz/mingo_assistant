@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import unittest
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QLabel, QWidget
 
 from mingo_assistant.models.case import CaseSummary
@@ -32,6 +33,12 @@ class NavigationVisibilityTest(unittest.TestCase):
             window._refresh_cases()
             self.assertNotIn(location_case, window._filtered_cases())
             self.assertEqual("4. Thủ tục của\nđơn vị phụ thuộc", window.nav_buttons["dependent_units"].text())
+            self.assertEqual("1 hồ sơ", window.dependent_cases_count_label.text())
+            self.assertEqual(window._card_column_count(), window.current_dependent_card_columns)
+            self.assertEqual(Qt.ScrollBarAlwaysOff, window.dependent_cases_scroll.horizontalScrollBarPolicy())
+            self.assertFalse(
+                any(widget.objectName() == "CreateCard" for widget in window.dependent_units_page.findChildren(QWidget))
+            )
             dependent_widgets = [
                 item_widget
                 for index in range(window.dependent_cases_layout.count())

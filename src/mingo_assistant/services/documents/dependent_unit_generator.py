@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 
 from docx import Document
+from docx.shared import Pt
 from docx.enum.text import WD_COLOR_INDEX
 from docx.oxml.ns import qn
 
@@ -19,6 +20,8 @@ from mingo_assistant.services.documents.docx_generator import DocxTemplateGenera
 
 class DependentUnitTemplateGenerator(DocxTemplateGenerator):
     """Change only highlighted runs explicitly declared in a procedure manifest."""
+
+    FOREIGN_AUTHORIZATION_TEMPLATE = "2. Giay uy quyen dai dien phap luat nuoc ngoai.docx"
 
     _TAX_OPTIONAL_TEXT_FIELDS = (
         "tax_accountant_full_name",
@@ -45,8 +48,8 @@ class DependentUnitTemplateGenerator(DocxTemplateGenerator):
         output_dir.mkdir(parents=True, exist_ok=True)
         generated: list[GeneratedDocument] = []
         unresolved: dict[str, list[str]] = {}
-        for template in self._templates():
-            output_path = output_dir / template.name
+        for template in self._templates(values):
+            output_path = output_dir / self._output_filename(template.name, values, case_name)
             shutil.copy2(template, output_path)
             if self._mode(template.name) == "fill_highlighted":
                 self._replace_highlighted_runs(output_path, template.name, values)
@@ -61,7 +64,7 @@ class DependentUnitTemplateGenerator(DocxTemplateGenerator):
             return {"Th\u01b0 m\u1ee5c m\u1eabu": [str(self.template_dir)]}
         report: dict[str, list[str]] = {}
         with tempfile.TemporaryDirectory(dir=self.export_root if self.export_root.exists() else None) as temporary:
-            for template in self._templates():
+            for template in self._templates(values):
                 if self._mode(template.name) != "fill_highlighted":
                     continue
                 candidate = Path(temporary) / template.name
@@ -72,6 +75,17 @@ class DependentUnitTemplateGenerator(DocxTemplateGenerator):
                     report[template.name] = remaining
         return report
 
+    def _output_filename(self, template_name: str, values: dict[str, str], case_name: str) -> str:
+        label = ('Thong bao lap dia diem' if template_name.startswith('1.') else
+                 'Giay uy quyen' if template_name.startswith('2.') else 'Huong dan ky')
+        name = values.get('parent_entity_name') or values.get('company_name') or case_name
+        name = self._fold(name)
+        name = re.sub(r'^(cong ty|doanh nghiep)\s*', '', name)
+        name = re.sub(r'^(tnhh|co phan|hop danh|tu nhan)\s*', '', name)
+        name = re.sub(r'^(mot thanh vien|hai thanh vien)\s*', '', name)
+        suffix = ''.join(word.capitalize() for word in re.findall(r'[a-zA-Z0-9]+', name)) or 'HoSo'
+        return f'{label}_{suffix}.docx'
+
     def unresolved_placeholders(self, docx_path: Path) -> list[str]:
         matches: list[str] = []
         with zipfile.ZipFile(docx_path, "r") as archive:
@@ -80,10 +94,24 @@ class DependentUnitTemplateGenerator(DocxTemplateGenerator):
                     matches.extend(re.findall(r"\[([^\[\]\r\n]{1,120})\]", archive.read(entry.filename).decode("utf-8", "ignore")))
         return sorted(set(matches))
 
-    def _templates(self) -> list[Path]:
+    def _templates(self, values: dict[str, str] | None = None) -> list[Path]:
         if not self.template_dir.exists():
             return []
-        return [path for path in sorted(self.template_dir.iterdir()) if path.suffix.lower() == ".docx" and not path.name.startswith("~$")]
+        foreign_legal_representative = self._is_foreign_legal_representative(values or {})
+        templates: list[Path] = []
+        for path in sorted(self.template_dir.iterdir()):
+            if path.suffix.lower() != ".docx" or path.name.startswith("~$"):
+                continue
+            if path.name == self.FOREIGN_AUTHORIZATION_TEMPLATE:
+                if not foreign_legal_representative:
+                    continue
+            elif path.name.startswith("2.") and foreign_legal_representative:
+                continue
+            templates.append(path)
+        return templates
+
+    def _is_foreign_legal_representative(self, values: dict[str, str]) -> bool:
+        return self._fold(str(values.get("legal_representative_person_type", "") or "")).strip() == "nguoi nuoc ngoai"
 
     def _manifest(self) -> dict[str, object]:
         if self._manifest_cache is not None:
@@ -133,6 +161,29 @@ class DependentUnitTemplateGenerator(DocxTemplateGenerator):
         """Use the company-dossier writer, then apply this form's protected tables."""
         document = Document(docx_path)
         highlighted_values = dict(values)
+        foreign_location_manager = (
+            self._fold(str(values.get("location_manager_person_type", "") or "")).strip()
+            == "nguoi nuoc ngoai"
+        )
+        if template_name.startswith("1.") and foreign_location_manager:
+            # Section 4 has one identity-number slot.  For a foreign manager
+            # that slot is the passport number, while the contact-address
+            # slots remain the same for both person types.
+            highlighted_values["location_manager_id_number"] = values.get(
+                "location_manager_passport_number", ""
+            )
+            if not str(highlighted_values.get("location_manager_address_detail", "") or "").strip():
+                highlighted_values["location_manager_address_detail"] = values.get(
+                    "location_manager_foreign_address_detail", ""
+                )
+            if not str(highlighted_values.get("location_manager_nationality", "") or "").strip():
+                highlighted_values["location_manager_nationality"] = values.get(
+                    "location_manager_foreign_country", ""
+                )
+        if highlighted_values.get('legal_representative_person_type') == 'Người nước ngoài':
+            highlighted_values['legal_representative_id_number'] = values.get('legal_representative_passport_number', '')
+        if template_name.startswith('H'):
+            highlighted_values['legal_representative_full_name'] = str(values.get('legal_representative_full_name', '')).title()
         highlighted_values["tax_accounting_dependent_x"] = (
             "X" if values.get("tax_accounting_method") == "H\u1ea1ch to\u00e1n ph\u1ee5 thu\u1ed9c" else ""
         )
@@ -141,6 +192,12 @@ class DependentUnitTemplateGenerator(DocxTemplateGenerator):
             "X" if values.get("tax_vat_method") == "Kh\u1ea5u tr\u1eeb" else ""
         )
         DocxTemplateGenerator._replace_highlighted_runs(self, document, template_name, highlighted_values)
+        if template_name.startswith('2.') and values.get('legal_representative_person_type') == 'Người nước ngoài':
+            for paragraph in self._iter_paragraphs(document):
+                if self._fold(paragraph.text).startswith('so dinh danh ca nhan'):
+                    for run in paragraph.runs:
+                        run.text = run.text.replace('Số định danh cá nhân', 'Số hộ chiếu')
+                    break
         DocxTemplateGenerator._replace_business_lines_tables_v2(
             self,
             document,
@@ -149,6 +206,19 @@ class DependentUnitTemplateGenerator(DocxTemplateGenerator):
         )
         self._remove_empty_business_line_rows(document, values)
         self._restore_foreign_permanent_address_placeholder(document, template_name)
+        if template_name.startswith('H'):
+            signer = str(values.get('legal_representative_full_name', '')).strip()
+            if signer:
+                for paragraph in self._iter_paragraphs(document):
+                    for run in paragraph.runs:
+                        if run.font.highlight_color == WD_COLOR_INDEX.YELLOW and run.text.strip().casefold() == signer.casefold():
+                            run.text = signer.title()
+        if template_name.startswith('1.'):
+            for paragraph in self._iter_paragraphs(document):
+                folded = self._fold(paragraph.text)
+                if '6. thong tin dang ky thue' in folded or 'ca nhan duoi day' in folded:
+                    for run in paragraph.runs:
+                        run.font.size = Pt(13)
         document.save(docx_path)
 
     def _restore_foreign_permanent_address_placeholder(self, document: Document, template_name: str) -> None:

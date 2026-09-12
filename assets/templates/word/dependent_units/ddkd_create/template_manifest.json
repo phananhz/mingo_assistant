@@ -143,6 +143,36 @@
         "19": "legal_representative_full_name"
       }
     },
+    "2. Giay uy quyen dai dien phap luat nuoc ngoai.docx": {
+      "mode": "fill_highlighted",
+      "highlighted_fields": {
+        "0": "legal_representative_full_name",
+        "1": "legal_representative_passport_number",
+        "2": "legal_representative_passport_issue_date",
+        "3": "legal_representative_passport_issue_place",
+        "4": "company_name",
+        "5": "legal_representative_position",
+        "6": "parent_entity_registration_number",
+        "7": "company_address",
+        "8": "__clear",
+        "9": "authorized_person_full_name",
+        "10": "authorized_person_id_number",
+        "12": "authorized_person_issue_date",
+        "13": "authorized_person_issue_place",
+        "14": "authorized_person_phone",
+        "15": "authorized_person_email",
+        "16": "business_registration_office",
+        "17": "__clear",
+        "18": "company_name",
+        "19": "business_registration_office",
+        "20": "__clear",
+        "21": "document_place",
+        "22": "document_day",
+        "23": "document_month",
+        "24": "document_year",
+        "25": "legal_representative_full_name"
+      }
+    },
     "Hướng dẫn ký.docx": {
       "mode": "fill_highlighted",
       "highlighted_fields": {

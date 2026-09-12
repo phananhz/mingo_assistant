@@ -62,12 +62,12 @@ LOCATION_FIELD_GROUPS = (
         ("location_manager_full_name", "Họ, chữ đệm và tên"),
         ("location_manager_date_of_birth", "Ngày sinh"),
         ("location_manager_gender", "Giới tính"),
-        ("location_manager_id_number", "Số định danh cá nhân"),
+        ("location_manager_id_number", "Số định danh cá nhân (người Việt Nam)"),
         ("location_manager_address_detail", "Số nhà/đường/thôn"),
         ("location_manager_ward", "Xã/Phường/Đặc khu"),
         ("location_manager_province", "Tỉnh/Thành phố"),
         ("location_manager_nationality", "Quốc gia"),
-        ("location_manager_ethnicity", "Dân tộc"),
+        ("location_manager_ethnicity", "Quốc tịch"),
         ("location_manager_passport_number", "Số hộ chiếu"),
         ("location_manager_passport_issue_date", "Ngày cấp hộ chiếu"),
         ("location_manager_passport_issue_place", "Nơi cấp hộ chiếu"),
@@ -199,6 +199,14 @@ class LocationBusinessWorkspace(BusinessRegistrationWorkspace):
         return group
 
     def _build_regular_form_section(self, title: str, fields: list[tuple[str, str]]) -> QWidget:
+        if any(key == 'legal_representative_position' for key, _ in fields):
+            fields = [('legal_representative_person_type', 'Người Việt Nam / người nước ngoài'), *fields,
+                      ('legal_representative_passport_number', 'Số hộ chiếu'),
+                      ('legal_representative_passport_issue_date', 'Ngày cấp hộ chiếu'),
+                      ('legal_representative_passport_issue_place', 'Cơ quan cấp hộ chiếu')]
+            section = super()._build_regular_form_section(title, fields)
+            self._sync_legal_person_type()
+            return section
         if not any(key == "location_manager_person_type" for key, _label in fields):
             return super()._build_regular_form_section(title, fields)
         return self._build_location_manager_form_section(title, fields)
@@ -226,10 +234,6 @@ class LocationBusinessWorkspace(BusinessRegistrationWorkspace):
         }
         vietnamese_keys = {
             "location_manager_id_number",
-            "location_manager_address_detail",
-            "location_manager_ward",
-            "location_manager_province",
-            "location_manager_nationality",
         }
         for index, (key, label_text) in enumerate(fields):
             row = 1 + index // 2
@@ -253,21 +257,21 @@ class LocationBusinessWorkspace(BusinessRegistrationWorkspace):
             widget.setVisible(not is_foreign)
         for widget in getattr(self, "_location_manager_foreign_widgets", []):
             widget.setVisible(is_foreign)
-        if is_foreign:
-            self._clear_location_manager_fields((
-                "location_manager_id_number", "location_manager_address_detail",
-                "location_manager_ward", "location_manager_province", "location_manager_nationality",
-            ))
-        else:
-            self._clear_location_manager_fields((
-                "location_manager_ethnicity", "location_manager_passport_number",
-                "location_manager_passport_issue_date", "location_manager_passport_issue_place",
-                "location_manager_foreign_address_detail", "location_manager_foreign_country",
-            ))
+        # Export filters inactive fields; retain draft input when switching type.
 
     def _clear_location_manager_fields(self, keys: tuple[str, ...]) -> None:
         for key in keys:
             self._set_field(key, "")
+
+    def _clear_person_fill_target(self, target: str) -> None:
+        super()._clear_person_fill_target(target)
+        if target == "legal_representative":
+            for key in (
+                "legal_representative_passport_number",
+                "legal_representative_passport_issue_date",
+                "legal_representative_passport_issue_place",
+            ):
+                self._set_field(key, "")
 
     def _person_fill_target_for_section(self, title: str) -> str:
         targets = {
@@ -278,6 +282,8 @@ class LocationBusinessWorkspace(BusinessRegistrationWorkspace):
         return targets.get(title, super()._person_fill_target_for_section(title))
 
     def _fill_section_from_person(self, target: str, person) -> None:
+        if target == 'legal_representative':
+            self._set_field('legal_representative_person_type', 'Người Việt Nam')
         if target != "location_manager":
             super()._fill_section_from_person(target, person)
             return
@@ -343,6 +349,8 @@ class LocationBusinessWorkspace(BusinessRegistrationWorkspace):
             "organization_owner_registration_number": "Mã số doanh nghiệp/Số quyết định thành lập",
             "organization_owner_address_detail": "Địa chỉ trụ sở chính",
         }
+        if values.get('legal_representative_person_type') == 'Người nước ngoài':
+            required['legal_representative_id_number'] = 'Số hộ chiếu người đại diện pháp luật'
         missing = [label for key, label in required.items() if not values.get(key, "").strip()]
         if missing:
             QMessageBox.warning(self, "Cần kiểm tra dữ liệu tổ chức", "Chưa có:\n- " + "\n- ".join(missing))
@@ -390,6 +398,17 @@ class LocationBusinessWorkspace(BusinessRegistrationWorkspace):
             self.syncing_address_fields = False
         self._refresh_preview()
     def _create_field(self, key: str):
+        if key == 'legal_representative_person_type':
+            field = NoWheelComboBox()
+            field.addItems(('Người Việt Nam', 'Người nước ngoài'))
+            field.currentTextChanged.connect(self._sync_legal_person_type)
+            self.fields[key] = field
+            return field
+        if key == 'legal_representative_position':
+            field = QLineEdit()
+            field.textChanged.connect(self._refresh_preview)
+            self.fields[key] = field
+            return field
         if key == "location_manager_person_type":
             field = NoWheelComboBox()
             field.addItems(("Ng\u01b0\u1eddi Vi\u1ec7t Nam", "Ng\u01b0\u1eddi n\u01b0\u1edbc ngo\u00e0i"))
@@ -425,6 +444,13 @@ class LocationBusinessWorkspace(BusinessRegistrationWorkspace):
     def _sync_location_contacts_to_tax_notification(self) -> None:
         self._set_field("tax_notification_phone", self._field_value("location_phone"))
         self._set_field("tax_notification_email", self._field_value("location_email"))
+
+    def _sync_legal_person_type(self, *_args) -> None:
+        # Người đại diện pháp luật là một đối tượng độc lập với người đứng đầu
+        # địa điểm kinh doanh. Hai trường định danh/hộ chiếu đều phải cho phép
+        # nhập thủ công vì hồ sơ thực tế có thể cần giữ cả hai giá trị hoặc
+        # người dùng cần chỉnh sửa sau khi quét CCCD.
+        self._refresh_preview()
 
     def _fill_registration_office_from_location(self) -> None:
         if self._initializing:
@@ -487,10 +513,10 @@ class LocationBusinessWorkspace(BusinessRegistrationWorkspace):
             "location_manager_passport_issue_date", "location_manager_passport_issue_place",
             "location_manager_foreign_address_detail", "location_manager_foreign_country",
         )
-        vietnamese_only_keys = (
-            "location_manager_id_number", "location_manager_address_detail",
-            "location_manager_ward", "location_manager_province", "location_manager_nationality",
-        )
+        # The identity number is Vietnam-only.  The four contact-address
+        # fields are shared by both person types and must remain available for
+        # a foreign location manager as well.
+        vietnamese_only_keys = ("location_manager_id_number",)
         if values.get("location_manager_person_type") == "Người nước ngoài":
             for key in vietnamese_only_keys:
                 values[key] = ""
@@ -502,6 +528,8 @@ class LocationBusinessWorkspace(BusinessRegistrationWorkspace):
         return values
 
     def _missing_required_fields(self, values: dict[str, str]) -> list[str]:
+        values = dict(values)
+        foreign_legal_representative = values.get('legal_representative_person_type') == 'Người nước ngoài'
         required = {
             "business_registration_office": "Phòng Đăng ký kinh doanh",
             "parent_entity_name": "Tên doanh nghiệp chủ quản",
@@ -512,9 +540,16 @@ class LocationBusinessWorkspace(BusinessRegistrationWorkspace):
             "location_province": "Tỉnh/Thành phố địa điểm kinh doanh",
             "location_manager_full_name": "Họ tên người đứng đầu địa điểm",
             "legal_representative_full_name": "Họ tên người đại diện pháp luật",
-            "legal_representative_id_number": "Số định danh người đại diện pháp luật",
             "legal_representative_position": "Chức danh người đại diện pháp luật",
         }
+        if foreign_legal_representative:
+            required.update({
+                "legal_representative_passport_number": "Số hộ chiếu người đại diện pháp luật",
+                "legal_representative_passport_issue_date": "Ngày cấp hộ chiếu người đại diện pháp luật",
+                "legal_representative_passport_issue_place": "Cơ quan cấp hộ chiếu người đại diện pháp luật",
+            })
+        else:
+            required["legal_representative_id_number"] = "Số định danh người đại diện pháp luật"
         missing = [label for key, label in required.items() if not values.get(key, "").strip()]
         if values.get("location_manager_person_type") == "Người nước ngoài":
             if not values.get("location_manager_passport_number", "").strip():

@@ -296,6 +296,8 @@ class MainWindow(QMainWindow):
         self.dependent_cases_scroll: QScrollArea | None = None
         self.dependent_cases_container: QWidget | None = None
         self.dependent_cases_layout: QGridLayout | None = None
+        self.current_dependent_card_columns = 0
+        self.dependent_cases_count_label: QLabel | None = None
         self.trash_container = QWidget()
         self.trash_layout = QVBoxLayout(self.trash_container)
         self.industry_catalog = IndustryCatalog.load_from_project(self.app_paths.bundle_root)
@@ -1564,7 +1566,14 @@ class MainWindow(QMainWindow):
             columns = self._card_column_count()
             if columns != self.current_card_columns:
                 self._refresh_cases()
-
+        elif (
+            hasattr(self, "dependent_units_page")
+            and self.stack.currentWidget() == self.dependent_units_page
+            and self.dependent_cases_layout is not None
+        ):
+            columns = self._card_column_count()
+            if columns != self.current_dependent_card_columns:
+                self._refresh_dependent_cases()
     def _card_column_count(self) -> int:
         available_width = max(1, self._content_width())
         max_cols = 5 if getattr(self, "current_layout", "default") in ("top_nav", "slim_sidebar") else 4
@@ -2001,6 +2010,13 @@ class MainWindow(QMainWindow):
         header.addWidget(create_btn, 0, Qt.AlignTop)
         layout.addLayout(header)
 
+        # The dependent-unit page is primarily a saved-dossier list. The header
+        # already provides the create action, so duplicated hero cards would only
+        # waste vertical space and clip the saved dossiers.
+        if nav_key == "dependent_units":
+            layout.addWidget(self._build_dependent_cases_section(), 1)
+            return page
+
         cards_container = QWidget()
         cards_layout = QHBoxLayout(cards_container)
         cards_layout.setContentsMargins(0, 20, 0, 0)
@@ -2074,30 +2090,44 @@ class MainWindow(QMainWindow):
         cards_layout.addWidget(info_card)
         cards_layout.addStretch(1)
 
-        if nav_key == "dependent_units":
-            layout.addWidget(cards_container)
-            layout.addWidget(self._build_dependent_cases_section(), 1)
-        else:
-            layout.addWidget(cards_container, 1)
+        layout.addWidget(cards_container, 1)
         return page
 
+
     def _build_dependent_cases_section(self) -> QWidget:
-        group = QGroupBox("Hồ sơ đã tạo")
+        group = QGroupBox("Hồ sơ địa điểm kinh doanh")
+        group.setObjectName("DependentCasesPanel")
+        group.setMinimumHeight(420)
         group_layout = QVBoxLayout(group)
-        group_layout.setContentsMargins(12, 12, 12, 12)
-        group_layout.setSpacing(8)
+        group_layout.setContentsMargins(18, 16, 18, 18)
+        group_layout.setSpacing(12)
+
+        section_header = QHBoxLayout()
+        section_header.setSpacing(12)
+        section_hint = QLabel(
+            "Các hồ sơ địa điểm kinh doanh đã lưu. Chọn Mở để xem file hoặc Sửa để cập nhật hồ sơ."
+        )
+        section_hint.setObjectName("PageDescription")
+        section_hint.setWordWrap(True)
+        self.dependent_cases_count_label = QLabel()
+        self.dependent_cases_count_label.setObjectName("StatusBadge")
+        self.dependent_cases_count_label.setAlignment(Qt.AlignCenter)
+        section_header.addWidget(section_hint, 1)
+        section_header.addWidget(self.dependent_cases_count_label, 0, Qt.AlignRight)
+        group_layout.addLayout(section_header)
 
         self.dependent_cases_scroll = QScrollArea()
         self.dependent_cases_scroll.setObjectName("DependentCasesScroll")
         self.dependent_cases_scroll.setWidgetResizable(True)
         self.dependent_cases_scroll.setFrameShape(QFrame.NoFrame)
+        self.dependent_cases_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.dependent_cases_container = QWidget()
         self.dependent_cases_layout = QGridLayout(self.dependent_cases_container)
         self.dependent_cases_layout.setContentsMargins(0, 0, 0, 0)
         self.dependent_cases_layout.setHorizontalSpacing(16)
         self.dependent_cases_layout.setVerticalSpacing(16)
         self.dependent_cases_scroll.setWidget(self.dependent_cases_container)
-        group_layout.addWidget(self.dependent_cases_scroll)
+        group_layout.addWidget(self.dependent_cases_scroll, 1)
         self._refresh_dependent_cases()
         return group
 
@@ -2118,19 +2148,22 @@ class MainWindow(QMainWindow):
                 widget.deleteLater()
 
         dependent_cases = [case for case in self.cases if self._is_dependent_case(case)]
+        if self.dependent_cases_count_label is not None:
+            self.dependent_cases_count_label.setText(f"{len(dependent_cases)} hồ sơ")
         if not dependent_cases:
             empty = QLabel("Chưa có hồ sơ thuộc đơn vị phụ thuộc.")
             empty.setObjectName("EmptyDescription")
             empty.setAlignment(Qt.AlignCenter)
             layout.addWidget(empty, 0, 0, 1, 4)
+            self.current_dependent_card_columns = 0
             return
 
-        columns = 4
+        columns = self._card_column_count()
+        self.current_dependent_card_columns = columns
         for index, case in enumerate(dependent_cases):
             layout.addWidget(self._build_case_card(case), index // columns, index % columns)
-        for column in range(columns):
-            layout.setColumnStretch(column, 1)
-
+        for column in range(5):
+            layout.setColumnStretch(column, 1 if column < columns else 0)
     def _open_business_creation_modal(self) -> None:
         from mingo_assistant.ui.dialogs.business_creation_modal import BusinessCreationModal
 

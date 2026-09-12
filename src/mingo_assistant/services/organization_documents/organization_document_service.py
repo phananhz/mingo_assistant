@@ -204,7 +204,10 @@ class OrganizationDocumentService:
             key: unicodedata.normalize("NFC", self._restore_vietnamese_phrases(value)).strip()
             for key, value in values.items()
         }
+        normalized['organization_owner_name'] = normalized.get('organization_owner_name', '').upper()
         warnings: list[str] = []
+        if method == 'ocr':
+            warnings.append('Vui lòng đối chiếu dấu tiếng Việt trong tên doanh nghiệp và địa chỉ với tài liệu gốc.')
         for key, label in (
             ("organization_owner_name", "Tên tổ chức"),
             ("organization_owner_registration_number", "Mã số doanh nghiệp/Số quyết định"),
@@ -226,12 +229,12 @@ class OrganizationDocumentService:
         )
 
     def _company_name(self, lines: list[str]) -> str:
-        labels = ("tencongtyvietbangtiengviet",)
+        labels = ('tencongtyvietbangtiengviet', 'tendoanhnghiepvietbangtiengviet', 'tenbangtiengviet')
         for index, line in enumerate(lines):
             if not self._line_has_any_label(line, labels):
                 continue
             parts = [self._line_tail(line)]
-            for following in lines[index + 1 : index + 4]:
+            for following in lines[index + 1 :]:
                 compact = self._compact(following)
                 if self._looks_like_label(following) or compact.startswith("2"):
                     break
@@ -243,12 +246,11 @@ class OrganizationDocumentService:
         for index, line in enumerate(lines):
             compact = self._compact(line)
             if not (
-                compact.startswith("2")
-                and "chi" in compact
+                "chi" in compact
                 and "sochinh" in compact
             ):
                 continue
-            parts: list[str] = []
+            parts: list[str] = [self._line_tail(line)] if ':' in line else []
             for item in lines[index + 1 :]:
                 compact_item = self._compact(item)
                 if self._is_address_stop(compact_item):

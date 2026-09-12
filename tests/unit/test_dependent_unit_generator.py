@@ -53,14 +53,14 @@ class DependentUnitTemplateGeneratorTest(unittest.TestCase):
             )
 
             self.assertEqual(3, len(result.generated))
-            generated_document = Document(output_dir / editable.name)
+            generated_document = Document(next(output_dir.glob('Thong bao*.docx')))
             self.assertIn("LOCATION A", generated_document.paragraphs[0].text)
             self.assertEqual(
                 WD_COLOR_INDEX.YELLOW,
                 generated_document.paragraphs[0].runs[-1].font.highlight_color,
             )
             for source in passthroughs:
-                copied = output_dir / source.name
+                copied = next(output_dir.glob('Giay*.docx' if source.name.startswith('2.') else 'Huong*.docx'))
                 self.assertEqual(
                     hashlib.sha256(source.read_bytes()).digest(),
                     hashlib.sha256(copied.read_bytes()).digest(),
@@ -124,7 +124,7 @@ class DependentUnitTemplateGeneratorTest(unittest.TestCase):
                 output_dir,
             )
             self.assertEqual(3, len(result.generated))
-            generated_document = Document(output_dir / editable.name)
+            generated_document = Document(next(output_dir.glob('Thong bao*.docx')))
             paragraphs = list(generated_document.paragraphs)
             for table in generated_document.tables:
                 for row in table.rows:
@@ -138,10 +138,10 @@ class DependentUnitTemplateGeneratorTest(unittest.TestCase):
             ]
             self.assertTrue(matching_runs)
             self.assertTrue(all(run.font.highlight_color == WD_COLOR_INDEX.YELLOW for run in matching_runs))
-            with zipfile.ZipFile(output_dir / editable.name) as archive:
+            with zipfile.ZipFile(next(output_dir.glob('Thong bao*.docx'))) as archive:
                 self.assertIsNone(archive.testzip())
                 self.assertTrue(archive.read("word/document.xml").startswith(b"<?xml"))
-            authorization = Document(output_dir / authorization_template.name)
+            authorization = Document(next(output_dir.glob('Giay*.docx')))
             authorization_text = "\n".join(paragraph.text for paragraph in authorization.paragraphs)
             for table in authorization.tables:
                 for row in table.rows:
@@ -150,13 +150,13 @@ class DependentUnitTemplateGeneratorTest(unittest.TestCase):
             self.assertIn("LEGAL REP", authorization_text)
             self.assertIn("COMPANY A", authorization_text)
             self.assertIn("Thông báo lập địa điểm kinh doanh", authorization_text)
-            guide = Document(output_dir / guide_template.name)
+            guide = Document(next(output_dir.glob('Huong*.docx')))
             guide_text = "\n".join(paragraph.text for paragraph in guide.paragraphs)
             for table in guide.tables:
                 for row in table.rows:
                     for cell in row.cells:
                         guide_text += "\n" + "\n".join(paragraph.text for paragraph in cell.paragraphs)
-            self.assertEqual(2, guide_text.count("LEGAL REP"))
+            self.assertEqual(2, guide_text.count('Legal Rep'))
 
     def test_empty_location_fields_keep_dotted_placeholders(self) -> None:
         project_root = Path(__file__).resolve().parents[2]
@@ -168,7 +168,7 @@ class DependentUnitTemplateGeneratorTest(unittest.TestCase):
                 "location",
                 output_dir,
             )
-            document = Document(output_dir / next(template_dir.glob("1.*.docx")).name)
+            document = Document(next(output_dir.glob('Thong bao*.docx')))
             paragraphs = list(document.paragraphs)
             for table in document.tables:
                 for row in table.rows:
@@ -198,6 +198,10 @@ class DependentUnitTemplateGeneratorTest(unittest.TestCase):
             "location_manager_passport_issue_place": "Place A",
             "location_manager_foreign_address_detail": "Foreign address A",
             "location_manager_foreign_country": "Country A",
+            "location_manager_address_detail": "Foreign contact street A",
+            "location_manager_ward": "Foreign contact ward A",
+            "location_manager_province": "Foreign contact province A",
+            "location_manager_nationality": "Foreign contact country A",
             "business_line_1_name": "LINE ONE",
             "business_line_1_code": "0111",
             "business_line_1_is_main": "X",
@@ -211,7 +215,7 @@ class DependentUnitTemplateGeneratorTest(unittest.TestCase):
             output_dir = Path(temp_dir) / "output"
             generator = DependentUnitTemplateGenerator(template_dir, Path(temp_dir))
             generator.generate(values, "location", output_dir)
-            document = Document(output_dir / editable.name)
+            document = Document(next(output_dir.glob('Thong bao*.docx')))
             run_texts = [run.text for paragraph in document.paragraphs for run in paragraph.runs]
             for table in document.tables:
                 for row in table.rows:
@@ -219,6 +223,19 @@ class DependentUnitTemplateGeneratorTest(unittest.TestCase):
                         run_texts.extend(run.text for paragraph in cell.paragraphs for run in paragraph.runs)
             for expected in ("Ethnicity A", "P1234567", "01/02/2020", "Place A", "Foreign address A", "Country A"):
                 self.assertIn(expected, run_texts)
+            section4_identity = next(
+                paragraph
+                for paragraph in generator._iter_paragraphs(document)
+                if generator._fold(paragraph.text).startswith("so dinh danh ca nhan")
+            )
+            self.assertIn("P1234567", section4_identity.text)
+            section4_addresses = [
+                paragraph
+                for paragraph in generator._iter_paragraphs(document)
+                if generator._fold(paragraph.text).startswith("so nha/phong")
+            ]
+            self.assertGreaterEqual(len(section4_addresses), 2)
+            self.assertIn("Foreign contact street A", section4_addresses[1].text)
 
             foreign_permanent_address = next(
                 paragraph for paragraph in generator._iter_paragraphs(document)
