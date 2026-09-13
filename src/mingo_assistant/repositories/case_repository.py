@@ -7,10 +7,13 @@ from pathlib import Path
 
 from mingo_assistant.models.case import CaseSummary
 from mingo_assistant.app.paths import get_app_paths
-from mingo_assistant.infrastructure.storage import read_json, write_json_atomic
+from mingo_assistant.core.errors import CorruptDataError
+from mingo_assistant.infrastructure.storage import preserve_corrupt_file, read_json_with_recovery, write_json_atomic
 
 
 class CaseRepository:
+    SCHEMA_VERSION = 1
+
     def __init__(self, data_file: Path | None = None) -> None:
         self.data_file = data_file or get_app_paths().cases_file
 
@@ -28,7 +31,18 @@ class CaseRepository:
 
     def _read_cases(self) -> list[CaseSummary]:
         self._ensure_file()
-        raw_cases = read_json(self.data_file)
+        payload = read_json_with_recovery(self.data_file)
+        if isinstance(payload, list):
+            raw_cases = payload
+        elif isinstance(payload, dict) and isinstance(payload.get("cases"), list):
+            raw_cases = payload["cases"]
+        else:
+            backup_path = preserve_corrupt_file(self.data_file)
+            raise CorruptDataError(
+                self.data_file,
+                "Dữ liệu hồ sơ không đúng cấu trúc",
+                backup_path,
+            )
         return [CaseSummary.from_dict(item) for item in raw_cases]
 
     def save_case(self, case: CaseSummary) -> None:
@@ -67,7 +81,10 @@ class CaseRepository:
             self._write_cases(self._demo_cases())
 
     def _write_cases(self, cases: list[CaseSummary]) -> None:
-        payload = [case.to_dict() for case in cases]
+        payload = {
+            "schema_version": self.SCHEMA_VERSION,
+            "cases": [case.to_dict() for case in cases],
+        }
         write_json_atomic(self.data_file, payload)
 
     def _demo_cases(self) -> list[CaseSummary]:

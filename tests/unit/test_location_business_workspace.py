@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 from pathlib import Path
 
-from PySide6.QtWidgets import QApplication, QFrame, QGroupBox
+from PySide6.QtWidgets import QApplication, QFrame, QGroupBox, QLabel
 
 from mingo_assistant.services.documents.dependent_unit_generator import DependentUnitTemplateGenerator
 from mingo_assistant.ui.dialogs.dependent_unit_modal import UNIT_TYPE_SPECS
@@ -61,10 +61,34 @@ class LocationBusinessWorkspaceTest(unittest.TestCase):
             finally:
                 workspace.deleteLater()
 
+    def test_location_validation_does_not_require_company_establishment_fields(self) -> None:
+        project_root = Path(__file__).resolve().parents[2]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = LocationBusinessWorkspace(
+                on_back=lambda: None,
+                on_save=lambda case: None,
+                bundle_root=project_root,
+                default_export_root=Path(temp_dir),
+            )
+            try:
+                issues = workspace._validation_issues({})
+
+                self.assertIn("Tên địa điểm kinh doanh", issues)
+                self.assertIn("Tên doanh nghiệp chủ quản", issues)
+                self.assertNotIn("Họ tên chủ sở hữu", issues)
+                self.assertNotIn("Số CCCD chủ sở hữu", issues)
+                self.assertNotIn("Địa chỉ liên lạc của chủ sở hữu", issues)
+                self.assertNotIn("Số điện thoại công ty (dùng cho thông tin đăng ký thuế)", issues)
+                self.assertNotIn("Vốn điều lệ", issues)
+                self.assertNotIn("Địa chỉ thường trú", issues)
+                self.assertNotIn("Nơi cấp CCCD của người đại diện pháp luật", issues)
+            finally:
+                workspace.deleteLater()
 
 
 
-    def test_export_location_writes_directly_to_one_company_folder(self) -> None:
+
+    def test_export_location_uses_a_new_version_folder(self) -> None:
         project_root = Path(__file__).resolve().parents[2]
         with tempfile.TemporaryDirectory() as temp_dir:
             export_root = Path(temp_dir)
@@ -81,15 +105,16 @@ class LocationBusinessWorkspaceTest(unittest.TestCase):
                 }
                 company_dir = workspace._case_export_dir(export_root, values)
                 self.assertEqual("COMPANY A", company_dir.name)
+                version_name = "Lần xuất 20260913_101500_123456"
                 self.assertEqual(
-                    company_dir,
-                    workspace._export_output_dir(company_dir, values, "LOCATION A", workspace._export_version_label(company_dir)),
+                    company_dir / version_name,
+                    workspace._export_output_dir(company_dir, values, "LOCATION A", version_name),
                 )
                 versions = workspace._next_export_versions(
-                    str(company_dir), str(company_dir), "10/09/2026 12:00:00", ["1. request.docx"], workspace._export_version_label(company_dir)
+                    str(company_dir), str(company_dir / version_name), "10/09/2026 12:00:00", ["1. request.docx"], version_name
                 )
                 self.assertEqual(1, len(versions))
-                self.assertEqual(str(company_dir), versions[0]["export_dir"])
+                self.assertEqual(str(company_dir / version_name), versions[0]["export_dir"])
             finally:
                 workspace.deleteLater()
 
@@ -132,14 +157,34 @@ class LocationBusinessWorkspaceTest(unittest.TestCase):
 
                 workspace.fields["location_manager_person_type"].setCurrentIndex(0)
                 values = workspace.form_values()
-                self.assertEqual("", values["location_manager_passport_number"])
-                self.assertEqual("", values["location_manager_foreign_country"])
+                self.assertEqual("P1234567", values["location_manager_passport_number"])
+                self.assertEqual("Country A", values["location_manager_foreign_country"])
                 self.assertFalse(workspace.fields["location_manager_id_number"].isHidden())
             finally:
                 workspace.deleteLater()
 
+    def test_location_manager_layout_has_word_section_boundaries(self) -> None:
+        project_root = Path(__file__).resolve().parents[2]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = LocationBusinessWorkspace(
+                on_back=lambda: None,
+                on_save=lambda case: None,
+                bundle_root=project_root,
+                default_export_root=Path(temp_dir),
+            )
+            try:
+                titles = {group.title() for group in workspace.findChildren(QGroupBox)}
+                self.assertIn("Phần A · Thông tin định danh và liên lạc", titles)
+                self.assertIn("Địa chỉ liên lạc", titles)
+                self.assertIn("Phần B · Kê khai bổ sung khi không có số định danh cá nhân", titles)
+                note = workspace.findChild(QLabel, "LocationManagerSupplementNote")
+                self.assertIsNotNone(note)
+                self.assertIn("Trường hợp không có số định danh cá nhân", note.text())
+            finally:
+                workspace.deleteLater()
 
-    def test_scanned_documents_auto_fill_location_fields(self) -> None:
+
+    def test_scanned_documents_require_explicit_location_role_selection(self) -> None:
         project_root = Path(__file__).resolve().parents[2]
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = LocationBusinessWorkspace(
@@ -171,6 +216,10 @@ class LocationBusinessWorkspaceTest(unittest.TestCase):
                     },
                     apply_to_form=True,
                 )
+                self.assertEqual("", workspace.fields["location_manager_full_name"].text())
+                self.assertEqual("", workspace.fields["legal_representative_full_name"].text())
+                person = workspace.ocr_people[workspace.current_person_index]
+                workspace._fill_section_from_person("location_manager", person)
                 self.assertEqual("NGUY\u1ec4N V\u0102N A", workspace.fields["location_manager_full_name"].text())
                 self.assertEqual("012345678901", workspace.fields["location_manager_id_number"].text())
                 self.assertEqual("Ng\u01b0\u1eddi Vi\u1ec7t Nam", workspace.fields["location_manager_person_type"].currentText())
@@ -199,11 +248,14 @@ class LocationBusinessWorkspaceTest(unittest.TestCase):
                     apply_to_form=True,
                 )
                 person = workspace.ocr_people[workspace.current_person_index]
+                self.assertEqual("", workspace.fields["location_manager_full_name"].text())
                 workspace._fill_section_from_person("legal_representative", person)
                 self.assertEqual("NGUY\u1ec4N V\u0102N A", workspace.fields["legal_representative_full_name"].text())
                 self.assertEqual("012345678901", workspace.fields["legal_representative_id_number"].text())
                 workspace.fields['legal_representative_position'].setText('Giám đốc điều hành')
                 self.assertEqual('Giám đốc điều hành', workspace.form_values()['legal_representative_position'])
+                self.assertEqual("", workspace.fields["location_manager_full_name"].text())
+                workspace._fill_section_from_person("location_manager", person)
                 self.assertEqual("NGUY\u1ec4N V\u0102N A", workspace.fields["location_manager_full_name"].text())
                 self.assertEqual("NGUY\u1ec4N V\u0102N A", workspace.form_values()["signer_full_name"])
             finally:

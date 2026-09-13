@@ -49,18 +49,18 @@ class LocationRevisionTest(unittest.TestCase):
             generator = DependentUnitTemplateGenerator(templates, Path(temporary))
             result = generator.generate({
                 'parent_entity_name': 'CÔNG TY TNHH AN NHIÊN SPA VIỆT NAM',
-                'legal_representative_full_name': 'PHẠM THỊ NA',
+                'legal_representative_full_name': 'NGUYỄN VĂN TEST',
                 'legal_representative_person_type': 'Người nước ngoài',
                 'legal_representative_id_number': 'MUST-NOT-EXPORT',
                 'legal_representative_passport_number': 'P123456',
                 'legal_representative_passport_issue_date': '12/02/2018',
                 'legal_representative_passport_issue_place': 'Cục quản lý xuất nhập cảnh Trung Quốc',
-                'authorized_person_full_name': 'NGUYỄN THỊ MINH NGỌC',
-                'authorized_person_id_number': '031199001726',
-                'authorized_person_issue_date': '09/12/2024',
+                'authorized_person_full_name': 'TRẦN THỊ TEST',
+                'authorized_person_id_number': '012345678901',
+                'authorized_person_issue_date': '01/01/2025',
                 'authorized_person_issue_place': 'Bộ Công an',
-                'authorized_person_phone': '0879247679',
-                'authorized_person_email': 'minhngoc0304.hvnh@gmail.com',
+                'authorized_person_phone': '0900000000',
+                'authorized_person_email': 'test@example.invalid',
             }, 'Test')
             self.assertEqual({
                 'Thong bao lap dia diem_AnNhienSpaVietNam.docx',
@@ -80,17 +80,17 @@ class LocationRevisionTest(unittest.TestCase):
                     for expected in (
                         '12/02/2018',
                         'Cục quản lý xuất nhập cảnh Trung Quốc',
-                        'NGUYỄN THỊ MINH NGỌC',
-                        '031199001726',
-                        '09/12/2024',
+                        'TRẦN THỊ TEST',
+                        '012345678901',
+                        '01/01/2025',
                         'Bộ Công an',
-                        '0879247679',
-                        'minhngoc0304.hvnh@gmail.com',
+                        '0900000000',
+                        'test@example.invalid',
                     ):
                         self.assertIn(expected, text)
                     self.assertNotIn('MUST-NOT-EXPORT', text)
                 if item.output_path.name.startswith('Huong'):
-                    self.assertEqual(2, text.count('Phạm Thị Na'))
+                    self.assertEqual(2, text.count('Nguyễn Văn Test'))
                 if item.output_path.name.startswith('Thong'):
                     matched = [p for p in paragraphs if '6. Thông tin đăng ký thuế' in p.text or 'cá nhân dưới đây' in p.text]
                     self.assertEqual(2, len(matched))

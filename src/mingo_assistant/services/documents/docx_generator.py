@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import json
 import re
 import shutil
 import tempfile
 import unicodedata
-import zipfile
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
@@ -19,6 +17,13 @@ from docx.oxml.ns import qn
 from docx.shared import Inches, Pt
 from docx.text.paragraph import Paragraph
 from lxml import etree
+
+from mingo_assistant.services.documents.template_manifest import TemplateManifest
+from mingo_assistant.services.documents.package_editor import DocxPackageEditor
+from mingo_assistant.services.documents.template_repository import BusinessRegistrationTemplateRepository
+from mingo_assistant.services.documents.value_formatter import DocumentValueFormatter
+from mingo_assistant.services.documents.context_builder import DocumentContextBuilder
+from mingo_assistant.services.normalization.administrative_place_matcher import AdministrativePlaceMatcher
 
 
 @dataclass(frozen=True)
@@ -67,67 +72,44 @@ class DocxTemplateGenerator:
         "legal_representative_province",
         "organization_owner_province",
     }
-    PROVINCE_AFTER_MERGER = {
-        "ha_giang": "Tuyên Quang",
-        "tuyen_quang": "Tuyên Quang",
-        "yen_bai": "Lào Cai",
-        "lao_cai": "Lào Cai",
-        "bac_kan": "Thái Nguyên",
-        "thai_nguyen": "Thái Nguyên",
-        "vinh_phuc": "Phú Thọ",
-        "hoa_binh": "Phú Thọ",
-        "phu_tho": "Phú Thọ",
-        "bac_giang": "Bắc Ninh",
-        "bac_ninh": "Bắc Ninh",
-        "thai_binh": "Hưng Yên",
-        "hung_yen": "Hưng Yên",
-        "hai_duong": "Thành phố Hải Phòng",
-        "hai_phong": "Thành phố Hải Phòng",
-        "ha_nam": "Ninh Bình",
-        "nam_dinh": "Ninh Bình",
-        "ninh_binh": "Ninh Bình",
-        "quang_binh": "Quảng Trị",
-        "quang_tri": "Quảng Trị",
-        "quang_nam": "Thành phố Đà Nẵng",
-        "da_nang": "Thành phố Đà Nẵng",
-        "kon_tum": "Quảng Ngãi",
-        "quang_ngai": "Quảng Ngãi",
-        "binh_dinh": "Gia Lai",
-        "gia_lai": "Gia Lai",
-        "ninh_thuan": "Khánh Hòa",
-        "khanh_hoa": "Khánh Hòa",
-        "dak_nong": "Lâm Đồng",
-        "binh_thuan": "Lâm Đồng",
-        "lam_dong": "Lâm Đồng",
-        "phu_yen": "Đắk Lắk",
-        "dak_lak": "Đắk Lắk",
-        "ba_ria_vung_tau": "Thành phố Hồ Chí Minh",
-        "binh_duong": "Thành phố Hồ Chí Minh",
-        "ho_chi_minh": "Thành phố Hồ Chí Minh",
-        "tp_ho_chi_minh": "Thành phố Hồ Chí Minh",
-        "tphcm": "Thành phố Hồ Chí Minh",
-        "binh_phuoc": "Đồng Nai",
-        "dong_nai": "Đồng Nai",
-        "long_an": "Tây Ninh",
-        "tay_ninh": "Tây Ninh",
-        "soc_trang": "Thành phố Cần Thơ",
-        "hau_giang": "Thành phố Cần Thơ",
-        "can_tho": "Thành phố Cần Thơ",
-        "ben_tre": "Vĩnh Long",
-        "tra_vinh": "Vĩnh Long",
-        "vinh_long": "Vĩnh Long",
-        "tien_giang": "Đồng Tháp",
-        "dong_thap": "Đồng Tháp",
-        "bac_lieu": "Cà Mau",
-        "ca_mau": "Cà Mau",
-        "kien_giang": "An Giang",
-        "an_giang": "An Giang",
-    }
 
-    def __init__(self, template_dir: Path, export_root: Path) -> None:
+    def __init__(
+        self,
+        template_dir: Path,
+        export_root: Path,
+        province_resolver=None,
+    ) -> None:
         self.template_dir = template_dir
         self.export_root = export_root
-        self._manifest_cache: dict[str, object] | None = None
+        self.template_repository = BusinessRegistrationTemplateRepository(template_dir)
+        self.manifest = TemplateManifest(template_dir / "template_manifest.json")
+        self.package_editor = DocxPackageEditor()
+        resolver = province_resolver or AdministrativePlaceMatcher().canonical_province_name
+        self.value_formatter = DocumentValueFormatter(resolver)
+        self.context_builder = self._new_context_builder(self.value_formatter)
+
+    def _new_context_builder(self, formatter: DocumentValueFormatter) -> DocumentContextBuilder:
+        return DocumentContextBuilder(
+            formatter,
+            uppercase_fields=self.UPPERCASE_BOLD_FIELDS,
+            detail_address_fields=self.DETAIL_ADDRESS_FIELDS,
+            ward_fields=self.WARD_FIELDS,
+            province_fields=self.PROVINCE_FIELDS,
+        )
+
+    def _context_builder(self) -> DocumentContextBuilder:
+        builder = getattr(self, "context_builder", None)
+        if builder is None:
+            builder = self._new_context_builder(self._value_formatter())
+            self.context_builder = builder
+        return builder
+
+    def _value_formatter(self) -> DocumentValueFormatter:
+        formatter = getattr(self, "value_formatter", None)
+        if formatter is None:
+            formatter = DocumentValueFormatter(AdministrativePlaceMatcher().canonical_province_name)
+            self.value_formatter = formatter
+        return formatter
 
     def generate(self, values: dict[str, str], case_name: str, output_dir: Path | None = None) -> GenerationResult:
         if output_dir is None:
@@ -160,17 +142,7 @@ class DocxTemplateGenerator:
 
     def _selected_templates(self, values: dict[str, str]) -> list[Path]:
         """Return the five dossier templates, selecting the charter by owner type."""
-        owner_is_organization = self._fold(str(values.get("owner_type", "") or "")) == "to chuc"
-        selected: list[Path] = []
-        for template in sorted(self.template_dir.iterdir()):
-            if template.name.startswith("~$"):
-                continue
-            if template.name == self.PERSONAL_CHARTER_TEMPLATE and owner_is_organization:
-                continue
-            if template.name == self.ORGANIZATION_CHARTER_TEMPLATE and not owner_is_organization:
-                continue
-            selected.append(template)
-        return selected
+        return self.template_repository.selected(values)
 
     def _output_filename(self, template_name: str, values: dict[str, str]) -> str:
         def without_accents(value: str) -> str:
@@ -222,14 +194,11 @@ class DocxTemplateGenerator:
 
     def unresolved_placeholders(self, docx_path: Path) -> list[str]:
         placeholders: list[str] = []
-        with zipfile.ZipFile(docx_path, "r") as package:
-            for item in package.infolist():
-                if not item.filename.startswith("word/") or not item.filename.endswith(".xml"):
-                    continue
-                data = package.read(item.filename)
-                if b"[" not in data or b"]" not in data:
-                    continue
-                placeholders.extend(self._extract_placeholders_from_xml(data))
+        package_editor = getattr(self, "package_editor", DocxPackageEditor())
+        for _, data in package_editor.word_xml_parts(docx_path):
+            if b"[" not in data or b"]" not in data:
+                continue
+            placeholders.extend(self._extract_placeholders_from_xml(data))
         return sorted(set(placeholders))
 
     def _replace_placeholders(self, docx_path: Path, values: dict[str, str]) -> None:
@@ -324,27 +293,18 @@ class DocxTemplateGenerator:
                 paragraph.add_run(replaced)
 
     def _template_manifest(self) -> dict[str, object]:
-        if self._manifest_cache is not None:
-            return self._manifest_cache
-        manifest_path = self.template_dir / "template_manifest.json"
-        if not manifest_path.exists():
-            self._manifest_cache = {}
-            return self._manifest_cache
-        with manifest_path.open("r", encoding="utf-8-sig") as file:
-            loaded = json.load(file)
-        self._manifest_cache = loaded if isinstance(loaded, dict) else {}
-        return self._manifest_cache
+        manifest = getattr(self, "manifest", None)
+        if manifest is None:
+            manifest = TemplateManifest(self.template_dir / "template_manifest.json")
+            self.manifest = manifest
+        return manifest.load()
 
     def _template_part_manifest(self, template_name: str, part_name: str) -> dict[str, object]:
-        manifest = self._template_manifest()
-        templates = manifest.get("templates", {})
-        if not isinstance(templates, dict):
-            return {}
-        template_manifest = templates.get(template_name, {})
-        if not isinstance(template_manifest, dict):
-            return {}
-        part_manifest = template_manifest.get(part_name, {})
-        return part_manifest if isinstance(part_manifest, dict) else {}
+        manifest = getattr(self, "manifest", None)
+        if manifest is None:
+            self._template_manifest()
+            manifest = self.manifest
+        return manifest.part(template_name, part_name)
 
     def _replace_highlighted_runs(self, document: Document, template_name: str, values: dict[str, str]) -> bool:
         part_manifest = self._template_part_manifest(template_name, "word/document.xml")
@@ -1186,182 +1146,31 @@ class DocxTemplateGenerator:
                             run.font.size = Pt(13)
 
     def _value_for_template_target(self, target: str, values: dict[str, str]) -> str:
-        if target == "__clear":
-            return ""
-        if target.endswith("_date_of_birth_day"):
-            return self._date_component(values.get(target.removesuffix("_day"), ""), 0)
-        if target.endswith("_date_of_birth_month"):
-            return self._date_component(values.get(target.removesuffix("_month"), ""), 1)
-        if target.endswith("_date_of_birth_year"):
-            return self._date_component(values.get(target.removesuffix("_year"), ""), 2)
-        if target == "document_year_with_prefix":
-            year = str(values.get("document_year", "") or "").strip()
-            return f" năm {year}" if year else ""
-        if target == "company_province_with_nationality":
-            province = self._value_for_template_target("company_province", values)
-            return f"{province}, Việt Nam" if province else ""
-        if target == "legal_representative_province_with_nationality":
-            province = self._value_for_template_target("legal_representative_province", values)
-            return f"{province}, Việt Nam" if province else ""
-        if target == "charter_capital_article_6_text":
-            number = self._with_vnd(values.get("charter_capital_number", ""))
-            words = str(values.get("charter_capital_text", "") or "").strip()
-            if words and not re.search(r"\sđồng$", words, re.IGNORECASE):
-                words = f"{words} đồng"
-            if number and words:
-                return f"{number} (Ghi bằng chữ: {words})"
-            return number
-        if target == "organization_owner_issue_place":
-            return str(values.get(target, "") or "").split(" - ", 1)[0].strip(" ,;-")
-        if target == "charter_capital_words_without_currency":
-            return re.sub(r"\s*đồng\s*$", "", str(values.get("charter_capital_text", "") or ""), flags=re.IGNORECASE).strip()
-        if target.startswith("organization_owner_representative_contact_address_"):
-            address = str(values.get("organization_owner_representative_contact_address", "") or "").strip()
-            suffix = target.removeprefix("organization_owner_representative_contact_address_")
-            if suffix == "detail":
-                return self._address_detail_only(address)
-            if suffix == "ward":
-                return self._administrative_part_only(address, {"xa", "phuong", "thi_tran"})
-            if suffix == "province":
-                return self._normalize_province(self._administrative_part_only(address, {"tinh", "thanh_pho"}))
-        if target == "organization_owner_representative_id_number":
-            identity = str(values.get("organization_owner_representative_identity", "") or "")
-            match = re.search(r"(?:CCCD\s*số|Số\s*định\s*danh\s*cá\s*nhân)\s*:?\s*([0-9A-Za-z-]+)", identity, re.IGNORECASE)
-            if match:
-                return match.group(1)
-            fallback = re.search(r"[0-9]{6,}", identity)
-            return fallback.group(0) if fallback else ""
-        if target == "legal_representative_full_name_title":
-            return str(values.get("legal_representative_full_name", "") or "").title()
-        if target in {"legal_representative_address_without_province", "beneficial_owner_address_without_province"}:
-            source = "legal_representative_permanent_address" if target.startswith("legal_representative_") else "beneficial_owner_address"
-            parts = [part.strip() for part in str(values.get(source, "") or "").split(",") if part.strip()]
-            return ", ".join(parts[:-1]) if len(parts) > 1 else ""
-        if target == "beneficial_owner_province":
-            parts = [part.strip() for part in str(values.get("beneficial_owner_address", "") or "").split(",") if part.strip()]
-            return parts[-1] if parts else ""
-        if target == "tax_vat_method_x":
-            return "X" if values.get("tax_vat_method") == "Khấu trừ" else ""
-        if target == "tax_declaration_period_x":
-            return "X" if values.get("tax_declaration_period") == "Hàng tháng" else ""
-        if target == "document_date_only":
-            day = str(values.get("document_day", "") or "").strip()
-            month = str(values.get("document_month", "") or "").strip()
-            year = str(values.get("document_year", "") or "").strip()
-            if day and month and year:
-                return f"ngày {day} tháng {month} năm {year}."
-            return ""
-        if target == "document_day_with_trailing_space":
-            day = str(values.get("document_day", "") or "").strip()
-            return f"{day} " if day else ""
-        if target == "charter_capital_number_vnd":
-            return self._with_vnd(values.get("charter_capital_number", ""))
-        if target == "capital_total_ratio_number":
-            return self._capital_total_ratio(values)
-        if target == "member_capital_ratio_number":
-            ratio = str(values.get("member_capital_ratio", "") or "").strip()
-            return ratio.rstrip("% ").strip()
-        raw = str(values.get(target, "") or "").strip()
-        if target in self.DETAIL_ADDRESS_FIELDS:
-            if target.startswith("company_"):
-                return self._company_address_part(values, "detail")
-            return self._address_detail_only(raw)
-        if target in self.WARD_FIELDS:
-            if target.startswith("company_"):
-                return self._company_address_part(values, "ward")
-            return self._administrative_part_only(raw, {"xa", "phuong", "thi_tran"})
-        if target in self.PROVINCE_FIELDS:
-            if target.startswith("company_"):
-                return self._company_address_part(values, "province")
-            return self._normalize_province(self._administrative_part_only(raw, {"tinh", "thanh_pho"}))
-        if target in self.UPPERCASE_BOLD_FIELDS:
-            return raw.upper()
-        return raw
+        return self._context_builder().value_for_target(target, values)
 
     def _date_component(self, value: object, component: int) -> str:
-        parts = re.findall(r"\d+", str(value or ""))
-        if len(parts) != 3:
-            return ""
-        if component in (0, 1):
-            return parts[component].zfill(2)
-        return parts[component]
+        return self._value_formatter().date_component(value, component)
+
     def _company_address_part(self, values: dict[str, str], part: str) -> str:
-        full = str(values.get("company_address", "") or "").strip()
-        detail = str(values.get("company_address_detail", "") or "").strip()
-        ward = str(values.get("company_ward", "") or "").strip()
-        province = str(values.get("company_province", "") or "").strip()
-        has_admin_parts = bool(re.search(r"(?i)\b(xã|phường|thị trấn|đặc khu|tỉnh|thành phố)\b", full))
-        source = full if has_admin_parts else detail
-        if part == "detail":
-            return self._address_detail_only(source or detail)
-        if part == "ward":
-            parsed = self._administrative_part_only(source, {"xa", "phuong", "thi_tran", "dac_khu"})
-            return parsed if parsed != source or source else ward
-        parsed = self._normalize_province(self._administrative_part_only(source, {"tinh", "thanh_pho"}))
-        return parsed if parsed != source or source else province
+        return self._value_formatter().company_address_part(values, part)
 
     def _capital_total_ratio(self, values: dict[str, str]) -> str:
-        ratio = str(values.get("capital_total_ratio", "") or "").strip()
-        if ratio:
-            return ratio.rstrip("% ").strip()
-        member_count = self._member_count(values)
-        if member_count <= 1:
-            return "100"
-        return "100"
+        return self._value_formatter().capital_total_ratio(values)
 
     def _member_count(self, values: dict[str, str]) -> int:
-        explicit = self._money_number(values.get("member_count", "")) or self._money_number(
-            values.get("company_member_count", "")
-        )
-        if explicit:
-            return explicit
-        count = 0
-        for index in range(1, 21):
-            if str(values.get(f"member_{index}_full_name", "") or "").strip():
-                count += 1
-        return count or 1
+        return self._value_formatter().member_count(values)
 
     def _with_vnd(self, value: str) -> str:
-        text = str(value or "").strip()
-        if not text:
-            return ""
-        folded = self._fold(text)
-        if "vnd" in folded or "dong" in folded:
-            return text
-        return f"{text} VNĐ"
+        return self._value_formatter().with_vnd(value)
 
     def _address_detail_only(self, value: str) -> str:
-        parts = [part.strip(" ,.;") for part in re.split(r"[,;]", str(value or "")) if part.strip(" ,.;")]
-        kept: list[str] = []
-        blocked_prefixes = {"xa", "phuong", "thi_tran", "huyen", "quan", "thi_xa", "thanh_pho", "tinh"}
-        for part in parts:
-            normalized = self._normalize_key(part)
-            if any(normalized.startswith(prefix + "_") or normalized == prefix for prefix in blocked_prefixes):
-                continue
-            kept.append(part)
-        return ", ".join(kept) if kept else str(value or "").strip()
+        return self._value_formatter().address_detail_only(value)
 
     def _administrative_part_only(self, value: str, allowed_prefixes: set[str]) -> str:
-        text = str(value or "").strip()
-        if not text:
-            return ""
-        parts = [part.strip(" ,.;") for part in re.split(r"[,;]", text) if part.strip(" ,.;")]
-        for part in parts:
-            normalized = self._normalize_key(part)
-            if any(normalized.startswith(prefix + "_") or normalized == prefix for prefix in allowed_prefixes):
-                return part
-        return text
+        return self._value_formatter().administrative_part_only(value, allowed_prefixes)
 
     def _normalize_province(self, value: str) -> str:
-        text = str(value or "").strip()
-        if not text:
-            return ""
-        normalized = self._normalize_key(text)
-        for prefix in ("tinh_", "thanh_pho_"):
-            if normalized.startswith(prefix):
-                normalized = normalized[len(prefix) :]
-                break
-        return self.PROVINCE_AFTER_MERGER.get(normalized, text)
+        return self._value_formatter().normalize_province(value)
 
     def _replace_business_lines_tables_v2(
         self,
@@ -1917,36 +1726,17 @@ class DocxTemplateGenerator:
         return "100"
 
     def _money_number(self, value: str) -> int:
-        digits = re.sub(r"\D", "", str(value or ""))
-        return int(digits) if digits else 0
+        return self._value_formatter().money_number(value)
 
     @staticmethod
     def _business_line_indices(values: dict[str, str]) -> list[int]:
-        indices = {
-            int(match.group(1))
-            for key in values
-            if (match := re.match(r"^business_line_(\d+)_(?:name|detail|code|is_main)$", key))
-        }
-        return sorted(index for index in indices if index > 0)
+        return DocumentValueFormatter.business_line_indices(values)
 
     def _business_lines(self, values: dict[str, str]) -> list[dict[str, str | bool]]:
-        lines: list[dict[str, str | bool]] = []
-        for index in self._business_line_indices(values):
-            name = self._normalize_business_line_text(values.get(f"business_line_{index}_name", ""))
-            detail = self._normalize_business_line_text(values.get(f"business_line_{index}_detail", ""))
-            if detail:
-                name = f"{name}\n{detail}" if name else detail
-            code = re.sub(r"\D", "", values.get(f"business_line_{index}_code", ""))[:4]
-            is_main = bool(values.get(f"business_line_{index}_is_main", "").strip())
-            if name or code or is_main:
-                lines.append({"name": name, "code": code, "is_main": is_main})
-        return lines
+        return self._value_formatter().business_lines(values)
 
     def _normalize_business_line_text(self, value: str) -> str:
-        text = "\n".join(part.strip() for part in value.replace("\r", "\n").split("\n") if part.strip())
-        text = re.sub(r"\s+(Chi\s*tiết\s*:)", r"\n\1", text, flags=re.IGNORECASE)
-        text = re.sub(r"(?i)chi\s*tiết\s*:", "Chi tiết:", text)
-        return text
+        return self._value_formatter().normalize_business_line_text(value)
 
     def _set_cell_text(self, cell, value: str, bold: bool = False) -> None:
         """Set cell content without discarding template paragraph margins/styles."""
@@ -2234,52 +2024,29 @@ class DocxTemplateGenerator:
             paragraph.add_run(replaced)
 
     def _replace_split_placeholders_in_package(self, docx_path: Path, values: dict[str, str]) -> None:
-        tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".docx", dir=docx_path.parent)
-        tmp_path = Path(tmp_file.name)
-        tmp_file.close()
-
-        try:
-            with zipfile.ZipFile(docx_path, "r") as source_zip:
-                with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as target_zip:
-                    for item in source_zip.infolist():
-                        data = source_zip.read(item.filename)
-                        if item.filename.startswith("word/") and item.filename.endswith(".xml"):
-                            data = self._replace_split_placeholders_in_xml(data, values, docx_path.name, item.filename)
-                        target_zip.writestr(item, data)
-            tmp_path.replace(docx_path)
-        except Exception:
-            tmp_path.unlink(missing_ok=True)
-            raise
+        package_editor = getattr(self, "package_editor", DocxPackageEditor())
+        package_editor.rewrite_xml_parts(
+            docx_path,
+            lambda part_name, data: self._replace_split_placeholders_in_xml(
+                data,
+                values,
+                docx_path.name,
+                part_name,
+            ),
+        )
 
     def _replace_bookmarked_fields_in_package(self, docx_path: Path, values: dict[str, str]) -> None:
-        tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".docx", dir=docx_path.parent)
-        tmp_path = Path(tmp_file.name)
-        tmp_file.close()
-
-        changed = False
-        try:
-            with zipfile.ZipFile(docx_path, "r") as source_zip:
-                with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as target_zip:
-                    for item in source_zip.infolist():
-                        data = source_zip.read(item.filename)
-                        if item.filename.startswith("word/") and item.filename.endswith(".xml"):
-                            replaced = self._replace_bookmarked_fields_in_xml(
-                                data,
-                                values,
-                                docx_path.name,
-                                item.filename,
-                            )
-                            if replaced != data:
-                                changed = True
-                            data = replaced
-                        target_zip.writestr(item, data)
-            if changed:
-                tmp_path.replace(docx_path)
-            else:
-                tmp_path.unlink(missing_ok=True)
-        except Exception:
-            tmp_path.unlink(missing_ok=True)
-            raise
+        package_editor = getattr(self, "package_editor", DocxPackageEditor())
+        package_editor.rewrite_xml_parts(
+            docx_path,
+            lambda part_name, data: self._replace_bookmarked_fields_in_xml(
+                data,
+                values,
+                docx_path.name,
+                part_name,
+            ),
+            replace_only_if_changed=True,
+        )
 
     def _replace_bookmarked_fields_in_xml(
         self,

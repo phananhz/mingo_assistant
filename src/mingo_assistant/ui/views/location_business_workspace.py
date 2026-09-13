@@ -213,40 +213,85 @@ class LocationBusinessWorkspace(BusinessRegistrationWorkspace):
 
     def _build_location_manager_form_section(self, title: str, fields: list[tuple[str, str]]) -> QWidget:
         section = QGroupBox(title)
-        grid = QGridLayout(section)
-        grid.setHorizontalSpacing(18)
-        grid.setVerticalSpacing(10)
-        grid.setAlignment(Qt.AlignTop)
-        grid.setColumnStretch(1, 1)
-        grid.setColumnStretch(3, 1)
+        layout = QVBoxLayout(section)
+        layout.setSpacing(14)
 
         selector = self._build_person_fill_selector("location_manager", title)
-        grid.addWidget(selector, 0, 0, 1, 4)
+        layout.addWidget(selector)
         self._location_manager_vietnamese_widgets: list[QWidget] = []
-        self._location_manager_foreign_widgets: list[QWidget] = []
-        foreign_keys = {
+        field_labels = dict(fields)
+
+        primary = QGroupBox("Phần A · Thông tin định danh và liên lạc")
+        primary_layout = QGridLayout(primary)
+        primary_layout.setHorizontalSpacing(18)
+        primary_layout.setVerticalSpacing(10)
+        primary_layout.setColumnStretch(1, 1)
+        primary_layout.setColumnStretch(3, 1)
+        layout.addWidget(primary)
+
+        contact = QGroupBox("Địa chỉ liên lạc")
+        contact_layout = QGridLayout(contact)
+        contact_layout.setHorizontalSpacing(18)
+        contact_layout.setVerticalSpacing(10)
+        contact_layout.setColumnStretch(1, 1)
+        contact_layout.setColumnStretch(3, 1)
+        layout.addWidget(contact)
+
+        supplement = QGroupBox("Phần B · Kê khai bổ sung khi không có số định danh cá nhân")
+        supplement_layout = QVBoxLayout(supplement)
+        note = QLabel(
+            "Trường hợp không có số định danh cá nhân hoặc việc kết nối giữa Cơ sở dữ liệu "
+            "quốc gia về đăng ký doanh nghiệp với Cơ sở dữ liệu quốc gia về dân cư bị gián đoạn "
+            "thì đề nghị kê khai các thông tin cá nhân dưới đây."
+        )
+        note.setObjectName("LocationManagerSupplementNote")
+        note.setWordWrap(True)
+        note.setStyleSheet("font-style: italic; padding: 4px 2px 8px 2px; border-bottom: 1px solid #9e8ad6;")
+        supplement_layout.addWidget(note)
+        supplement_grid = QGridLayout()
+        supplement_grid.setHorizontalSpacing(18)
+        supplement_grid.setVerticalSpacing(10)
+        supplement_grid.setColumnStretch(1, 1)
+        supplement_grid.setColumnStretch(3, 1)
+        supplement_layout.addLayout(supplement_grid)
+        layout.addWidget(supplement)
+
+        def add_field(grid: QGridLayout, row: int, column: int, key: str, label_text: str | None = None) -> None:
+            label = QLabel(label_text or field_labels[key])
+            label.setObjectName("FilterLabel")
+            field = self._create_field(key)
+            grid.addWidget(label, row, column)
+            grid.addWidget(field, row, column + 1)
+            if key == "location_manager_id_number":
+                self._location_manager_vietnamese_widgets.extend((label, field))
+
+        add_field(primary_layout, 0, 0, "location_manager_person_type")
+        add_field(primary_layout, 0, 2, "location_manager_full_name")
+        add_field(primary_layout, 1, 0, "location_manager_date_of_birth")
+        add_field(primary_layout, 1, 2, "location_manager_gender")
+        add_field(primary_layout, 2, 0, "location_manager_id_number")
+
+        add_field(contact_layout, 0, 0, "location_manager_address_detail")
+        add_field(contact_layout, 0, 2, "location_manager_ward")
+        add_field(contact_layout, 1, 0, "location_manager_province")
+        add_field(contact_layout, 1, 2, "location_manager_nationality", "Quốc gia liên lạc")
+
+        supplement_keys = (
             "location_manager_ethnicity",
             "location_manager_passport_number",
             "location_manager_passport_issue_date",
             "location_manager_passport_issue_place",
             "location_manager_foreign_address_detail",
             "location_manager_foreign_country",
+        )
+        supplement_labels = {
+            "location_manager_foreign_address_detail": "Địa chỉ thường trú",
+            "location_manager_foreign_country": "Quốc gia thường trú",
         }
-        vietnamese_keys = {
-            "location_manager_id_number",
-        }
-        for index, (key, label_text) in enumerate(fields):
-            row = 1 + index // 2
+        for index, key in enumerate(supplement_keys):
+            row = index // 2
             column = (index % 2) * 2
-            label = QLabel(label_text)
-            label.setObjectName("FilterLabel")
-            field = self._create_field(key)
-            grid.addWidget(label, row, column)
-            grid.addWidget(field, row, column + 1)
-            if key in foreign_keys:
-                self._location_manager_foreign_widgets.extend((label, field))
-            elif key in vietnamese_keys:
-                self._location_manager_vietnamese_widgets.extend((label, field))
+            add_field(supplement_grid, row, column, key, supplement_labels.get(key))
         self._sync_location_manager_person_type()
         return section
 
@@ -255,9 +300,8 @@ class LocationBusinessWorkspace(BusinessRegistrationWorkspace):
         is_foreign = isinstance(field, QComboBox) and field.currentIndex() == 1
         for widget in getattr(self, "_location_manager_vietnamese_widgets", []):
             widget.setVisible(not is_foreign)
-        for widget in getattr(self, "_location_manager_foreign_widgets", []):
-            widget.setVisible(is_foreign)
-        # Export filters inactive fields; retain draft input when switching type.
+        # Keep the supplemental panel visible for both person types. It mirrors
+        # the framed section in Word and is used when an ID is unavailable.
 
     def _clear_location_manager_fields(self, keys: tuple[str, ...]) -> None:
         for key in keys:
@@ -334,12 +378,8 @@ class LocationBusinessWorkspace(BusinessRegistrationWorkspace):
         card_values: dict[str, str],
         apply_to_form: bool = True,
     ) -> None:
-        """Apply a scan to its selected role; organization data stays separate."""
+        """Keep a scan as an explicit dropdown source for both legal roles."""
         super()._apply_cccd_values_to_current_person(card_values, apply_to_form=False)
-        if apply_to_form:
-            person = self.ocr_people[self.current_person_index]
-            target = person.role if person.role in {"legal_representative", "authorized_person"} else "location_manager"
-            self._fill_section_from_person(target, person)
 
     def _save_organization_profile(self) -> None:
         """Save recognized organization data for this location dossier."""
@@ -508,21 +548,14 @@ class LocationBusinessWorkspace(BusinessRegistrationWorkspace):
         values["tax_accounting_dependent_x"] = "X" if values.get("tax_accounting_method") == "Hạch toán phụ thuộc" else ""
         values["tax_bot_project_x"] = "" if values.get("tax_bot_project", "").strip() else "X"
         values["tax_vat_deduction_x"] = "X" if values.get("tax_vat_method") == "Khấu trừ" else ""
-        foreign_keys = (
-            "location_manager_ethnicity", "location_manager_passport_number",
-            "location_manager_passport_issue_date", "location_manager_passport_issue_place",
-            "location_manager_foreign_address_detail", "location_manager_foreign_country",
-        )
-        # The identity number is Vietnam-only.  The four contact-address
-        # fields are shared by both person types and must remain available for
-        # a foreign location manager as well.
+        # The identity number is Vietnam-only.  Supplemental fields remain
+        # available for either person type because the Word form explicitly
+        # requires them when a personal ID is unavailable.
         vietnamese_only_keys = ("location_manager_id_number",)
         if values.get("location_manager_person_type") == "Người nước ngoài":
             for key in vietnamese_only_keys:
                 values[key] = ""
         else:
-            for key in foreign_keys:
-                values[key] = ""
             values.setdefault("location_manager_nationality", "Việt Nam")
         values.setdefault("tax_labor_count", "1")
         return values
@@ -559,6 +592,16 @@ class LocationBusinessWorkspace(BusinessRegistrationWorkspace):
         if not any(values.get(f"business_line_{index}_name", "").strip() for index in range(1, 12)):
             missing.append("Ít nhất một ngành nghề kinh doanh")
         return missing
+
+    def _validation_issues(self, values: dict[str, str]) -> list[str]:
+        """Validate the location dossier, not the company-establishment form.
+
+        The parent workspace validates capital, owners, and company-registration
+        fields. Those fields are intentionally absent from a business-location
+        dossier and must not block its Word export.
+        """
+        return self._missing_required_fields(values)
+
     def _document_generator_class(self) -> type:
         return DependentUnitTemplateGenerator
 
@@ -578,7 +621,7 @@ class LocationBusinessWorkspace(BusinessRegistrationWorkspace):
         return folder_name[:120].rstrip(" .") or "ho_so_dia_diem_kinh_doanh"
 
     def _export_version_label(self, case_export_dir: Path) -> str:
-        return "H\u1ed3 s\u01a1 hi\u1ec7n t\u1ea1i"
+        return f"L\u1ea7n xu\u1ea5t {datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
 
     def _export_output_dir(
         self,
@@ -587,8 +630,14 @@ class LocationBusinessWorkspace(BusinessRegistrationWorkspace):
         case_name: str,
         version_name: str,
     ) -> Path:
-        """Write the three Word files directly into the company folder."""
-        return case_export_dir
+        """Use a fresh version folder instead of overwriting a DOCX open in Word."""
+        safe_name = self._safe_export_folder_name(version_name)
+        candidate = case_export_dir / safe_name
+        suffix = 2
+        while candidate.exists():
+            candidate = case_export_dir / f"{safe_name} ({suffix})"
+            suffix += 1
+        return candidate
 
     def _next_export_versions(
         self,

@@ -25,8 +25,8 @@ class OrganizationDocumentResult:
 class OrganizationDocumentService:
     """Extract organization-owner fields from common Vietnamese business PDFs."""
 
-    def __init__(self) -> None:
-        self.address_parser = AddressParser()
+    def __init__(self, address_parser: AddressParser | None = None) -> None:
+        self.address_parser = address_parser or AddressParser()
 
     def extract_pdf(self, path: str | Path, progress_callback: ProgressCallback | None = None) -> OrganizationDocumentResult:
         document_path = Path(path)

@@ -3,9 +3,12 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 
+from mingo_assistant.app.container import AppContainer
+from mingo_assistant.app.lifecycle import SingleInstanceGuard
 from mingo_assistant.app.paths import get_app_paths, load_settings, save_settings
+from mingo_assistant.core.errors import CorruptDataError
 from mingo_assistant.ui.main_window import MainWindow
 from mingo_assistant.ui.styles import (
     THEME_OPTIONS,
@@ -43,6 +46,14 @@ def main() -> int:
     if app_icon_path.is_file():
         app.setWindowIcon(QIcon(str(app_icon_path)))
     paths.ensure_user_dirs()
+    instance_guard = SingleInstanceGuard(paths.user_data_root / ".instance.lock")
+    if not instance_guard.acquire():
+        QMessageBox.information(
+            None,
+            "Min Assistant đang chạy",
+            "Min Assistant đã được mở. Vui lòng sử dụng cửa sổ hiện có để tránh ghi đè dữ liệu.",
+        )
+        return 0
     settings = load_settings(paths)
     system_is_dark = False
     try:
@@ -72,8 +83,31 @@ def main() -> int:
             glassmorphism=settings.get("glassmorphism", "false").lower() in ("true", "1"),
         )
     )
-    window = MainWindow(app_paths=paths)
+    container = AppContainer.build(paths)
+    try:
+        window = MainWindow(
+            app_paths=paths,
+            case_repository=container.case_repository,
+            case_use_cases=container.case_use_cases,
+            authorized_person_repository=container.authorized_person_repository,
+            authorized_person_use_cases=container.authorized_person_use_cases,
+            registration_services=container.registration_services,
+            industry_catalog=container.industry_catalog,
+        )
+    except CorruptDataError as exc:
+        backup_text = f"\n\nBản sao phục hồi: {exc.backup_path}" if exc.backup_path else ""
+        QMessageBox.critical(
+            None,
+            "Không thể đọc dữ liệu hồ sơ",
+            "Tệp dữ liệu hồ sơ bị hỏng. Ứng dụng đã giữ nguyên tệp gốc và không ghi đè."
+            f"{backup_text}",
+        )
+        instance_guard.release()
+        return 2
     show_startup_splash(app, window)
     _prepare_storage_location(paths)
 
-    return app.exec()
+    try:
+        return app.exec()
+    finally:
+        instance_guard.release()

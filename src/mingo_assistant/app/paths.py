@@ -34,6 +34,10 @@ class AppPaths:
         return self.user_data_root / "authorized_person.json"
 
     @property
+    def authorized_person_defaults_file(self) -> Path:
+        return self.bundle_root / 'assets' / 'defaults' / 'authorized_person_profiles.json'
+
+    @property
     def personal_profiles_file(self) -> Path:
         return self.user_data_root / "personal_profiles.json"
 

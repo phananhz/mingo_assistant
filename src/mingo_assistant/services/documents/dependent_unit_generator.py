@@ -1,7 +1,6 @@
 """Template-safe generation for dependent-unit procedures."""
 from __future__ import annotations
 
-import json
 import re
 import shutil
 import tempfile
@@ -16,6 +15,7 @@ from docx.enum.text import WD_COLOR_INDEX
 from docx.oxml.ns import qn
 
 from mingo_assistant.services.documents.docx_generator import DocxTemplateGenerator, GeneratedDocument, GenerationResult
+from mingo_assistant.services.documents.template_manifest import TemplateManifest
 
 
 class DependentUnitTemplateGenerator(DocxTemplateGenerator):
@@ -39,7 +39,7 @@ class DependentUnitTemplateGenerator(DocxTemplateGenerator):
     def __init__(self, template_dir: Path, export_root: Path) -> None:
         self.template_dir = template_dir
         self.export_root = export_root
-        self._manifest_cache: dict[str, object] | None = None
+        self.manifest = TemplateManifest(template_dir / "template_manifest.json")
 
     def generate(self, values: dict[str, str], case_name: str, output_dir: Path | None = None) -> GenerationResult:
         if output_dir is None:
@@ -114,21 +114,18 @@ class DependentUnitTemplateGenerator(DocxTemplateGenerator):
         return self._fold(str(values.get("legal_representative_person_type", "") or "")).strip() == "nguoi nuoc ngoai"
 
     def _manifest(self) -> dict[str, object]:
-        if self._manifest_cache is not None:
-            return self._manifest_cache
-        path = self.template_dir / "template_manifest.json"
-        if not path.exists():
-            self._manifest_cache = {}
-            return self._manifest_cache
-        with path.open("r", encoding="utf-8-sig") as file:
-            loaded = json.load(file)
-        self._manifest_cache = loaded if isinstance(loaded, dict) else {}
-        return self._manifest_cache
+        manifest = getattr(self, "manifest", None)
+        if manifest is None:
+            manifest = TemplateManifest(self.template_dir / "template_manifest.json")
+            self.manifest = manifest
+        return manifest.load()
 
     def _config(self, template_name: str) -> dict[str, object]:
-        templates = self._manifest().get("templates", {})
-        config = templates.get(template_name, {}) if isinstance(templates, dict) else {}
-        return config if isinstance(config, dict) else {}
+        manifest = getattr(self, "manifest", None)
+        if manifest is None:
+            self._manifest()
+            manifest = self.manifest
+        return manifest.template(template_name)
 
     def _mode(self, template_name: str) -> str:
         return str(self._config(template_name).get("mode", "copy"))

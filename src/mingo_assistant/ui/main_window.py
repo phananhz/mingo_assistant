@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 from uuid import uuid4
@@ -45,8 +44,11 @@ from PySide6.QtGui import (
 
 from mingo_assistant import __version__
 from mingo_assistant.app.paths import AppPaths, get_app_paths, load_settings, save_settings
-from mingo_assistant.infrastructure.storage import read_json, write_json_atomic
+from mingo_assistant.application.business_registration import BusinessRegistrationServices
+from mingo_assistant.application.cases import CaseUseCases
+from mingo_assistant.application.profiles import AuthorizedPersonUseCases
 from mingo_assistant.models.case import CaseSummary
+from mingo_assistant.repositories.authorized_person_repository import AuthorizedPersonProfileRepository
 from mingo_assistant.repositories.case_repository import CaseRepository
 from mingo_assistant.services.business_lines.industry_lookup import IndustryCatalog, IndustryRow
 from mingo_assistant.ui.dialogs.settings_dialog import SettingsDialog, SettingsView
@@ -74,43 +76,6 @@ NAV_ITEMS = [
     ("people", "Kho cá nhân/tổ chức"),
     ("trash", "Thùng rác"),
 ]
-
-
-BUILT_IN_AUTHORIZED_PERSON_PROFILES: tuple[dict[str, str], ...] = (
-    {
-        "id": "builtin-duong-hong-ngoc",
-        "authorized_person_full_name": "D\u01b0\u01a1ng H\u1ed3ng Ng\u1ecdc",
-        "authorized_person_gender": "N\u1eef",
-        "authorized_person_id_number": "068303008330",
-        "authorized_person_issue_date": "12/06/2021",
-        "authorized_person_issue_place": "C\u1ee5c C\u1ea3nh s\u00e1t Qu\u1ea3n l\u00fd H\u00e0nh ch\u00ednh v\u1ec1 Tr\u1eadt t\u1ef1 X\u00e3 h\u1ed9i",
-        "authorized_person_contact_address": "S\u1ed1 43-45 \u0110\u01b0\u1eddng s\u1ed1 7, Khu Ph\u1ed1 1, Ph\u01b0\u1eddng Hi\u1ec7p B\u00ecnh, Th\u00e0nh ph\u1ed1 H\u1ed3 Ch\u00ed Minh",
-        "authorized_person_phone": "0986602511",
-        "authorized_person_email": "ngocduonghong21@gmail.com",
-    },
-    {
-        "id": "builtin-mai-xuan-luong",
-        "authorized_person_full_name": "Mai Xu\u00e2n L\u01b0\u01a1ng",
-        "authorized_person_gender": "Nam",
-        "authorized_person_id_number": "040095033863",
-        "authorized_person_issue_date": "25/09/2022",
-        "authorized_person_issue_place": "C\u1ee5c C\u1ea3nh s\u00e1t Qu\u1ea3n l\u00fd H\u00e0nh ch\u00ednh v\u1ec1 Tr\u1eadt t\u1ef1 X\u00e3 h\u1ed9i",
-        "authorized_person_contact_address": "S\u1ed1 43-45 \u0110\u01b0\u1eddng s\u1ed1 7, Khu Ph\u1ed1 1, Ph\u01b0\u1eddng Hi\u1ec7p B\u00ecnh, Th\u00e0nh ph\u1ed1 H\u1ed3 Ch\u00ed Minh",
-        "authorized_person_phone": "0973584275",
-        "authorized_person_email": "luongmx1710@gmail.com",
-    },
-    {
-        "id": "builtin-nguyen-thi-minh-ngoc",
-        "authorized_person_full_name": "Nguy\u1ec5n Th\u1ecb Minh Ng\u1ecdc",
-        "authorized_person_gender": "N\u1eef",
-        "authorized_person_id_number": "031199001726",
-        "authorized_person_issue_date": "09/12/2024",
-        "authorized_person_issue_place": "B\u1ed9 C\u00f4ng an",
-        "authorized_person_contact_address": "S\u1ed1 43-45 \u0110\u01b0\u1eddng s\u1ed1 7, Khu Ph\u1ed1 1, Ph\u01b0\u1eddng Hi\u1ec7p B\u00ecnh, Th\u00e0nh ph\u1ed1 H\u1ed3 Ch\u00ed Minh",
-        "authorized_person_phone": "0879247679",
-        "authorized_person_email": "minhhngoc0304.huynh@gmail.com",
-    },
-)
 
 
 class TechImageSidebar(QFrame):
@@ -243,7 +208,16 @@ class MainWindow(QMainWindow):
     CARD_WIDTH = 220
     CARD_GAP = 18
 
-    def __init__(self, app_paths: AppPaths | None = None) -> None:
+    def __init__(
+        self,
+        app_paths: AppPaths | None = None,
+        case_repository: CaseRepository | None = None,
+        case_use_cases: CaseUseCases | None = None,
+        authorized_person_repository: AuthorizedPersonProfileRepository | None = None,
+        authorized_person_use_cases: AuthorizedPersonUseCases | None = None,
+        registration_services: BusinessRegistrationServices | None = None,
+        industry_catalog: IndustryCatalog | None = None,
+    ) -> None:
         super().__init__()
         self.app_paths = app_paths or get_app_paths()
         self.setWindowTitle(f"Min Assistant v{__version__}")
@@ -254,8 +228,20 @@ class MainWindow(QMainWindow):
         self.resize(1280, 760)
         self.setMinimumSize(760, 520)
 
-        self.case_repository = CaseRepository(self.app_paths.cases_file)
-        self.cases: list[CaseSummary] = self.case_repository.list_cases()
+        self.case_repository = case_repository or CaseRepository(self.app_paths.cases_file)
+        self.case_use_cases = case_use_cases or CaseUseCases(self.case_repository)
+        self.authorized_person_repository = authorized_person_repository or AuthorizedPersonProfileRepository(
+            self.app_paths.authorized_person_file,
+            self.app_paths.authorized_person_defaults_file,
+        )
+        self.authorized_person_use_cases = authorized_person_use_cases or AuthorizedPersonUseCases(
+            self.authorized_person_repository
+        )
+        self.registration_services = registration_services or BusinessRegistrationServices.from_project(
+            self.app_paths.bundle_root
+        )
+        self.industry_catalog = industry_catalog or self.registration_services.industry_catalog
+        self.cases: list[CaseSummary] = self.case_use_cases.list_active()
         self.nav_buttons: dict[str, QPushButton] = {}
         self.top_nav_buttons: dict[str, QPushButton] = {}
         self.slim_nav_buttons: dict[str, QPushButton] = {}
@@ -264,12 +250,12 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         self.current_workspace: BusinessRegistrationWorkspace | None = None
         self.current_documents_view: BusinessRegistrationDocumentsView | None = None
-        self.authorized_person_path = self.app_paths.authorized_person_file
         self.authorized_person_profiles: list[dict[str, str]] = []
         self.authorized_person_selected_id = ""
         self.authorized_person_fields: dict[str, QLineEdit | QTextEdit] = {}
         self.authorized_person_cards_layout: QGridLayout | None = None
         self.authorized_person_save_button: QPushButton | None = None
+        self._authorized_recovery_warned = False
         self._last_applied_theme: tuple | None = None
         self.macos_traffic_lights: QFrame | None = None
         self.settings_page: QWidget | None = None
@@ -300,7 +286,6 @@ class MainWindow(QMainWindow):
         self.dependent_cases_count_label: QLabel | None = None
         self.trash_container = QWidget()
         self.trash_layout = QVBoxLayout(self.trash_container)
-        self.industry_catalog = IndustryCatalog.load_from_project(self.app_paths.bundle_root)
         self.industry_search_input = QLineEdit()
         self.industry_table = QTableWidget()
         self.industry_status_label = QLabel()
@@ -1689,8 +1674,8 @@ class MainWindow(QMainWindow):
         )
         if answer != QMessageBox.Yes:
             return
-        self.case_repository.soft_delete_case(case.id)
-        self.cases = self.case_repository.list_cases()
+        self.case_use_cases.move_to_trash(case.id)
+        self.cases = self.case_use_cases.list_active()
         self._refresh_cases()
 
     def _refresh_trash(self) -> None:
@@ -1700,7 +1685,7 @@ class MainWindow(QMainWindow):
             if widget is not None:
                 widget.deleteLater()
 
-        deleted_cases = self.case_repository.list_deleted_cases()
+        deleted_cases = self.case_use_cases.list_deleted()
         if not deleted_cases:
             empty = QLabel("Thùng rác đang trống.")
             empty.setObjectName("EmptyDescription")
@@ -1743,8 +1728,8 @@ class MainWindow(QMainWindow):
         return row
 
     def _restore_case(self, case: CaseSummary) -> None:
-        self.case_repository.restore_case(case.id)
-        self.cases = self.case_repository.list_cases()
+        self.case_use_cases.restore(case.id)
+        self.cases = self.case_use_cases.list_active()
         self._refresh_trash()
 
     def _delete_case_permanently(self, case: CaseSummary) -> None:
@@ -1757,12 +1742,12 @@ class MainWindow(QMainWindow):
         )
         if answer != QMessageBox.Yes:
             return
-        self.case_repository.delete_case_permanently(case.id)
-        self.cases = self.case_repository.list_cases()
+        self.case_use_cases.delete_permanently(case.id)
+        self.cases = self.case_use_cases.list_active()
         self._refresh_trash()
 
     def _empty_trash(self) -> None:
-        deleted_cases = self.case_repository.list_deleted_cases()
+        deleted_cases = self.case_use_cases.list_deleted()
         if not deleted_cases:
             QMessageBox.information(self, "Thùng rác", "Thùng rác đang trống.")
             return
@@ -1775,8 +1760,8 @@ class MainWindow(QMainWindow):
         )
         if answer != QMessageBox.Yes:
             return
-        self.case_repository.empty_trash()
-        self.cases = self.case_repository.list_cases()
+        self.case_use_cases.empty_trash()
+        self.cases = self.case_use_cases.list_active()
         self._refresh_trash()
 
     def _build_case_card(self, case: CaseSummary) -> QWidget:
@@ -2533,50 +2518,43 @@ class MainWindow(QMainWindow):
         return card
 
     def _load_authorized_person(self) -> dict[str, str]:
-        payload = self._load_authorized_person_profiles()
-        selected = self._authorized_profile_by_id(payload["profiles"], str(payload.get("selected_profile_id", "")))
-        selected = selected or (payload["profiles"][0] if payload["profiles"] else {})
-        result = dict(selected)
-        result["__profiles"] = payload["profiles"]
-        return result
+        return self._authorized_profile_operations().selected()
 
-    @staticmethod
-    def _builtin_authorized_person_profiles() -> list[dict[str, str]]:
-        return [dict(profile) for profile in BUILT_IN_AUTHORIZED_PERSON_PROFILES]
+    def _authorized_profile_operations(self) -> AuthorizedPersonUseCases:
+        operations = getattr(self, "authorized_person_use_cases", None)
+        if operations is None:
+            operations = AuthorizedPersonUseCases(self.authorized_person_repository)
+            self.authorized_person_use_cases = operations
+        return operations
 
-    @staticmethod
-    def _is_builtin_authorized_person_profile(profile_id: str) -> bool:
-        return any(profile_id == profile["id"] for profile in BUILT_IN_AUTHORIZED_PERSON_PROFILES)
+    def _builtin_authorized_person_profiles(self) -> list[dict[str, str]]:
+        return self._authorized_profile_operations().defaults()
+
+    def _is_builtin_authorized_person_profile(self, profile_id: str) -> bool:
+        return self._authorized_profile_operations().is_default(profile_id)
 
     def _merge_authorized_person_profiles(
         self, selected_profile_id: str, profiles: list[dict[str, str]]
     ) -> dict[str, object]:
-        built_in_profiles = self._builtin_authorized_person_profiles()
-        saved_profiles = {str(profile.get("id", "")): profile for profile in profiles}
-        for profile in built_in_profiles:
-            saved_profiles.pop(profile["id"], None)
-        merged_profiles = built_in_profiles + list(saved_profiles.values())
-        if not self._authorized_profile_by_id(merged_profiles, selected_profile_id):
-            selected_profile_id = built_in_profiles[0]["id"]
-        return {"selected_profile_id": selected_profile_id, "profiles": merged_profiles}
+        return self._authorized_profile_operations().merge(selected_profile_id, profiles)
 
     def _load_authorized_person_profiles(self) -> dict[str, object]:
-        selected_profile_id = ""
-        profiles: list[dict[str, str]] = []
-        if self.authorized_person_path.exists():
-            try:
-                raw = read_json(self.authorized_person_path)
-            except (OSError, json.JSONDecodeError):
-                raw = {}
-            if isinstance(raw, dict) and isinstance(raw.get("profiles"), list):
-                selected_profile_id = str(raw.get("selected_profile_id", ""))
-                profiles = [item for item in raw["profiles"] if isinstance(item, dict)]
-            elif isinstance(raw, dict) and any(str(key).startswith("authorized_person_") for key in raw):
-                profile = {str(key): str(value) for key, value in raw.items()}
-                profile.setdefault("id", str(uuid4()))
-                selected_profile_id = profile["id"]
-                profiles = [profile]
-        return self._merge_authorized_person_profiles(selected_profile_id, profiles)
+        payload = self._authorized_profile_operations().load()
+        recovery_error = self.authorized_person_repository.last_recovery_error
+        if recovery_error is not None and not getattr(self, "_authorized_recovery_warned", False):
+            self._authorized_recovery_warned = True
+            backup_text = (
+                f"\nBản sao phục hồi: {recovery_error.backup_path}"
+                if recovery_error.backup_path is not None
+                else ""
+            )
+            QMessageBox.warning(
+                self,
+                "Dữ liệu profile cần phục hồi",
+                "Tệp profile trên máy bị hỏng nên ứng dụng đang dùng 3 profile mặc định."
+                f"\nTệp gốc không bị xóa hoặc ghi đè.{backup_text}",
+            )
+        return payload
 
     def _authorized_profile_by_id(self, profiles: list[dict[str, str]], profile_id: str) -> dict[str, str] | None:
         for profile in profiles:
@@ -2585,12 +2563,7 @@ class MainWindow(QMainWindow):
         return None
 
     def _save_authorized_person_profiles(self, payload: dict[str, object]) -> None:
-        selected_profile_id = str(payload.get("selected_profile_id", ""))
-        profiles = [profile for profile in payload.get("profiles", []) if isinstance(profile, dict)]
-        write_json_atomic(
-            self.authorized_person_path,
-            {"selected_profile_id": selected_profile_id, "profiles": profiles},
-        )
+        self._authorized_profile_operations().save(payload)
 
     def _save_authorized_person(self, values: dict[str, str]) -> None:
         values.setdefault("id", str(uuid4()))
@@ -2598,7 +2571,7 @@ class MainWindow(QMainWindow):
 
     def _open_case_workspace(self, case: CaseSummary | None) -> None:
         if case is not None:
-            case = self.case_repository.get_case(case.id) or case
+            case = self.case_use_cases.get(case.id) or case
         if case is not None and case.case_type == LOCATION_CASE_TYPE:
             self._open_location_business_workspace(case)
             return
@@ -2620,6 +2593,7 @@ class MainWindow(QMainWindow):
             industry_catalog=self.industry_catalog,
             bundle_root=self.app_paths.bundle_root,
             default_export_root=self.app_paths.documents_root,
+            services=self.registration_services,
         )
         self.stack.addWidget(self.current_workspace)
         self.stack.setCurrentWidget(self.current_workspace)
@@ -2630,7 +2604,7 @@ class MainWindow(QMainWindow):
 
     def _open_location_business_workspace(self, case: CaseSummary | None) -> None:
         if case is not None:
-            case = self.case_repository.get_case(case.id) or case
+            case = self.case_use_cases.get(case.id) or case
         if self.current_workspace is not None:
             self.stack.removeWidget(self.current_workspace)
             self.current_workspace.deleteLater()
@@ -2648,6 +2622,7 @@ class MainWindow(QMainWindow):
             industry_catalog=self.industry_catalog,
             bundle_root=self.app_paths.bundle_root,
             default_export_root=self.app_paths.documents_root,
+            services=self.registration_services,
         )
         self.stack.addWidget(self.current_workspace)
         self.stack.setCurrentWidget(self.current_workspace)
@@ -2656,7 +2631,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, "slim_sidebar") and self.slim_sidebar is not None:
             self.slim_sidebar.setVisible(False)
     def _open_case_documents(self, case: CaseSummary) -> None:
-        case = self.case_repository.get_case(case.id) or case
+        case = self.case_use_cases.get(case.id) or case
         if self.current_workspace is not None:
             self.stack.removeWidget(self.current_workspace)
             self.current_workspace.deleteLater()
@@ -2669,7 +2644,7 @@ class MainWindow(QMainWindow):
         self.current_documents_view = BusinessRegistrationDocumentsView(
             case=case,
             on_back=self._return_to_dependent_units if case.case_type == LOCATION_CASE_TYPE else self._return_to_business_list,
-            on_edit=lambda selected_id=case.id: self._open_case_workspace(self.case_repository.get_case(selected_id) or case),
+            on_edit=lambda selected_id=case.id: self._open_case_workspace(self.case_use_cases.get(selected_id) or case),
         )
         self.stack.addWidget(self.current_documents_view)
         self.stack.setCurrentWidget(self.current_documents_view)
@@ -2679,17 +2654,17 @@ class MainWindow(QMainWindow):
             self.slim_sidebar.setVisible(False)
 
     def _return_to_business_list(self) -> None:
-        self.cases = self.case_repository.list_cases()
+        self.cases = self.case_use_cases.list_active()
         self._refresh_cases()
         self.stack.setCurrentWidget(self.business_page)
         self._apply_layout_structure(self.current_layout)
 
     def _return_to_dependent_units(self) -> None:
-        self.cases = self.case_repository.list_cases()
+        self.cases = self.case_use_cases.list_active()
         self._refresh_cases()
         self.stack.setCurrentWidget(self.dependent_units_page)
         self._apply_layout_structure(self.current_layout)
     def _save_case_from_workspace(self, case: CaseSummary) -> None:
-        self.case_repository.save_case(case)
-        self.cases = self.case_repository.list_cases()
+        self.case_use_cases.save(case)
+        self.cases = self.case_use_cases.list_active()
         self._refresh_cases()

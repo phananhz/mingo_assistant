@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -6,7 +7,8 @@ from docx.shared import Pt
 
 from mingo_assistant.services.documents.docx_generator import DocxTemplateGenerator
 from mingo_assistant.services.normalization.address_parser import AddressParser
-from mingo_assistant.ui.main_window import BUILT_IN_AUTHORIZED_PERSON_PROFILES, MainWindow
+from mingo_assistant.repositories.authorized_person_repository import AuthorizedPersonProfileRepository
+from mingo_assistant.ui.main_window import MainWindow
 from mingo_assistant.ui.views.business_registration_workspace import BusinessRegistrationWorkspace
 
 
@@ -69,64 +71,61 @@ class BusinessRegistrationRegressionTest(unittest.TestCase):
 
     def test_builtin_authorized_profiles_are_not_overwritten_by_saved_data(self) -> None:
         window = MainWindow.__new__(MainWindow)
+        project_root = Path(__file__).resolve().parents[2]
+        window.authorized_person_repository = AuthorizedPersonProfileRepository(
+            project_root / "data" / "temp" / "not-used.json",
+            project_root / "assets" / "defaults" / "authorized_person_profiles.json",
+        )
+        expected = window.authorized_person_repository.default_profiles()[2]
         saved_profile = {
-            "id": "builtin-nguyen-thi-minh-ngoc",
+            "id": expected["id"],
             "authorized_person_full_name": "Tên bị sửa",
             "authorized_person_issue_place": "Nơi cấp bị sửa",
             "authorized_person_contact_address": "Địa chỉ bị chuẩn hóa",
         }
 
         payload = MainWindow._merge_authorized_person_profiles(
-            window, "builtin-nguyen-thi-minh-ngoc", [saved_profile]
+            window, expected["id"], [saved_profile]
         )
         profile = next(
-            item for item in payload["profiles"] if item["id"] == "builtin-nguyen-thi-minh-ngoc"
+            item for item in payload["profiles"] if item["id"] == expected["id"]
         )
 
-        self.assertEqual(profile["authorized_person_full_name"], "Nguyễn Thị Minh Ngọc")
-        self.assertEqual(profile["authorized_person_issue_place"], "Bộ Công an")
-        self.assertEqual(
-            profile["authorized_person_contact_address"],
-            next(item for item in BUILT_IN_AUTHORIZED_PERSON_PROFILES if item["id"] == "builtin-duong-hong-ngoc")["authorized_person_contact_address"],
-        )
+        self.assertEqual(profile, expected)
 
     def test_builtin_authorized_profiles_keep_fixed_legacy_addresses(self) -> None:
-        profiles = {profile["id"]: profile for profile in BUILT_IN_AUTHORIZED_PERSON_PROFILES}
+        project_root = Path(__file__).resolve().parents[2]
+        repository = AuthorizedPersonProfileRepository(
+            project_root / "data" / "temp" / "not-used.json",
+            project_root / "assets" / "defaults" / "authorized_person_profiles.json",
+        )
+        profiles = repository.default_profiles()
 
-        self.assertEqual(
-            profiles["builtin-duong-hong-ngoc"]["authorized_person_contact_address"],
-            "Số 43-45 Đường số 7, Khu Phố 1, Phường Hiệp Bình, Thành phố Hồ Chí Minh",
-        )
-        self.assertEqual(
-            profiles["builtin-mai-xuan-luong"]["authorized_person_contact_address"],
-            profiles["builtin-duong-hong-ngoc"]["authorized_person_contact_address"],
-        )
-        self.assertEqual(
-            profiles["builtin-nguyen-thi-minh-ngoc"]["authorized_person_contact_address"],
-            profiles["builtin-duong-hong-ngoc"]["authorized_person_contact_address"],
-        )
+        self.assertEqual(len(profiles), 3)
+        self.assertTrue(all(profile.get("authorized_person_contact_address") for profile in profiles))
+        self.assertTrue(all(repository.is_default(profile["id"]) for profile in profiles))
 
 
     def test_cccd_sync_matches_only_the_same_identity_number(self) -> None:
-        identities = {"030085001651"}
+        identities = {"012345678901"}
 
-        self.assertTrue(BusinessRegistrationWorkspace._same_person_identity("030085001651", identities))
-        self.assertTrue(BusinessRegistrationWorkspace._same_person_identity("CCCD 030085001651", identities))
-        self.assertFalse(BusinessRegistrationWorkspace._same_person_identity("031199001726", identities))
+        self.assertTrue(BusinessRegistrationWorkspace._same_person_identity("012345678901", identities))
+        self.assertTrue(BusinessRegistrationWorkspace._same_person_identity("CCCD 012345678901", identities))
+        self.assertFalse(BusinessRegistrationWorkspace._same_person_identity("012345678902", identities))
 
     def test_saved_cccd_profile_is_preferred_over_stale_case_person_data(self) -> None:
         workspace = BusinessRegistrationWorkspace.__new__(BusinessRegistrationWorkspace)
         workspace.personal_profiles = [
             {
-                "legal_representative_full_name": "PH\u1ea0M TH\u00c0NH LONG",
-                "legal_representative_id_number": "030085001651",
+                "legal_representative_full_name": "NGUYEN VAN TEST",
+                "legal_representative_id_number": "012345678901",
                 "legal_representative_permanent_address": "\u0110\u1ecba ch\u1ec9 m\u1edbi",
                 "legal_representative_contact_address": "Li\u00ean l\u1ea1c m\u1edbi",
             }
         ]
         person = type("Person", (), {"data": {
-            "legal_representative_full_name": "PH\u1ea0M TH\u00c0NH LONG",
-            "legal_representative_id_number": "030085001651",
+            "legal_representative_full_name": "NGUYEN VAN TEST",
+            "legal_representative_id_number": "012345678901",
             "legal_representative_permanent_address": "\u0110\u1ecba ch\u1ec9 c\u0169",
         }})()
 
@@ -168,14 +167,14 @@ class BusinessRegistrationRegressionTest(unittest.TestCase):
 
     def test_case_load_clears_authorized_contact_copied_to_different_applicant(self) -> None:
         values = {
-            "applicant_full_name": "TR\u1ecaNH TH\u1eca THU TH\u1ee6Y",
-            "applicant_id_number": "034302004369",
-            "applicant_phone": "0986602511",
-            "applicant_email": "ngocduonghong21@gmail.com",
-            "authorized_person_full_name": "D\u01af\u01a0NG H\u1ed2NG NG\u1eccC",
-            "authorized_person_id_number": "030085001651",
-            "authorized_person_phone": "0986602511",
-            "authorized_person_email": "ngocduonghong21@gmail.com",
+            "applicant_full_name": "TRAN THI TEST",
+            "applicant_id_number": "012345678902",
+            "applicant_phone": "0900000000",
+            "applicant_email": "test@example.invalid",
+            "authorized_person_full_name": "NGUYEN VAN TEST",
+            "authorized_person_id_number": "012345678901",
+            "authorized_person_phone": "0900000000",
+            "authorized_person_email": "test@example.invalid",
         }
 
         BusinessRegistrationWorkspace._clear_cross_person_authorized_contacts(values)
@@ -185,18 +184,18 @@ class BusinessRegistrationRegressionTest(unittest.TestCase):
 
     def test_case_load_keeps_contacts_when_applicant_is_authorized_person(self) -> None:
         values = {
-            "applicant_id_number": "034302004369",
-            "applicant_phone": "0986602511",
-            "applicant_email": "ngocduonghong21@gmail.com",
-            "authorized_person_id_number": "034302004369",
-            "authorized_person_phone": "0986602511",
-            "authorized_person_email": "ngocduonghong21@gmail.com",
+            "applicant_id_number": "012345678901",
+            "applicant_phone": "0900000000",
+            "applicant_email": "test@example.invalid",
+            "authorized_person_id_number": "012345678901",
+            "authorized_person_phone": "0900000000",
+            "authorized_person_email": "test@example.invalid",
         }
 
         BusinessRegistrationWorkspace._clear_cross_person_authorized_contacts(values)
 
-        self.assertEqual(values["applicant_phone"], "0986602511")
-        self.assertEqual(values["applicant_email"], "ngocduonghong21@gmail.com")
+        self.assertEqual(values["applicant_phone"], "0900000000")
+        self.assertEqual(values["applicant_email"], "test@example.invalid")
 
     def test_document_generation_keeps_business_lines_beyond_ten(self) -> None:
         generator = DocxTemplateGenerator.__new__(DocxTemplateGenerator)

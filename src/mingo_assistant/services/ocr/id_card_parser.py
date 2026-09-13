@@ -652,30 +652,6 @@ class IdCardParser:
             return residence
         return self._dedupe_address_parts([residence, origin])
 
-    def _parse_mrz(self, lines: list[str]) -> None:
-        return None
-        mrz_lines = []
-        for line in lines:
-            compact = re.sub(r"\s+", "", line.upper())
-            if "<<" in compact or compact.startswith("IDVNM"):
-                compact = compact.replace("«", "<").replace(" ", "")
-                mrz_lines.append(compact)
-
-        for index, line in enumerate(mrz_lines):
-            if not line.startswith("IDVNM") or index + 2 >= len(mrz_lines):
-                continue
-            line2 = mrz_lines[index + 1]
-            line3 = mrz_lines[index + 2]
-            return MrzData(
-                id_number=self._mrz_id_number(line),
-                date_of_birth=self._format_mrz_date(line2[0:6], is_birth=True),
-                gender=self._normalize_gender(line2[7:8] if len(line2) > 7 else ""),
-                expiry_date=self._format_mrz_date(line2[8:14], is_birth=False) if len(line2) >= 14 else "",
-                nationality="Việt Nam" if "VNM" in line2 else "",
-                full_name=self._parse_mrz_name(line3),
-            )
-        return MrzData()
-
     def _format_compact_date(self, value: str) -> str:
         digits = re.sub(r"\D", "", value)
         if len(digits) != 8:

@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "profiles": [
+    {
+      "id": "builtin-duong-hong-ngoc",
+      "authorized_person_full_name": "Dương Hồng Ngọc",
+      "authorized_person_gender": "Nữ",
+      "authorized_person_id_number": "068303008330",
+      "authorized_person_issue_date": "12/06/2021",
+      "authorized_person_issue_place": "Cục Cảnh sát Quản lý Hành chính về Trật tự Xã hội",
+      "authorized_person_contact_address": "Số 43-45 Đường số 7, Khu Phố 1, Phường Hiệp Bình, Thành phố Hồ Chí Minh",
+      "authorized_person_phone": "0986602511",
+      "authorized_person_email": "ngocduonghong21@gmail.com"
+    },
+    {
+      "id": "builtin-mai-xuan-luong",
+      "authorized_person_full_name": "Mai Xuân Lương",
+      "authorized_person_gender": "Nam",
+      "authorized_person_id_number": "040095033863",
+      "authorized_person_issue_date": "25/09/2022",
+      "authorized_person_issue_place": "Cục Cảnh sát Quản lý Hành chính về Trật tự Xã hội",
+      "authorized_person_contact_address": "Số 43-45 Đường số 7, Khu Phố 1, Phường Hiệp Bình, Thành phố Hồ Chí Minh",
+      "authorized_person_phone": "0973584275",
+      "authorized_person_email": "luongmx1710@gmail.com"
+    },
+    {
+      "id": "builtin-nguyen-thi-minh-ngoc",
+      "authorized_person_full_name": "Nguyễn Thị Minh Ngọc",
+      "authorized_person_gender": "Nữ",
+      "authorized_person_id_number": "031199001726",
+      "authorized_person_issue_date": "09/12/2024",
+      "authorized_person_issue_place": "Bộ Công an",
+      "authorized_person_contact_address": "Số 43-45 Đường số 7, Khu Phố 1, Phường Hiệp Bình, Thành phố Hồ Chí Minh",
+      "authorized_person_phone": "0879247679",
+      "authorized_person_email": "minhhngoc0304.huynh@gmail.com"
+    }
+  ]
+}

@@ -52,6 +52,7 @@ class AdministrativePlaceMatcher:
         ]
         self.district_candidates = self._district_candidates(data)
         self.old_mapping_candidates = self._old_mapping_candidates(data)
+        self.legacy_province_to_current = self._legacy_province_map(data)
         self.current_ward_by_normalized = self._index_candidates(self.current_ward_candidates)
         self.current_ward_by_short_name = self._index_candidates_by_short_name(self.current_ward_candidates)
         self.district_by_normalized = self._index_candidates(self.district_candidates)
@@ -443,6 +444,17 @@ class AdministrativePlaceMatcher:
         match = self._best_match(value, self.province_candidates, threshold=0.93)
         return match.name if match else ""
 
+    def canonical_province_name(self, value: str) -> str:
+        """Resolve current and historical province names from the official dataset."""
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        folded = self._strip_admin_prefix(self._fold(text))
+        current = self.province_by_normalized.get(folded)
+        if current:
+            return current[0].name
+        return self.legacy_province_to_current.get(folded, text)
+
     def best_ward_name(self, value: str, province_name: str = "") -> str:
         province = self._best_match(province_name, self.province_candidates, threshold=0.82) if province_name else None
         for part in reversed(self._split_address_parts(value)):
@@ -756,6 +768,17 @@ class AdministrativePlaceMatcher:
                 )
             )
         return self._unique_candidates(candidates)
+
+    def _legacy_province_map(self, data: dict[str, object]) -> dict[str, str]:
+        result: dict[str, str] = {}
+        for item in data.get("ward_mappings", []):
+            if not isinstance(item, dict):
+                continue
+            old_name = str(item.get("old_province_name", "")).strip()
+            new_name = str(item.get("new_province_name", "")).strip()
+            if old_name and new_name:
+                result[self._strip_admin_prefix(self._fold(old_name))] = new_name
+        return result
 
     def _unique_candidates(self, candidates: list[PlaceCandidate]) -> list[PlaceCandidate]:
         seen: set[tuple[str, str, str, str]] = set()

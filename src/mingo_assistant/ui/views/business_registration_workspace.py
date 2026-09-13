@@ -38,6 +38,9 @@ from PySide6.QtWidgets import (
 )
 from mingo_assistant.app.paths import get_app_paths, save_settings
 from mingo_assistant.application.business_registration import BusinessRegistrationServices
+from mingo_assistant.application.registration import RegistrationViewModel
+from mingo_assistant.application.people import PersonIdentityRules
+from mingo_assistant.domains.business_registration import VietnameseMoneyFormatter
 from mingo_assistant.models.case import CaseSummary
 from mingo_assistant.services.documents.docx_generator import DocxTemplateGenerator
 from mingo_assistant.services.business_lines.industry_lookup import IndustryCatalog, IndustryRow
@@ -105,6 +108,13 @@ class BusinessRegistrationWorkspace(QWidget):
         self.address_parser = self.services.address_parser
         self.industry_catalog = industry_catalog or self.services.industry_catalog
         self.registration_office_catalog = self.services.registration_office_catalog
+        self.registration_validator = self.services.registration_validator
+        self.registration_view_model = RegistrationViewModel(self.registration_validator)
+        self.export_planner = self.services.export_planner
+        self.value_composer = self.services.value_composer
+        self.person_role_mapper = self.services.person_role_mapper
+        self.person_profile_synchronizer = self.services.person_profile_synchronizer
+        self.money_formatter = VietnameseMoneyFormatter()
         self.fields: dict[str, QLineEdit | QTextEdit | QCheckBox | QComboBox] = {}
         self.beneficial_owner_list_auto_fields: dict[str, QLineEdit | QTextEdit] = {}
         self.beneficial_owner_list_selector: QComboBox | None = None
@@ -1250,10 +1260,7 @@ class BusinessRegistrationWorkspace(QWidget):
             field.completer().complete()
 
     def _signing_place_for_office(self, office_name: str) -> str:
-        place = self.registration_office_catalog.province_for_office(office_name).strip()
-        if place.casefold() == "thành phố hồ chí minh":
-            return place
-        return re.sub(r"^(?:Th\u00e0nh ph\u1ed1|T\u1ec9nh)\s+", "", place, flags=re.IGNORECASE).strip()
+        return self.value_composer.signing_place_for_office(office_name)
 
     def _sync_document_place_from_registration_office(self) -> None:
         place = self._signing_place_for_office(self._field_value("business_registration_office"))
@@ -2054,17 +2061,7 @@ class BusinessRegistrationWorkspace(QWidget):
 
     @staticmethod
     def _authorization_contact_address(data: dict[str, str]) -> str:
-        """Use one explicit fallback order for the authorization UI and DOCX."""
-        for key in (
-            "legal_representative_contact_address",
-            "personal_contact_address",
-            "legal_representative_permanent_address",
-            "personal_permanent_address",
-        ):
-            value = str(data.get(key, "") or "").strip()
-            if value:
-                return value
-        return ""
+        return PersonIdentityRules.authorization_contact_address(data)
 
     def _set_fields_from_mapping(self, mapping: dict[str, str]) -> None:
         for key, value in mapping.items():
@@ -2202,62 +2199,16 @@ class BusinessRegistrationWorkspace(QWidget):
             self.updating_capital = False
 
     def _money_digits(self, value: str) -> str:
-        return re.sub(r"\D", "", value)
+        return self.money_formatter.digits(value)
 
     def _format_money(self, digits: str) -> str:
-        return f"{int(digits):,}".replace(",", ".")
+        return self.money_formatter.format_digits(digits)
 
     def _number_to_vietnamese_words(self, number: int) -> str:
-        if number == 0:
-            return "không"
-
-        units = ["", "nghìn", "triệu", "tỷ", "nghìn tỷ", "triệu tỷ"]
-        groups: list[int] = []
-        while number:
-            groups.append(number % 1000)
-            number //= 1000
-
-        parts: list[str] = []
-        for index in range(len(groups) - 1, -1, -1):
-            group = groups[index]
-            if group == 0:
-                continue
-            words = self._read_three_digits(group, force_hundreds=index < len(groups) - 1)
-            unit = units[index] if index < len(units) else ""
-            parts.append(" ".join(part for part in [words, unit] if part))
-        return " ".join(parts)
+        return self.money_formatter.to_words(number)
 
     def _read_three_digits(self, number: int, force_hundreds: bool = False) -> str:
-        digits = ["không", "một", "hai", "ba", "bốn", "năm", "sáu", "bảy", "tám", "chín"]
-        hundred = number // 100
-        ten = (number % 100) // 10
-        one = number % 10
-        words: list[str] = []
-
-        if hundred:
-            words.extend([digits[hundred], "trăm"])
-        elif force_hundreds and (ten or one):
-            words.extend(["không", "trăm"])
-
-        if ten > 1:
-            words.extend([digits[ten], "mươi"])
-            if one == 1:
-                words.append("mốt")
-            elif one == 5:
-                words.append("lăm")
-            elif one:
-                words.append(digits[one])
-        elif ten == 1:
-            words.append("mười")
-            if one == 5:
-                words.append("lăm")
-            elif one:
-                words.append(digits[one])
-        elif one:
-            if hundred or force_hundreds:
-                words.append("lẻ")
-            words.append(digits[one])
-        return " ".join(words)
+        return self.money_formatter.read_three_digits(number, force_hundreds)
 
     def _build_preview_section(self) -> QWidget:
         group = QGroupBox("Xem trước dữ liệu trước khi xuất Word")
@@ -2460,7 +2411,12 @@ class BusinessRegistrationWorkspace(QWidget):
         if person.recognition_type == "organization":
             person.organization_data = self._organization_result_values()
         elif person.recognition_type == "individual":
-            person.data = self._cccd_result_values()
+            visible_values = self._cccd_result_values()
+            # A recognized person can be selected later from a form dropdown.
+            # Do not erase that source merely because the read-only OCR result
+            # panel is temporarily blank or has not been restored yet.
+            if any(str(value or "").strip() for value in visible_values.values()):
+                person.data = visible_values
         if person.recognition_type:
             person.raw_text = self.raw_ocr_text.toPlainText()
 
@@ -2995,63 +2951,25 @@ class BusinessRegistrationWorkspace(QWidget):
 
     @staticmethod
     def _same_person_identity(value: object, id_numbers: set[str]) -> bool:
-        digits = re.sub(r"\D", "", str(value or ""))
-        return bool(digits and digits in id_numbers)
+        return PersonIdentityRules.same_identity(value, id_numbers)
 
     @staticmethod
     def _clear_cross_person_authorized_contacts(values: dict[str, str]) -> None:
-        """Remove contacts copied from an authorized person into a different applicant."""
-        applicant_id = re.sub(r"\D", "", str(values.get("applicant_id_number", "") or ""))
-        authorized_id = re.sub(r"\D", "", str(values.get("authorized_person_id_number", "") or ""))
-        applicant_name = re.sub(r"\W", "", str(values.get("applicant_full_name", "") or "").casefold())
-        authorized_name = re.sub(r"\W", "", str(values.get("authorized_person_full_name", "") or "").casefold())
-        people_are_distinct = (
-            bool(applicant_id and authorized_id and applicant_id != authorized_id)
-            or bool(not applicant_id and not authorized_id and applicant_name and authorized_name and applicant_name != authorized_name)
-        )
-        if not people_are_distinct:
-            return
-
-        for applicant_key, authorized_key, normalizer in (
-            ("applicant_phone", "authorized_person_phone", lambda value: re.sub(r"\D", "", value)),
-            ("applicant_email", "authorized_person_email", lambda value: value.casefold()),
-        ):
-            applicant_value = str(values.get(applicant_key, "") or "").strip()
-            authorized_value = str(values.get(authorized_key, "") or "").strip()
-            if applicant_value and authorized_value and normalizer(applicant_value) == normalizer(authorized_value):
-                values[applicant_key] = ""
+        PersonIdentityRules.clear_cross_person_authorized_contacts(values)
 
     def _sync_personal_data_to_case(self, card_values: dict[str, str], previous_id_number: str) -> None:
         """Refresh every in-case reference that belongs to the CCCD being edited."""
-        id_numbers = {
-            re.sub(r"\D", "", number)
-            for number in (
-                previous_id_number,
-                card_values.get("legal_representative_id_number", ""),
-            )
-            if re.sub(r"\D", "", number)
-        }
+        id_numbers = self.person_profile_synchronizer.identity_numbers(card_values, previous_id_number)
         if not id_numbers:
             return
 
-        for person in self.ocr_people:
-            person_id = person.data.get("legal_representative_id_number", "")
-            if not self._same_person_identity(person_id, id_numbers):
-                continue
-            updated_data = dict(person.data)
-            updated_data.update(card_values)
-            person.data = {key: value for key, value in updated_data.items() if value}
-            person.recognition_type = "individual"
-
-        role_id_fields = {
-            "legal_representative": "legal_representative_id_number",
-            "applicant": "applicant_id_number",
-            "authorized_person": "authorized_person_id_number",
-            "beneficial_owner": "beneficial_owner_id_number",
+        self.person_profile_synchronizer.update_people(self.ocr_people, card_values, id_numbers)
+        role_values = {
+            id_field: self._field_value(id_field)
+            for id_field in self.person_profile_synchronizer.ROLE_ID_FIELDS.values()
         }
-        for role, id_field in role_id_fields.items():
-            if self._same_person_identity(self._field_value(id_field), id_numbers):
-                self._apply_person_data_to_role(card_values, role, self.current_person_index + 1, overwrite=True)
+        for role in self.person_profile_synchronizer.matching_roles(role_values, id_numbers):
+            self._apply_person_data_to_role(card_values, role, self.current_person_index + 1, overwrite=True)
 
         if self._same_person_identity(self._field_value("legal_representative_id_number"), id_numbers):
             contact_address = (
@@ -3062,19 +2980,7 @@ class BusinessRegistrationWorkspace(QWidget):
                 self._set_field("legal_representative_contact_address", contact_address)
 
         if self._same_person_identity(self._field_value("beneficial_owner_list_identity"), id_numbers):
-            self._set_fields_from_mapping(
-                {
-                    "beneficial_owner_list_full_name": card_values.get("legal_representative_full_name", ""),
-                    "beneficial_owner_list_date_of_birth": card_values.get("legal_representative_date_of_birth", ""),
-                    "beneficial_owner_list_gender": card_values.get("legal_representative_gender", ""),
-                    "beneficial_owner_list_identity": self._representative_identity_text(card_values),
-                    "beneficial_owner_list_ethnicity": card_values.get("legal_representative_ethnicity", ""),
-                    "beneficial_owner_list_address": (
-                        card_values.get("legal_representative_contact_address", "")
-                        or card_values.get("legal_representative_permanent_address", "")
-                    ),
-                }
-            )
+            self._set_fields_from_mapping(self.person_profile_synchronizer.beneficial_owner_list_values(card_values))
 
         self._refresh_people_buttons()
         self._refresh_person_fill_selectors()
@@ -3087,6 +2993,7 @@ class BusinessRegistrationWorkspace(QWidget):
         card_values: dict[str, str],
         apply_to_form: bool = True,
     ) -> None:
+        """Apply a scan to the selected company-registration role."""
         person = self.ocr_people[self.current_person_index]
         person.data = {key: value for key, value in card_values.items() if value}
         person.recognition_type = "individual"
@@ -3124,54 +3031,8 @@ class BusinessRegistrationWorkspace(QWidget):
         self._refresh_preview()
 
     def _apply_person_data_to_role(self, card_values: dict[str, str], role: str, person_number: int, overwrite: bool = False) -> None:
-        role_prefix_map = {
-            "legal_representative": "legal_representative",
-            "applicant": "applicant",
-            "authorized_person": "authorized_person",
-            "member": f"member_{person_number}",
-            "beneficial_owner": "beneficial_owner",
-        }
-        prefix = role_prefix_map.get(role, "legal_representative")
-        source_map = {
-            "full_name": "legal_representative_full_name",
-            "id_number": "legal_representative_id_number",
-            "date_of_birth": "legal_representative_date_of_birth",
-            "gender": "legal_representative_gender",
-            "permanent_address": "legal_representative_permanent_address",
-            "nationality": "legal_representative_nationality",
-            "issue_date": "legal_representative_issue_date",
-            "expiry_date": "legal_representative_expiry_date",
-            "issue_place": "legal_representative_issue_place",
-        }
-        target_suffixes = {
-            "full_name": "full_name",
-            "id_number": "id_number",
-            "date_of_birth": "date_of_birth",
-            "gender": "gender",
-            "permanent_address": "permanent_address",
-            "nationality": "nationality",
-            "issue_date": "issue_date",
-            "expiry_date": "expiry_date",
-            "issue_place": "issue_place",
-        }
-        for suffix, source_key in source_map.items():
-            value = card_values.get(source_key, "")
-            if not value:
-                continue
-            if role == "applicant" and suffix == "permanent_address":
-                parsed = self.address_parser.parse(value)
-                if overwrite:
-                    self._set_field("applicant_address_detail", self._address_detail_from_result(parsed))
-                    self._set_field("applicant_ward", parsed.ward)
-                    self._set_field("applicant_province", parsed.province)
-                else:
-                    self._set_field_if_empty("applicant_address_detail", self._address_detail_from_result(parsed))
-                    self._set_field_if_empty("applicant_ward", parsed.ward)
-                    self._set_field_if_empty("applicant_province", parsed.province)
-                continue
-            target_key = f"{prefix}_{target_suffixes[suffix]}"
-            if role == "beneficial_owner" and suffix == "permanent_address":
-                target_key = "beneficial_owner_address"
+        mapped = self.person_role_mapper.map_fields(card_values, role, person_number)
+        for target_key, value in mapped.items():
             if overwrite:
                 self._set_field(target_key, value)
             else:
@@ -3181,13 +3042,6 @@ class BusinessRegistrationWorkspace(QWidget):
             if card_values.get("legal_representative_permanent_address"):
                 self._sync_address_parts("legal_representative_permanent_address")
             self._sync_director_from_legal_representative()
-        elif role == "authorized_person":
-            address = self._authorization_contact_address(card_values)
-            if address:
-                if overwrite:
-                    self._set_field("authorized_person_contact_address", address)
-                else:
-                    self._set_field_if_empty("authorized_person_contact_address", address)
 
     def _parse_registration_office_from_text(self, text: str) -> None:
         office_match = re.search(r"(Phòng\s+Đăng\s+ký\s+kinh\s+doanh[^\n\r,.]*)", text, flags=re.IGNORECASE)
@@ -3270,8 +3124,7 @@ class BusinessRegistrationWorkspace(QWidget):
         case_name: str,
         version_name: str,
     ) -> Path:
-        company_folder = self._safe_export_folder_name(case_name)
-        return case_export_dir / version_name / company_folder
+        return self.export_planner.output_dir(case_export_dir, case_name, version_name)
 
     def _export_documents(self) -> None:
         if self._export_thread is not None and self._export_thread.isRunning():
@@ -3409,26 +3262,17 @@ class BusinessRegistrationWorkspace(QWidget):
         return export_root / folder_name
 
     def _case_export_folder_name(self, values: dict[str, str]) -> str:
-        company_name = (values.get("company_name", "") or "HO SO THANH LAP").strip()
-        return self._safe_export_folder_name(company_name)
+        return self.export_planner.case_folder_name(values)
     def _safe_export_folder_name(self, value: str) -> str:
-        text = re.sub(r'[<>:"/\\|?*]', " ", value)
-        text = re.sub(r"\s+", " ", text).strip(" .")
-        return text[:160] or "ho_so_thanh_lap"
+        return self.export_planner.safe_folder_name(value)
 
     def _next_export_version_number(self, case_export_dir: Path) -> int:
         existing_versions = list(self.case.export_versions) if self.case else []
-        numbers = [len(existing_versions)]
-        if not existing_versions and self.case and self.case.export_dir:
-            numbers.append(1)
-        if case_export_dir.exists():
-            for child in case_export_dir.iterdir():
-                if not child.is_dir():
-                    continue
-                match = re.fullmatch(r"bản\s+(\d+)", child.name.strip(), flags=re.IGNORECASE)
-                if match:
-                    numbers.append(int(match.group(1)))
-        return max(numbers) + 1
+        return self.export_planner.next_version_number(
+            case_export_dir,
+            existing_versions,
+            self.case.export_dir if self.case else "",
+        )
 
     def _next_export_versions(
         self,
@@ -3438,26 +3282,17 @@ class BusinessRegistrationWorkspace(QWidget):
         documents: list[str],
         version_name: str,
     ) -> list[dict[str, object]]:
-        existing_versions = list(self.case.export_versions) if self.case else []
-        if not existing_versions and self.case and self.case.export_dir:
-            existing_versions.append(
-                {
-                    "name": "bản 1",
-                    "export_dir": self.case.export_dir,
-                    "exported_at": self.case.exported_at,
-                    "documents": self.case.generated_documents,
-                }
-            )
-        existing_versions.append(
-            {
-                "name": version_name,
-                "case_export_dir": case_export_dir,
-                "export_dir": version_export_dir,
-                "exported_at": exported_at,
-                "documents": documents,
-            }
+        return self.export_planner.append_version(
+            list(self.case.export_versions) if self.case else [],
+            legacy_export_dir=self.case.export_dir if self.case else "",
+            legacy_exported_at=self.case.exported_at if self.case else "",
+            legacy_documents=self.case.generated_documents if self.case else [],
+            case_export_dir=case_export_dir,
+            version_export_dir=version_export_dir,
+            exported_at=exported_at,
+            documents=documents,
+            version_name=version_name,
         )
-        return existing_versions
 
     def _choose_export_root(self) -> None:
         _, default_export_root = self._template_and_export_dirs()
@@ -3564,7 +3399,8 @@ class BusinessRegistrationWorkspace(QWidget):
             values[key] = ""
         if apply_defaults:
             self._apply_value_defaults(values)
-        return values
+        self.registration_view_model.replace(values)
+        return self.registration_view_model.snapshot()
 
     def _store_people_values(self, values: dict[str, str]) -> None:
         self._persist_current_person_recognition()
@@ -3611,179 +3447,9 @@ class BusinessRegistrationWorkspace(QWidget):
             values[f"member_{member_index}_{suffix}"] = data.get(source_key, "")
 
     def _apply_value_defaults(self, values: dict[str, str]) -> None:
-        document_day = values.get("document_day", "").strip()
-        document_month = values.get("document_month", "").strip()
-        document_year = values.get("document_year", "").strip()
-
-        signing_place = self._signing_place_for_office(values.get("business_registration_office", ""))
-        if signing_place:
-            values["document_place"] = signing_place
-        if document_day and document_month and document_year:
-            date_text = f"ngày {document_day} tháng {document_month} năm {document_year}"
-            values["document_place_date"] = f"{values.get('document_place', '').strip()}, {date_text}".strip(", ")
-
-        self._fill_composed_address(
-            values,
-            "company_address",
-            ["company_address_detail", "company_ward", "company_province"],
-        )
-        self._fill_composed_address(
-            values,
-            "legal_representative_permanent_address",
-            ["legal_representative_address_detail", "legal_representative_ward", "legal_representative_province"],
-        )
-        self._fill_if_missing(values, "legal_representative_contact_address", "legal_representative_permanent_address")
-        self._fill_if_missing(values, "company_province", "document_place")
-        owner_address = values.get("beneficial_owner_address", "").strip()
-        if owner_address:
-            parsed_owner_address = self.address_parser.parse(owner_address)
-            values.setdefault("beneficial_owner_address_detail", parsed_owner_address.street_line or parsed_owner_address.village)
-            values.setdefault("beneficial_owner_ward", parsed_owner_address.ward)
-            values.setdefault("beneficial_owner_province", parsed_owner_address.province)
-        if _is_organization_owner(values.get("owner_type", "")):
-            representative_defaults = {
-                "beneficial_owner_list_number": "organization_owner_representative_number",
-                "beneficial_owner_list_full_name": "organization_owner_representative_full_name",
-                "beneficial_owner_list_date_of_birth": "organization_owner_representative_date_of_birth",
-                "beneficial_owner_list_gender": "organization_owner_representative_gender",
-                "beneficial_owner_list_identity": "organization_owner_representative_identity",
-                "beneficial_owner_list_ethnicity": "organization_owner_representative_ethnicity",
-                "beneficial_owner_list_address": "organization_owner_representative_contact_address",
-            }
-            for target, source in representative_defaults.items():
-                self._fill_if_missing(values, target, source)
-            values.setdefault("beneficial_owner_list_number", "1")
-
-        representative_aliases = {
-            "director_full_name": "legal_representative_full_name",
-            "director_date_of_birth": "legal_representative_date_of_birth",
-            "director_gender": "legal_representative_gender",
-            "director_id_number": "legal_representative_id_number",
-            "director_position": "legal_representative_position",
-            "director_phone": "legal_representative_phone",
-        }
-        applicant_prefix = "legal_representative"
-        representative_aliases.update(
-            {
-                "applicant_full_name": f"{applicant_prefix}_full_name",
-                "applicant_date_of_birth": f"{applicant_prefix}_date_of_birth",
-                "applicant_gender": f"{applicant_prefix}_gender",
-                "applicant_id_number": f"{applicant_prefix}_id_number",
-                "applicant_address_detail": f"{applicant_prefix}_address_detail",
-                "applicant_ward": f"{applicant_prefix}_ward",
-                "applicant_province": f"{applicant_prefix}_province",
-                "applicant_phone": f"{applicant_prefix}_phone",
-                "applicant_email": f"{applicant_prefix}_email",
-            }
-        )
-        for target, source in representative_aliases.items():
-            self._fill_if_missing(values, target, source)
-
-        for target, source in {
-            "director_full_name": "legal_representative_full_name",
-            "director_date_of_birth": "legal_representative_date_of_birth",
-            "director_gender": "legal_representative_gender",
-            "director_id_number": "legal_representative_id_number",
-            "director_position": "legal_representative_position",
-            "director_phone": "legal_representative_phone",
-        }.items():
-            values[target] = values.get(source, "").strip()
-
-        # Giám đốc/Tổng giám đốc luôn là chính người đại diện pháp luật.
-        values["director_phone"] = values.get("legal_representative_phone", "").strip()
-
-        self._fill_if_missing(values, "member_capital_amount", "charter_capital_number")
-        self._fill_if_missing(values, "cash_capital_text", "charter_capital_full_text")
-        capital_digits = self._money_digits(values.get("charter_capital_number", ""))
-        if capital_digits:
-            formatted_capital = self._format_money(capital_digits)
-            values["charter_capital_number"] = formatted_capital
-            if not values.get("member_capital_amount") or self._money_digits(values.get("member_capital_amount", "")) == capital_digits:
-                values["member_capital_amount"] = formatted_capital
-            if not values.get("charter_capital_text"):
-                values["charter_capital_text"] = self._number_to_vietnamese_words(int(capital_digits)).capitalize() + " đồng"
-        if not values.get("charter_capital_full_text"):
-            capital_number = values.get("charter_capital_number", "")
-            capital_text = values.get("charter_capital_text", "")
-            if capital_number and capital_text:
-                values["charter_capital_full_text"] = f"{capital_number} đồng ({capital_text})"
-            elif capital_number:
-                values["charter_capital_full_text"] = capital_number
-        if not values.get("cash_capital_text"):
-            values["cash_capital_text"] = values.get("charter_capital_full_text", "")
-        values.setdefault("capital_zero", "0")
-        values.setdefault("asset_capital_text", "(không có)")
-        self._normalize_capital_breakdown_values(values)
-        member_count = self._company_member_count()
-        values["company_member_count"] = str(member_count)
-        values["company_type_label"] = self._case_type_for_members(member_count)
-        if member_count == 1:
-            values["member_capital_ratio"] = "100%"
-        elif capital_digits:
-            equal_amount = int(capital_digits) // member_count
-            equal_ratio = round(100 / member_count, 2)
-            values["member_capital_ratio"] = values.get("member_capital_ratio") or f"{equal_ratio:g}%"
-            if self._money_digits(values.get("member_capital_amount", "")) == capital_digits:
-                values["member_capital_amount"] = self._format_money(str(equal_amount))
-        for index in range(1, member_count + 1):
-            default_amount = values.get("charter_capital_number", "")
-            default_ratio = "100%" if member_count == 1 else values.get("member_capital_ratio", "")
-            if member_count > 1 and capital_digits:
-                default_amount = values.get("member_capital_amount", default_amount)
-            values.setdefault(f"member_{index}_capital_amount", default_amount)
-            values.setdefault(
-                f"member_{index}_capital_ratio",
-                default_ratio,
-            )
-        values.setdefault("tax_labor_count", "1")
-        values["business_lines"] = self._business_lines_summary(values)
-
-    def _normalize_capital_breakdown_values(self, values: dict[str, str]) -> None:
-        """Word templates require every source and contributed-asset amount to be explicit."""
-        for prefix, count in (("capital_source", len(CAPITAL_SOURCE_LABELS)), ("asset_contribution", len(ASSET_CONTRIBUTION_LABELS))):
-            total = 0
-            amounts: list[int] = []
-            for index in range(1, count + 1):
-                digits = self._money_digits(values.get(f"{prefix}_{index}_amount", ""))
-                amount = int(digits or "0")
-                amounts.append(amount)
-                total += amount
-                values[f"{prefix}_{index}_amount"] = self._format_money(str(amount)) if amount else "0"
-            for index, amount in enumerate(amounts, start=1):
-                ratio = amount * 100 / total if total else 0
-                values[f"{prefix}_{index}_ratio"] = f"{ratio:.2f}".rstrip("0").rstrip(".")
-            values[f"{prefix}_total_amount"] = self._format_money(str(total)) if total else "0"
-            values[f"{prefix}_total_ratio"] = "100" if total else "0"
-
-    def _business_lines_summary(self, values: dict[str, str]) -> str:
-        lines = []
-        for index in self._business_line_indices(values):
-            name = self._normalize_business_line_text(values.get(f"business_line_{index}_name", ""))
-            code = values.get(f"business_line_{index}_code", "").strip()
-            if not name and not code:
-                continue
-            main = " - ngành nghề chính" if values.get(f"business_line_{index}_is_main") else ""
-            line = name
-            if code:
-                line = f"{line} [{code}]" if line else f"[{code}]"
-            lines.append(f"{line}{main}")
-        return "\n".join(lines)
-
-    def _normalize_business_line_text(self, value: str) -> str:
-        text = "\n".join(part.strip() for part in value.replace("\r", "\n").split("\n") if part.strip())
-        text = re.sub(r"\s+(Chi\s*tiết\s*:)", r"\n\1", text, flags=re.IGNORECASE)
-        return re.sub(r"(?i)chi\s*tiết\s*:", "Chi tiết:", text)
-
-    def _fill_if_missing(self, values: dict[str, str], target: str, source: str) -> None:
-        if not values.get(target) and values.get(source):
-            values[target] = values[source]
-
-    def _fill_composed_address(self, values: dict[str, str], target: str, parts: list[str]) -> None:
-        if values.get(target):
-            return
-        address = ", ".join(values.get(part, "").strip() for part in parts if values.get(part, "").strip())
-        if address:
-            values[target] = address
+        composed = self.value_composer.compose(values, member_count=self._company_member_count())
+        values.clear()
+        values.update(composed)
 
     def build_case_summary(
         self,
@@ -3820,61 +3486,31 @@ class BusinessRegistrationWorkspace(QWidget):
         return 1
 
     def _case_type_for_members(self, member_count: int) -> str:
-        if member_count <= 1:
-            return "TNHH một thành viên"
-        return "TNHH hai thành viên trở lên"
+        return self.value_composer.case_type_for_members(member_count)
 
     def _missing_required_fields(self, values: dict[str, str]) -> list[str]:
-        required = {
-            "beneficial_owner_full_name": "Họ tên chủ sở hữu",
-            "beneficial_owner_id_number": "Số CCCD chủ sở hữu",
-            "beneficial_owner_address": "Địa chỉ liên lạc của chủ sở hữu",
-            "company_name": "Tên doanh nghiệp",
-            "company_address": "Địa chỉ trụ sở",
-            "company_phone": "Số điện thoại công ty (dùng cho thông tin đăng ký thuế)",
-            "charter_capital_number": "Vốn điều lệ",
-            "legal_representative_full_name": "Họ tên cá nhân/đại diện",
-            "legal_representative_id_number": "Số CCCD",
-            "legal_representative_permanent_address": "Địa chỉ thường trú",
-        }
-        if values.get("owner_type", "Cá nhân") == "Tổ chức":
-            for key in ("beneficial_owner_full_name", "beneficial_owner_id_number", "beneficial_owner_address"):
-                required.pop(key, None)
-            required.update(
-                {
-                    "organization_owner_name": "Tên tổ chức chủ sở hữu",
-                    "organization_owner_registration_number": "Mã số doanh nghiệp/Số quyết định thành lập của chủ sở hữu",
-                    "organization_owner_address_detail": "Địa chỉ chi tiết của chủ sở hữu tổ chức",
-                    "organization_owner_representative_full_name": "Họ tên người đại diện vốn của tổ chức",
-                    "organization_owner_representative_identity": "Giấy tờ pháp lý của người đại diện vốn",
-                }
-            )
-        required["legal_representative_issue_place"] = "Nơi cấp CCCD của người đại diện pháp luật"
-        if values.get("authorized_person_full_name", "").strip() or values.get("authorized_person_id_number", "").strip():
-            required["authorized_person_issue_place"] = "Nơi cấp CCCD của người được ủy quyền"
-            required["authorized_person_contact_address"] = "Địa chỉ liên lạc của người được ủy quyền"
-        missing = [label for key, label in required.items() if not values.get(key, "").strip()]
-        if any(
+        address_confirmation_required = any(
             person.recognition_type == "individual"
             and person.data.get("legal_representative_address_status") == "needs_confirmation"
             for person in self.ocr_people
-        ):
-            missing.append("Xác nhận địa chỉ CCCD trước khi xuất hồ sơ")
-        return missing
+        )
+        self.registration_view_model.replace(values)
+        return self.registration_view_model.missing_required_fields(
+            address_confirmation_required=address_confirmation_required,
+        )
 
     def _validation_issues(self, values: dict[str, str]) -> list[str]:
-        issues = self._missing_required_fields(values)
-        business_line_indices = self._business_line_indices(values)
-        if not any(values.get(f"business_line_{index}_name", "").strip() for index in business_line_indices):
-            issues.append("Ít nhất 1 ngành nghề kinh doanh")
-        if not any(values.get(f"business_line_{index}_is_main", "").strip() for index in business_line_indices):
-            issues.append("Chọn 1 ngành nghề chính")
-        for index in business_line_indices:
-            name = values.get(f"business_line_{index}_name", "").strip()
-            code = values.get(f"business_line_{index}_code", "").strip()
-            if name and len(re.sub(r"\D", "", code)) != 4:
-                issues.append(f"Mã ngành nghề cấp 4 của ngành {index}")
-        return issues
+        address_confirmation_required = any(
+            person.recognition_type == "individual"
+            and person.data.get("legal_representative_address_status") == "needs_confirmation"
+            for person in self.ocr_people
+        )
+        self.registration_view_model.replace(values)
+        return list(
+            self.registration_view_model.validate(
+                address_confirmation_required=address_confirmation_required,
+            ).errors
+        )
 
 
     def _set_field_if_empty(self, key: str, value: str) -> None:

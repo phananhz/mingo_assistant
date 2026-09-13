@@ -26,9 +26,9 @@ class IdCardAddressNormalizationTest(unittest.TestCase):
 
     def test_parser_keeps_origin_and_residence_separate(self) -> None:
         text = """No
-025161008294
+012345678901
 Ho va ten / Ful name
-HOANG THI TIEN
+TRAN VAN TEST
 Ngay sinh / Duto
 01/04/1961
 Sex: Nu
@@ -40,15 +40,15 @@ Ban Nguyen, Lam Thao, Phu Tho"""
 
         card = IdCardParser().parse(text)
 
-        self.assertEqual(card.full_name, "HOANG THI TIEN")
+        self.assertEqual(card.full_name, "TRAN VAN TEST")
         self.assertEqual(card.place_of_origin, "Xã Phùng Nguyên, Phú Thọ")
         self.assertEqual(card.permanent_address, "Khu 1, Xã Bản Nguyên, Phú Thọ")
 
     def test_parser_handles_noisy_origin_marker_from_ocr(self) -> None:
         text = """No
-025161008294
+012345678901
 Ho va ten / Ful name
-HOANG THI TIEN
+NGUYEN VAN TEST
 Quoc tich _
 Việt Nam
 Qui quán / Placo
@@ -75,9 +75,9 @@ Ban Nguyen, Lam Thao, Phu Tho"""
 
     def test_parser_reads_visible_front_side_personal_fields(self) -> None:
         text = """CAN CUOC CONG DAN
-So / No.: 079067015629
+So / No.: 001000000001
 Ho va ten / Full name:
-HUYNH VAN TAI
+TRAN VAN TEST
 Ngay sinh / Date of birth: 04/04/1967
 Gioi tinh / Sex: Nam Quoc tich / Nationality: Viet Nam
 Que quan / Place of origin: Tp. Ho Chi Minh
@@ -86,8 +86,8 @@ Van Cua, P. 13, Q. 8, Tp. Ho Chi Minh"""
 
         card = IdCardParser().parse(text)
 
-        self.assertEqual(card.id_number, "079067015629")
-        self.assertEqual(card.full_name, "HUYNH VAN TAI")
+        self.assertEqual(card.id_number, "001000000001")
+        self.assertEqual(card.full_name, "TRAN VAN TEST")
         self.assertEqual(card.date_of_birth, "04/04/1967")
         self.assertEqual(card.gender, "Nam")
         self.assertTrue(card.place_of_origin)
@@ -102,7 +102,7 @@ Van Cua, P. 13, Q. 8, Tp. Ho Chi Minh"""
 
     def test_parser_uses_first_plausible_birth_date_when_ocr_splits_label(self) -> None:
         text = """Ho va ten / Ful name:
-HUYNH VAN TAI
+NGUYEN VAN TEST
 Ngay sinh
 Date
 birth: 04/04/1967
@@ -116,7 +116,7 @@ Van Cua, P. 13, Q. 8, Tp. Ho Chi Minh, 04/04/2027"""
     def test_parser_uses_visible_date_for_any_card_when_birth_label_is_after_date(self) -> None:
         text = """9F
 Ho va ten / Full name:
-NGUYEN HONG DUYEN
+NGUYEN VAN TEST
 13/05/2008
 Ngay sinh / Date of birth:
 Que quan / Place of origin:
@@ -129,10 +129,10 @@ Noi thuong tru / Place of residence: 79/J4 Au Co, Phuong 14, Quan 11, 13/05/2033
 
     def test_parser_reads_birth_date_after_noisy_birth_label(self) -> None:
         text = """Citizen Identity Card
-025161008294
+012345678901
 So / No:
 Ho va ten / Full name:
-HOANG THI TIEN
+NGUYEN VAN TEST
 Ngay sinh / Dato @ birth:
 01/04/1961
 Viet Na
@@ -144,12 +144,12 @@ Nu"""
         self.assertEqual(card.date_of_birth, "01/04/1961")
 
     def test_parser_reads_chip_id_card_qr_payload(self) -> None:
-        qr_text = "079308021854|123456789|NGUYEN HONG DUYEN|13052008|Nu|79/J4 Au Co, Phuong 14, Quan 11, TP Ho Chi Minh|13052023"
+        qr_text = "012345678901|000000000|NGUYEN VAN TEST|13052008|Nu|79/J4 Au Co, Phuong 14, Quan 11, TP Ho Chi Minh|13052023"
 
         card = IdCardParser().parse_qr(qr_text)
 
-        self.assertEqual(card.id_number, "079308021854")
-        self.assertEqual(card.full_name, "NGUYEN HONG DUYEN")
+        self.assertEqual(card.id_number, "012345678901")
+        self.assertEqual(card.full_name, "NGUYEN VAN TEST")
         self.assertEqual(card.date_of_birth, "13/05/2008")
         self.assertEqual(card.gender, "Nữ")
         self.assertIn("79/J4", card.permanent_address)
@@ -304,6 +304,12 @@ Nu"""
         self.assertEqual(result.raw_address, raw_address)
         self.assertEqual(result.normalization_status, "needs_confirmation")
         self.assertEqual(result.normalized_address, raw_address)
+
+    def test_canonical_province_uses_official_merger_dataset(self) -> None:
+        matcher = AdministrativePlaceMatcher()
+
+        self.assertEqual(matcher.canonical_province_name("Tỉnh Hà Giang"), "Tuyên Quang")
+        self.assertEqual(matcher.canonical_province_name("Tỉnh Tuyên Quang"), "Tuyên Quang")
 
 
     def test_parser_joins_ordinary_ocr_line_wraps_without_inventing_a_comma(self) -> None:

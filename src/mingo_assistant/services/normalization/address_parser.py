@@ -49,62 +49,6 @@ class AddressParser:
         re.IGNORECASE,
     )
 
-    PROVINCE_AFTER_MERGER = {
-        "ha giang": "Tuyên Quang",
-        "tuyen quang": "Tuyên Quang",
-        "yen bai": "Lào Cai",
-        "lao cai": "Lào Cai",
-        "bac kan": "Thái Nguyên",
-        "thai nguyen": "Thái Nguyên",
-        "vinh phuc": "Phú Thọ",
-        "hoa binh": "Phú Thọ",
-        "phu tho": "Phú Thọ",
-        "bac giang": "Bắc Ninh",
-        "bac ninh": "Bắc Ninh",
-        "thai binh": "Hưng Yên",
-        "hung yen": "Hưng Yên",
-        "hai duong": "Thành phố Hải Phòng",
-        "hai phong": "Thành phố Hải Phòng",
-        "ha nam": "Ninh Bình",
-        "nam dinh": "Ninh Bình",
-        "ninh binh": "Ninh Bình",
-        "quang binh": "Quảng Trị",
-        "quang tri": "Quảng Trị",
-        "quang nam": "Thành phố Đà Nẵng",
-        "da nang": "Thành phố Đà Nẵng",
-        "kon tum": "Quảng Ngãi",
-        "quang ngai": "Quảng Ngãi",
-        "binh dinh": "Gia Lai",
-        "gia lai": "Gia Lai",
-        "ninh thuan": "Khánh Hòa",
-        "khanh hoa": "Khánh Hòa",
-        "dak nong": "Lâm Đồng",
-        "binh thuan": "Lâm Đồng",
-        "lam dong": "Lâm Đồng",
-        "phu yen": "Đắk Lắk",
-        "dak lak": "Đắk Lắk",
-        "ba ria vung tau": "Thành phố Hồ Chí Minh",
-        "binh duong": "Thành phố Hồ Chí Minh",
-        "ho chi minh": "Thành phố Hồ Chí Minh",
-        "tp ho chi minh": "Thành phố Hồ Chí Minh",
-        "tphcm": "Thành phố Hồ Chí Minh",
-        "binh phuoc": "Đồng Nai",
-        "dong nai": "Đồng Nai",
-        "long an": "Tây Ninh",
-        "tay ninh": "Tây Ninh",
-        "soc trang": "Thành phố Cần Thơ",
-        "hau giang": "Thành phố Cần Thơ",
-        "can tho": "Thành phố Cần Thơ",
-        "ben tre": "Vĩnh Long",
-        "tra vinh": "Vĩnh Long",
-        "vinh long": "Vĩnh Long",
-        "tien giang": "Đồng Tháp",
-        "dong thap": "Đồng Tháp",
-        "bac lieu": "Cà Mau",
-        "ca mau": "Cà Mau",
-        "kien giang": "An Giang",
-        "an giang": "An Giang",
-    }
 
     def __init__(self, place_matcher: AdministrativePlaceMatcher | None = None) -> None:
         self.place_matcher = place_matcher or AdministrativePlaceMatcher()
@@ -210,16 +154,6 @@ class AddressParser:
     def _build_normalized_address(self, result: AddressParseResult) -> str:
         parts = [result.street_line, result.village, result.ward, result.province]
         return ", ".join(part for part in parts if part)
-
-    def _normalize_province(self, value: str) -> str:
-        if not value:
-            return ""
-        folded = self._fold(value)
-        for prefix in ("tinh ", "thanh pho "):
-            if folded.startswith(prefix):
-                folded = folded[len(prefix) :]
-                break
-        return self.PROVINCE_AFTER_MERGER.get(folded, value)
 
     def _fold(self, value: str) -> str:
         value = value.replace(chr(273), "d").replace(chr(272), "D")
