@@ -180,13 +180,11 @@ class DependentUnitTemplateGenerator(DocxTemplateGenerator):
             highlighted_values['legal_representative_id_number'] = values.get('legal_representative_passport_number', '')
         if template_name.startswith('H'):
             highlighted_values['legal_representative_full_name'] = str(values.get('legal_representative_full_name', '')).title()
-        highlighted_values["tax_accounting_dependent_x"] = (
-            "S    " if values.get("tax_accounting_method") == "H\u1ea1ch to\u00e1n ph\u1ee5 thu\u1ed9c" else ""
-        )
-        highlighted_values["tax_bot_project_x"] = "" if str(values.get("tax_bot_project", "") or "").strip() else "S    "
-        highlighted_values["tax_vat_deduction_x"] = (
-            "S    " if values.get("tax_vat_method") == "Kh\u1ea5u tr\u1eeb" else ""
-        )
+        # Section 6 checkboxes are owned by the Word template.
+        # Do not replace their yellow symbol runs during generic replacement.
+        highlighted_values["tax_accounting_dependent_x"] = ""
+        highlighted_values["tax_bot_project_x"] = ""
+        highlighted_values["tax_vat_deduction_x"] = ""
         DocxTemplateGenerator._replace_highlighted_runs(self, document, template_name, highlighted_values)
         if template_name.startswith('2.') and values.get('legal_representative_person_type') == 'Người nước ngoài':
             for paragraph in self._iter_paragraphs(document):
@@ -220,6 +218,16 @@ class DependentUnitTemplateGenerator(DocxTemplateGenerator):
                     for run in paragraph.runs:
                         run.font.size = Pt(13)
         document.save(docx_path)
+
+    def _should_preserve_highlighted_placeholder(
+        self, template_name: str, target: str, values: dict[str, str]
+    ) -> bool:
+        """Leave File 1 tax checkboxes exactly as supplied by the Word template."""
+        return template_name.startswith("1.") and target in {
+            "tax_accounting_dependent_x",
+            "tax_bot_project_x",
+            "tax_vat_deduction_x",
+        }
 
     def _restore_foreign_permanent_address_placeholder(self, document: Document, template_name: str) -> None:
         """Keep the template label ``Nơi thường trú:`` unchanged."""

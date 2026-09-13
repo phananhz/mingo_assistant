@@ -66,6 +66,35 @@ class DependentUnitTemplateGeneratorTest(unittest.TestCase):
                     hashlib.sha256(copied.read_bytes()).digest(),
                 )
 
+    def test_file1_tax_checkboxes_stay_as_template(self) -> None:
+        project_root = Path(__file__).resolve().parents[2]
+        template_dir = project_root / "assets" / "templates" / "word" / "dependent_units" / "ddkd_create"
+        editable = next(template_dir.glob("1.*.docx"))
+        values = {
+            "location_business_name": "LOCATION",
+            "tax_accounting_method": "Hạch toán phụ thuộc",
+            "tax_bot_project": "X",
+            "tax_vat_method": "Khấu trừ",
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir) / "output"
+            generator = DependentUnitTemplateGenerator(template_dir, Path(temp_dir))
+            generator.generate(values, "location", output_dir)
+            generated = Document(next(output_dir.glob("Thong bao*.docx")))
+
+        def highlighted_checkbox_symbols(document: Document) -> list[tuple[str, str]]:
+            return [
+                (symbol.get(qn("w:font"), ""), symbol.get(qn("w:char"), "").upper())
+                for paragraph in generator._iter_paragraphs(document)
+                for run in paragraph.runs
+                if run.font.highlight_color == WD_COLOR_INDEX.YELLOW
+                for symbol in run._r.findall(qn("w:sym"))
+            ]
+
+        self.assertEqual(
+            highlighted_checkbox_symbols(Document(editable)),
+            highlighted_checkbox_symbols(generated),
+        )
     def test_runtime_templates_preserve_yellow_fill_and_passthrough_files(self) -> None:
         project_root = Path(__file__).resolve().parents[2]
         template_dir = project_root / "assets" / "templates" / "word" / "dependent_units" / "ddkd_create"
@@ -278,12 +307,22 @@ class DependentUnitTemplateGeneratorTest(unittest.TestCase):
             self.assertNotIn(".", [run.text for run in tax_runs])
             self.assertGreaterEqual(len(placeholder_runs), 2)
             self.assertTrue(all(run.font.size and run.font.size.pt == 13 for run in placeholder_runs))
-            tax_symbols = [symbol for run in tax_runs for symbol in run._r.findall(qn("w:sym"))]
-            self.assertTrue(any(
-                symbol.get(qn("w:font")) == "Wingdings 2" and symbol.get(qn("w:char")) == "F053"
-                for symbol in tax_symbols
-            ))
-            self.assertTrue(any(
-                symbol.get(qn("w:font")) == "Webdings" and symbol.get(qn("w:char"), "").upper() == "F063"
-                for symbol in tax_symbols
-            ))
+            tax_symbols = [
+                (symbol.get(qn("w:font"), ""), symbol.get(qn("w:char"), "").upper())
+                for run in tax_runs
+                for symbol in run._r.findall(qn("w:sym"))
+            ]
+            template_document = Document(editable)
+            template_tax_table = next(
+                table for table in template_document.tables
+                if "thong tin dang ky thue" in generator._fold(
+                    " ".join(cell.text for row in table.rows for cell in row.cells)
+                )
+            )
+            template_tax_symbols = [
+                (symbol.get(qn("w:font"), ""), symbol.get(qn("w:char"), "").upper())
+                for paragraph in generator._table_paragraphs([template_tax_table])
+                for run in paragraph.runs
+                for symbol in run._r.findall(qn("w:sym"))
+            ]
+            self.assertEqual(template_tax_symbols, tax_symbols)
