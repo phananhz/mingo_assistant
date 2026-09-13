@@ -9,6 +9,7 @@ from mingo_assistant.infrastructure.storage import read_json, write_json_atomic
 
 
 PERSONAL_PROFILE_FIELDS = (
+    "personal_person_type",
     "legal_representative_full_name",
     "legal_representative_id_number",
     "legal_representative_date_of_birth",
@@ -19,6 +20,11 @@ PERSONAL_PROFILE_FIELDS = (
     "legal_representative_issue_date",
     "legal_representative_expiry_date",
     "legal_representative_issue_place",
+    "legal_representative_passport_number",
+    "legal_representative_passport_issue_date",
+    "legal_representative_passport_issue_place",
+    "legal_representative_contact_address",
+    "personal_foreign_country",
     "personal_phone",
     "personal_email",
 )
@@ -81,6 +87,35 @@ class PersonalProfileRepository:
         payload["profiles"] = profiles
         self._write_payload(payload)
         return profile
+
+    def upsert_foreign_person(self, values: dict[str, str]) -> dict[str, str]:
+        """Persist a manually entered foreign person for later role reuse."""
+        profile = {key: str(values.get(key, "") or "").strip() for key in PERSONAL_PROFILE_FIELDS}
+        profile["personal_person_type"] = "Người nước ngoài"
+        name = profile["legal_representative_full_name"]
+        passport = profile["legal_representative_passport_number"]
+        if not name or not passport:
+            raise ValueError("Cần có họ tên và số hộ chiếu để lưu dữ liệu người nước ngoài.")
+
+        payload = self._read_payload()
+        profiles = [dict(item) for item in payload.get("profiles", []) if isinstance(item, dict)]
+        existing = next(
+            (
+                item for item in profiles
+                if str(item.get("legal_representative_passport_number", "")).strip() == passport
+            ),
+            None,
+        )
+        if existing is None:
+            profile["id"] = str(uuid4())
+            profiles.append(profile)
+        else:
+            profile["id"] = str(existing.get("id", "")) or str(uuid4())
+            existing.update(profile)
+            profile = existing
+        payload["profiles"] = profiles
+        self._write_payload(payload)
+        return dict(profile)
 
     def upsert_organization(self, values: dict[str, str]) -> dict[str, str]:
         profile = {key: str(values.get(key, "") or "").strip() for key in ORGANIZATION_PROFILE_FIELDS}

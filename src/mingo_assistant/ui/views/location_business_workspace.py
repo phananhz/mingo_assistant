@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QThread
+from PySide6.QtCore import QTimer, Qt, QThread
 from PySide6.QtWidgets import (
     QComboBox,
     QGridLayout,
@@ -152,7 +152,7 @@ class LocationBusinessWorkspace(BusinessRegistrationWorkspace):
         save = QPushButton("Lưu nháp")
         save.setObjectName("GhostButton")
         save.clicked.connect(self._save_draft)
-        export = QPushButton("Xuất Word")
+        export = QPushButton("Xuất hồ sơ")
         export.setObjectName("PrimaryButton")
         export.clicked.connect(self._export_documents)
         header.addWidget(back)
@@ -293,7 +293,60 @@ class LocationBusinessWorkspace(BusinessRegistrationWorkspace):
             column = (index % 2) * 2
             add_field(supplement_grid, row, column, key, supplement_labels.get(key))
         self._sync_location_manager_person_type()
+
+        self._foreign_profile_save_timer = QTimer(self)
+        self._foreign_profile_save_timer.setSingleShot(True)
+        self._foreign_profile_save_timer.setInterval(700)
+        self._foreign_profile_save_timer.timeout.connect(self._save_foreign_location_manager_profile)
+        for key in (
+            "location_manager_person_type", "location_manager_full_name",
+            "location_manager_date_of_birth", "location_manager_gender",
+            "location_manager_nationality", "location_manager_passport_number",
+            "location_manager_passport_issue_date", "location_manager_passport_issue_place",
+            "location_manager_foreign_address_detail", "location_manager_foreign_country",
+        ):
+            field = self.fields.get(key)
+            if isinstance(field, QComboBox):
+                field.currentTextChanged.connect(self._schedule_foreign_location_manager_profile_save)
+            elif isinstance(field, (QLineEdit, QTextEdit)):
+                field.textChanged.connect(self._schedule_foreign_location_manager_profile_save)
+
         return section
+
+    def _schedule_foreign_location_manager_profile_save(self, *_args) -> None:
+        if not self._initializing and hasattr(self, "_foreign_profile_save_timer"):
+            self._foreign_profile_save_timer.start()
+
+    def _save_foreign_location_manager_profile(self) -> None:
+        if self._field_value("location_manager_person_type") != "Người nước ngoài":
+            return
+        values = {
+            "personal_person_type": "Người nước ngoài",
+            "legal_representative_full_name": self._field_value("location_manager_full_name"),
+            "legal_representative_date_of_birth": self._field_value("location_manager_date_of_birth"),
+            "legal_representative_gender": self._field_value("location_manager_gender"),
+            "legal_representative_nationality": self._field_value("location_manager_nationality"),
+            "legal_representative_passport_number": self._field_value("location_manager_passport_number"),
+            "legal_representative_passport_issue_date": self._field_value("location_manager_passport_issue_date"),
+            "legal_representative_passport_issue_place": self._field_value("location_manager_passport_issue_place"),
+            "legal_representative_permanent_address": self._field_value("location_manager_foreign_address_detail"),
+            "personal_foreign_country": self._field_value("location_manager_foreign_country"),
+            "legal_representative_contact_address": ", ".join(filter(None, (
+                self._field_value("location_manager_address_detail"),
+                self._field_value("location_manager_ward"),
+                self._field_value("location_manager_province"),
+            ))),
+        }
+        if not values["legal_representative_full_name"] or not values["legal_representative_passport_number"]:
+            return
+        saved = self.profile_repository.upsert_foreign_person(values)
+        passport = saved.get("legal_representative_passport_number", "")
+        existing = next((item for item in self.personal_profiles if item.get("legal_representative_passport_number", "") == passport), None)
+        if existing is None:
+            self.personal_profiles.append(saved)
+        else:
+            existing.update(saved)
+        self._refresh_person_fill_selectors()
 
     def _sync_location_manager_person_type(self) -> None:
         field = self.fields.get("location_manager_person_type")
@@ -326,13 +379,40 @@ class LocationBusinessWorkspace(BusinessRegistrationWorkspace):
         return targets.get(title, super()._person_fill_target_for_section(title))
 
     def _fill_section_from_person(self, target: str, person) -> None:
-        if target == 'legal_representative':
-            self._set_field('legal_representative_person_type', 'Người Việt Nam')
+        data = self._person_data_for_fill(person)
+        is_foreign = data.get("personal_person_type") == "Người nước ngoài" or bool(
+            data.get("legal_representative_passport_number", "").strip()
+        )
+        if target == "legal_representative":
+            self._set_field("legal_representative_person_type", "Người nước ngoài" if is_foreign else "Người Việt Nam")
+            super()._fill_section_from_person(target, person)
+            if is_foreign:
+                self._set_fields_from_mapping({
+                    "legal_representative_id_number": "",
+                    "legal_representative_passport_number": data.get("legal_representative_passport_number", ""),
+                    "legal_representative_passport_issue_date": data.get("legal_representative_passport_issue_date", ""),
+                    "legal_representative_passport_issue_place": data.get("legal_representative_passport_issue_place", ""),
+                })
+            return
         if target != "location_manager":
             super()._fill_section_from_person(target, person)
             return
-        data = self._person_data_for_fill(person)
-        self._set_field("location_manager_person_type", "Ng\u01b0\u1eddi Vi\u1ec7t Nam")
+        self._set_field("location_manager_person_type", "Người nước ngoài" if is_foreign else "Người Việt Nam")
+        if is_foreign:
+            self._clear_location_manager_fields(("location_manager_id_number", "location_manager_ethnicity"))
+            self._set_fields_from_mapping({
+                "location_manager_full_name": data.get("legal_representative_full_name", ""),
+                "location_manager_date_of_birth": data.get("legal_representative_date_of_birth", ""),
+                "location_manager_gender": data.get("legal_representative_gender", ""),
+                "location_manager_nationality": data.get("legal_representative_nationality", ""),
+                "location_manager_passport_number": data.get("legal_representative_passport_number", ""),
+                "location_manager_passport_issue_date": data.get("legal_representative_passport_issue_date", ""),
+                "location_manager_passport_issue_place": data.get("legal_representative_passport_issue_place", ""),
+                "location_manager_foreign_address_detail": data.get("legal_representative_permanent_address", ""),
+                "location_manager_foreign_country": data.get("personal_foreign_country", "") or data.get("legal_representative_nationality", ""),
+            })
+            self._refresh_preview()
+            return
         self._clear_location_manager_fields((
             "location_manager_ethnicity",
             "location_manager_passport_number",
@@ -350,11 +430,10 @@ class LocationBusinessWorkspace(BusinessRegistrationWorkspace):
             "location_manager_address_detail": address.street_line or address.village,
             "location_manager_ward": address.ward,
             "location_manager_province": address.province,
-            "location_manager_nationality": data.get("legal_representative_nationality", "Vi\u1ec7t Nam"),
+            "location_manager_nationality": data.get("legal_representative_nationality", "Việt Nam"),
         }
         self._set_fields_from_mapping(mapping)
         self._refresh_preview()
-
     def _activate_organization_owner_for_document(self) -> bool:
         """A location dossier has no organization-owner form to activate."""
         return True
@@ -380,6 +459,23 @@ class LocationBusinessWorkspace(BusinessRegistrationWorkspace):
     ) -> None:
         """Keep a scan as an explicit dropdown source for both legal roles."""
         super()._apply_cccd_values_to_current_person(card_values, apply_to_form=False)
+
+    def _sync_personal_data_to_case(self, card_values: dict[str, str], previous_id_number: str) -> None:
+        super()._sync_personal_data_to_case(card_values, previous_id_number)
+        id_numbers = self.person_profile_synchronizer.identity_numbers(card_values, previous_id_number)
+        if not self._same_person_identity(self._field_value("location_manager_id_number"), id_numbers):
+            return
+        address = self.address_parser.parse(card_values.get("legal_representative_permanent_address", ""))
+        self._set_fields_from_mapping({
+            "location_manager_full_name": card_values.get("legal_representative_full_name", ""),
+            "location_manager_date_of_birth": card_values.get("legal_representative_date_of_birth", ""),
+            "location_manager_gender": card_values.get("legal_representative_gender", ""),
+            "location_manager_address_detail": address.street_line or address.village,
+            "location_manager_ward": address.ward,
+            "location_manager_province": address.province,
+            "location_manager_nationality": card_values.get("legal_representative_nationality", ""),
+        })
+        self._refresh_preview()
 
     def _save_organization_profile(self) -> None:
         """Save recognized organization data for this location dossier."""

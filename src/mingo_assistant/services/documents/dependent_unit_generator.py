@@ -5,7 +5,6 @@ import re
 import shutil
 import tempfile
 import zipfile
-from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
 
@@ -219,17 +218,10 @@ class DependentUnitTemplateGenerator(DocxTemplateGenerator):
         document.save(docx_path)
 
     def _restore_foreign_permanent_address_placeholder(self, document: Document, template_name: str) -> None:
-        """Restore the missing dotted line in the foreign-person address block."""
-        if not template_name.startswith("1."):
-            return
-        for paragraph in self._iter_paragraphs(document):
-            if self._fold(paragraph.text).strip().rstrip(":") != "noi thuong tru":
-                continue
-            placeholder = paragraph.add_run(" " + "." * 60)
-            source_properties = paragraph.runs[-2]._r.rPr if len(paragraph.runs) > 1 else None
-            if source_properties is not None:
-                placeholder._r.insert(0, deepcopy(source_properties))
-            return
+        """Keep the template label ``Nơi thường trú:`` unchanged."""
+        # The template already provides the label; do not append generated dots.
+        return
+
     def _remove_empty_business_line_rows(self, document: Document, values: dict[str, str]) -> None:
         """A location dossier must not retain the template's spare industry rows."""
         if self._business_lines(values):

@@ -135,8 +135,8 @@ class BusinessRegistrationWorkspace(QWidget):
         self.form_nav_widget: QWidget | None = None
         self.person_fill_selectors: dict[str, QComboBox] = {}
         self.authorized_person_defaults = authorized_person_defaults or {}
-        # Quick-fill profiles are scoped to this open case only.
-        self.personal_profiles: list[dict[str, str]] = []
+        # Load persisted profiles so they can be reused across role sections and cases.
+        self.personal_profiles: list[dict[str, str]] = self.profile_repository.list_profiles()
         self.organization_profiles: list[dict[str, str]] = []
         self.organization_owner_profile_selector: QComboBox | None = None
         self.organization_representative_selector: QComboBox | None = None
@@ -256,7 +256,7 @@ class BusinessRegistrationWorkspace(QWidget):
         storage_button.setObjectName("GhostButton")
         storage_button.clicked.connect(self._choose_export_root)
 
-        export_button = QPushButton("Xuất Word")
+        export_button = QPushButton("Xuất hồ sơ")
         export_button.setObjectName("PrimaryButton")
         export_button.clicked.connect(self._export_documents)
 
@@ -480,13 +480,18 @@ class BusinessRegistrationWorkspace(QWidget):
         layout.addWidget(normalized_label, 4, 0)
         layout.addWidget(normalized_address, 4, 1, 1, 3)
 
+        address_note = QLabel("*Địa chỉ điền hồ sơ chỉ là tham khảo, bạn cần kiểm tra kĩ nội dung này")
+        address_note.setObjectName("CccdAddressNote")
+        address_note.setWordWrap(True)
+        layout.addWidget(address_note, 5, 1, 1, 3)
+
         status_label = QLabel("Tr\u1ea1ng th\u00e1i \u0111\u1ecba ch\u1ec9")
         status_label.setObjectName("FilterLabel")
         self.cccd_address_status_label = QLabel()
         self.cccd_address_status_label.setWordWrap(True)
         self.cccd_address_status_label.setObjectName("FilterLabel")
-        layout.addWidget(status_label, 5, 0)
-        layout.addWidget(self.cccd_address_status_label, 5, 1, 1, 3)
+        layout.addWidget(status_label, 6, 0)
+        layout.addWidget(self.cccd_address_status_label, 6, 1, 1, 3)
         self._set_cccd_address_status("", "")
 
         actions = QHBoxLayout()
@@ -499,7 +504,7 @@ class BusinessRegistrationWorkspace(QWidget):
         apply_button.setObjectName("PrimaryButton")
         apply_button.clicked.connect(self._save_cccd_personal_profile)
         actions.addWidget(apply_button)
-        layout.addLayout(actions, 6, 0, 1, 4)
+        layout.addLayout(actions, 7, 0, 1, 4)
         return group
 
     def _build_address_section(self) -> QWidget:
@@ -1141,11 +1146,11 @@ class BusinessRegistrationWorkspace(QWidget):
             section_grid.addWidget(field, row, column + 1)
 
         if title == "Thông tin người được ủy quyền":
-            fill_button = QPushButton("Tự động điền thông tin người ủy quyền")
-            fill_button.setObjectName("PrimaryButton")
-            fill_button.clicked.connect(self._fill_authorized_person_from_defaults)
+            export_button = QPushButton("Xuất hồ sơ")
+            export_button.setObjectName("PrimaryButton")
+            export_button.clicked.connect(self._export_documents)
             next_row = first_field_row + (len(fields) + 1) // 2
-            section_grid.addWidget(fill_button, next_row, 0, 1, 4, Qt.AlignRight)
+            section_grid.addWidget(export_button, next_row, 0, 1, 4, Qt.AlignRight)
 
         if title == "Th\u00f4ng tin ch\u1ee7 s\u1edf h\u1eefu":
             owner_list_button = QPushButton("M\u1edf danh s\u00e1ch ch\u1ee7 s\u1edf h\u1eefu h\u01b0\u1edfng l\u1ee3i")
@@ -2125,6 +2130,9 @@ class BusinessRegistrationWorkspace(QWidget):
         if not address:
             return
         parsed = self.address_parser.parse(address)
+        # Administrative splitting is only valid for Vietnamese addresses.
+        if not parsed.province:
+            return
         # Confirmation only gates automatic use of an ambiguous CCCD scan. A
         # user-entered or saved address can still be split when labels are clear.
         detail = self._address_detail_from_result(parsed)
@@ -2845,7 +2853,11 @@ class BusinessRegistrationWorkspace(QWidget):
             "confirmed",
             "\u0110\u1ecba ch\u1ec9 \u0111\u00e3 \u0111\u01b0\u1ee3c ng\u01b0\u1eddi d\u00f9ng x\u00e1c nh\u1eadn.",
         )
-        self._apply_cccd_values_to_current_person(self._cccd_result_values())
+        values = self._cccd_result_values()
+        current_person_data = self._person_data_for_fill(self.ocr_people[self.current_person_index])
+        previous_id_number = current_person_data.get("legal_representative_id_number", "").strip()
+        self._apply_cccd_values_to_current_person(values)
+        self._sync_personal_data_to_case(values, previous_id_number)
 
     def _update_cccd_result_fields(self, values: dict[str, str]) -> None:
         for key, field in self.ocr_card_fields.items():
@@ -2927,7 +2939,7 @@ class BusinessRegistrationWorkspace(QWidget):
         values["legal_representative_ethnicity"] = self._field_value("legal_representative_ethnicity")
         values["personal_phone"] = self._field_value("legal_representative_phone") or self._field_value("applicant_phone")
         values["personal_email"] = self._field_value("legal_representative_email") or self._field_value("applicant_email")
-        saved = dict(values)
+        saved = self.profile_repository.upsert(dict(values))
         known_id_numbers = {number for number in (id_number, previous_id_number) if number}
         existing = next(
             (

@@ -241,7 +241,8 @@ class DependentUnitTemplateGeneratorTest(unittest.TestCase):
                 paragraph for paragraph in generator._iter_paragraphs(document)
                 if generator._fold(paragraph.text).strip().startswith("noi thuong tru")
             )
-            self.assertEqual(foreign_permanent_address.text, "\u004e\u01a1i th\u01b0\u1eddng tr\u00fa: " + "." * 60)
+            self.assertEqual(foreign_permanent_address.text, "\u004e\u01a1i th\u01b0\u1eddng tr\u00fa:")
+            self.assertNotIn(".", foreign_permanent_address.text)
             self.assertEqual(foreign_permanent_address.runs[-1].font.size.pt, 13)
             industry_table = next(
                 table for table in document.tables

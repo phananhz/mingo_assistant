@@ -57,11 +57,13 @@ class OrganizationDocumentService:
         )
 
     def _extract_supported_document(self, text: str, method: str) -> OrganizationDocumentResult | None:
+        # A certificate has authoritative company fields in sections 1 and 2.
+        # Do not let section 4 (owner) overwrite the company identity.
+        if self._is_business_certificate(text):
+            return self._build_certificate_result(text, text, method)
         owner_section = self._owner_section(text)
         if self._is_usable_owner_section(owner_section):
             return self._build_owner_section_result(owner_section, text, method)
-        if self._is_business_certificate(text):
-            return self._build_certificate_result(text, text, method)
         return None
 
     def _extract_with_ocr(self, document: fitz.Document, progress_callback: ProgressCallback | None) -> str:
@@ -159,15 +161,21 @@ class OrganizationDocumentService:
             raw_address,
         ).strip(" ,;")
         parsed = self.address_parser.parse(address_without_country) if address_without_country else None
+        # Only split administrative levels for Vietnamese addresses.
+        if country != "Việt Nam" and not (parsed and parsed.province):
+            return {
+                "organization_owner_address_detail": raw_address.strip(),
+                "organization_owner_ward": "",
+                "organization_owner_province": "",
+                "organization_owner_country": country,
+            }
         province = parsed.province if parsed else ""
         if not province:
             province = self._province_from_text(address_without_country)
 
-        ward = parsed.ward if parsed else ""
-        if ward:
-            ward = self.address_parser.place_matcher.best_ward_name(ward, province) or ward
-        if not ward:
-            ward = self._known_ward_from_text(address_without_country)
+        ward = self._known_ward_from_text(address_without_country)
+        if not ward and parsed and parsed.ward:
+            ward = self.address_parser.place_matcher.best_ward_name(parsed.ward, province) or parsed.ward
         if not ward:
             ward = self.address_parser.place_matcher.best_ward_name(address_without_country, province)
 
