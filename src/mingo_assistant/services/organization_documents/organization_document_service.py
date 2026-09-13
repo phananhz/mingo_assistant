@@ -134,7 +134,7 @@ class OrganizationDocumentService:
         raw_text: str,
         method: str,
     ) -> OrganizationDocumentResult:
-        lines = self._lines(certificate_text)
+        lines = self._certificate_company_lines(self._lines(certificate_text))
         raw_address = self._certificate_address(lines)
         address_values = self._organization_address_values(raw_address)
         values = {
@@ -235,6 +235,13 @@ class OrganizationDocumentService:
             extraction_method=method,
             warnings=warnings,
         )
+
+    def _certificate_company_lines(self, lines: list[str]) -> list[str]:
+        """Use certificate header and sections 1-3; ignore the owner section."""
+        for index, line in enumerate(lines):
+            if self._is_owner_heading(line):
+                return lines[:index]
+        return lines
 
     def _company_name(self, lines: list[str]) -> str:
         labels = ('tencongtyvietbangtiengviet', 'tendoanhnghiepvietbangtiengviet', 'tenbangtiengviet')

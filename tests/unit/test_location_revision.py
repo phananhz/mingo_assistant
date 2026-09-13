@@ -43,6 +43,24 @@ class LocationRevisionTest(unittest.TestCase):
             '2. Địa chỉ trụ sở chính: Số 270/114 Phan Đình Phùng',
             'Phường Cầu Kiệu', 'Điện thoại: 0123456789']))
 
+    def test_certificate_ignores_registration_number_in_owner_section_four(self):
+        service = OrganizationDocumentService()
+        certificate = "\n".join((
+            "GIAY CHUNG NHAN DANG KY DOANH NGHIEP",
+            "Ma so doanh nghiep: 3703192163",
+            "1. Ten cong ty",
+            "Ten cong ty viet bang tieng Viet: CONG TY TNHH VAT LIEU MOI LUYI VIET NAM",
+            "2. Dia chi tru so chinh: 1 TEST STREET, VIET NAM",
+            "3. Von dieu le: 14929895453 dong",
+            "4. Thong tin ve chu so huu",
+            "Ten to chuc: CONG TY KHAC",
+            "Ma so doanh nghiep: 3306552",
+        ))
+
+        result = service._extract_supported_document(certificate, "ocr")
+
+        self.assertIsNotNone(result)
+        self.assertEqual("3703192163", result.values["organization_owner_registration_number"])
     def test_output_names_and_foreign_signer(self):
         templates = Path(__file__).resolve().parents[2] / 'assets/templates/word/dependent_units/ddkd_create'
         with tempfile.TemporaryDirectory() as temporary:
