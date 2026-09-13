@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from mingo_assistant.models.case import CaseSummary
+from mingo_assistant.models.business_registration import OcrPerson
 from mingo_assistant.services.documents.dependent_unit_generator import DependentUnitTemplateGenerator
 from mingo_assistant.ui.views.business_registration.export_worker import DocxExportWorker
 from mingo_assistant.ui.views.business_registration_workspace import BusinessRegistrationWorkspace
@@ -339,13 +340,24 @@ class LocationBusinessWorkspace(BusinessRegistrationWorkspace):
         }
         if not values["legal_representative_full_name"] or not values["legal_representative_passport_number"]:
             return
-        saved = self.profile_repository.upsert_foreign_person(values)
-        passport = saved.get("legal_representative_passport_number", "")
-        existing = next((item for item in self.personal_profiles if item.get("legal_representative_passport_number", "") == passport), None)
-        if existing is None:
-            self.personal_profiles.append(saved)
-        else:
-            existing.update(saved)
+        passport = values["legal_representative_passport_number"]
+        profile_person = next((
+            person for person in self.ocr_people
+            if person.data.get("legal_representative_passport_number", "").strip() == passport
+        ), None)
+        if profile_person is None:
+            current = self.ocr_people[self.current_person_index]
+            if not current.data and not current.organization_data:
+                profile_person = current
+            elif len(self.ocr_people) < 5:
+                profile_person = OcrPerson(values["legal_representative_full_name"], role="")
+                self.ocr_people.append(profile_person)
+            else:
+                return
+        profile_person.name = values["legal_representative_full_name"]
+        profile_person.data = dict(values)
+        profile_person.recognition_type = "individual"
+        self._refresh_people_buttons()
         self._refresh_person_fill_selectors()
 
     def _sync_location_manager_person_type(self) -> None:

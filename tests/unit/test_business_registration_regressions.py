@@ -113,27 +113,25 @@ class BusinessRegistrationRegressionTest(unittest.TestCase):
         self.assertTrue(BusinessRegistrationWorkspace._same_person_identity("CCCD 012345678901", identities))
         self.assertFalse(BusinessRegistrationWorkspace._same_person_identity("012345678902", identities))
 
-    def test_saved_cccd_profile_is_preferred_over_stale_case_person_data(self) -> None:
+    def test_case_person_data_is_not_overridden_by_a_global_profile(self) -> None:
         workspace = BusinessRegistrationWorkspace.__new__(BusinessRegistrationWorkspace)
+        # Old process-wide data must never replace data belonging to this case.
         workspace.personal_profiles = [
             {
                 "legal_representative_full_name": "NGUYEN VAN TEST",
                 "legal_representative_id_number": "012345678901",
-                "legal_representative_permanent_address": "\u0110\u1ecba ch\u1ec9 m\u1edbi",
-                "legal_representative_contact_address": "Li\u00ean l\u1ea1c m\u1edbi",
+                "legal_representative_permanent_address": "\u0110\u1ecba ch\u1ec9 h\u1ed3 s\u01a1 kh\u00e1c",
             }
         ]
         person = type("Person", (), {"data": {
             "legal_representative_full_name": "NGUYEN VAN TEST",
             "legal_representative_id_number": "012345678901",
-            "legal_representative_permanent_address": "\u0110\u1ecba ch\u1ec9 c\u0169",
+            "legal_representative_permanent_address": "\u0110\u1ecba ch\u1ec9 c\u1ee7a h\u1ed3 s\u01a1 n\u00e0y",
         }})()
 
         data = workspace._person_data_for_fill(person)
 
-        self.assertEqual(data["legal_representative_permanent_address"], "\u0110\u1ecba ch\u1ec9 m\u1edbi")
-        self.assertEqual(data["legal_representative_contact_address"], "Li\u00ean l\u1ea1c m\u1edbi")
-
+        self.assertEqual(data["legal_representative_permanent_address"], "\u0110\u1ecba ch\u1ec9 c\u1ee7a h\u1ed3 s\u01a1 n\u00e0y")
     def test_empty_company_email_replaces_template_sample_email(self) -> None:
         document = Document()
         paragraph = document.add_paragraph(

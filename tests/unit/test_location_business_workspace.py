@@ -286,6 +286,51 @@ class LocationBusinessWorkspaceTest(unittest.TestCase):
                 self.assertEqual("1 STREET A", values["company_address"])
             finally:
                 workspace.deleteLater()
+    def test_profiles_are_case_scoped_and_foreign_profile_survives_case_reload(self) -> None:
+        project_root = Path(__file__).resolve().parents[2]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = LocationBusinessWorkspace(
+                on_back=lambda: None,
+                on_save=lambda case: None,
+                bundle_root=project_root,
+                default_export_root=Path(temp_dir),
+            )
+            try:
+                self.assertEqual([], workspace.personal_profiles)
+                workspace.fields["location_manager_person_type"].setCurrentIndex(1)
+                workspace.fields["location_manager_full_name"].setText("FOREIGN TEST")
+                workspace.fields["location_manager_passport_number"].setText("P1234567")
+                workspace.fields["location_manager_nationality"].setText("Test Country")
+                workspace.fields["location_manager_foreign_address_detail"].setText("Foreign address")
+                workspace.fields["location_manager_foreign_country"].setText("Test Country")
+                workspace._save_foreign_location_manager_profile()
+
+                case = workspace.build_case_summary()
+                self.assertEqual("FOREIGN TEST", case.form_values["person_1_legal_representative_full_name"])
+                self.assertEqual("P1234567", case.form_values["person_1_legal_representative_passport_number"])
+
+                reopened = LocationBusinessWorkspace(
+                    on_back=lambda: None,
+                    on_save=lambda case: None,
+                    case=case,
+                    bundle_root=project_root,
+                    default_export_root=Path(temp_dir),
+                )
+                try:
+                    self.assertEqual([], reopened.personal_profiles)
+                    selector = reopened.person_fill_selectors["legal_representative"]
+                    self.assertIn("1. FOREIGN TEST", [selector.itemText(index) for index in range(selector.count())])
+                    reopened.authorized_person_defaults = {"authorized_person_full_name": "GLOBAL AUTHORIZED"}
+                    reopened._refresh_person_fill_selector("authorized_person")
+                    authorized_selector = reopened.person_fill_selectors["authorized_person"]
+                    authorized_options = [authorized_selector.itemText(index) for index in range(authorized_selector.count())]
+                    self.assertIn("GLOBAL AUTHORIZED", authorized_options)
+                    self.assertNotIn("1. FOREIGN TEST", authorized_options)
+                    self.assertEqual("P1234567", reopened.ocr_people[0].data["legal_representative_passport_number"])
+                finally:
+                    reopened.deleteLater()
+            finally:
+                workspace.deleteLater()
     def test_full_location_address_splits_to_existing_fields(self) -> None:
         project_root = Path(__file__).resolve().parents[2]
         with tempfile.TemporaryDirectory() as temp_dir:

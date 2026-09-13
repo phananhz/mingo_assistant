@@ -104,7 +104,6 @@ class BusinessRegistrationWorkspace(QWidget):
         self.ocr_service = self.services.ocr_service
         self.id_parser = self.services.id_card_parser
         self.organization_document_service = self.services.organization_document_service
-        self.profile_repository = self.services.profile_repository
         self.address_parser = self.services.address_parser
         self.industry_catalog = industry_catalog or self.services.industry_catalog
         self.registration_office_catalog = self.services.registration_office_catalog
@@ -135,8 +134,9 @@ class BusinessRegistrationWorkspace(QWidget):
         self.form_nav_widget: QWidget | None = None
         self.person_fill_selectors: dict[str, QComboBox] = {}
         self.authorized_person_defaults = authorized_person_defaults or {}
-        # Load persisted profiles so they can be reused across role sections and cases.
-        self.personal_profiles: list[dict[str, str]] = self.profile_repository.list_profiles()
+        # Profiles belong to the open case only.  Recognized people are
+        # serialized into that case's form values when it is saved.
+        self.personal_profiles: list[dict[str, str]] = []
         self.organization_profiles: list[dict[str, str]] = []
         self.organization_owner_profile_selector: QComboBox | None = None
         self.organization_representative_selector: QComboBox | None = None
@@ -745,9 +745,6 @@ class BusinessRegistrationWorkspace(QWidget):
         selector.blockSignals(True)
         selector.clear()
         selector.addItem(AUTO_FILL_PROMPT, "")
-        for index, profile in enumerate(self.personal_profiles):
-            name = profile.get("legal_representative_full_name") or f"Profile cá nhân {index + 1}"
-            selector.addItem(name, f"personal_profile:{index}")
         for display_index, (person_index, person) in enumerate(self._unique_saved_people(), start=1):
             selector.addItem(self._person_display_name(display_index, person), f"person:{person_index}")
         if current_data:
@@ -767,14 +764,7 @@ class BusinessRegistrationWorkspace(QWidget):
             self._refresh_preview()
             return
         data: dict[str, str] = {}
-        if selected.startswith("personal_profile:"):
-            try:
-                profile_index = int(selected.split(":", 1)[1])
-            except ValueError:
-                return
-            if 0 <= profile_index < len(self.personal_profiles):
-                data = self.personal_profiles[profile_index]
-        elif selected.startswith("person:"):
+        if selected.startswith("person:"):
             try:
                 person_index = int(selected.split(":", 1)[1])
             except ValueError:
@@ -1010,9 +1000,6 @@ class BusinessRegistrationWorkspace(QWidget):
         if self._field_value("legal_representative_full_name") or self._field_value("legal_representative_id_number"):
             name = self._field_value("legal_representative_full_name") or "Người đại diện pháp luật"
             selector.addItem(f"Đại diện pháp luật - {name}", "legal_representative")
-        for index, profile in enumerate(self.personal_profiles):
-            name = profile.get("legal_representative_full_name") or f"Profile cá nhân {index + 1}"
-            selector.addItem(name, f"personal_profile:{index}")
         for display_index, (person_index, person) in enumerate(self._unique_saved_people(), start=1):
             selector.addItem(self._person_display_name(display_index, person), f"person:{person_index}")
         if current_data:
@@ -1034,13 +1021,6 @@ class BusinessRegistrationWorkspace(QWidget):
         data: dict[str, str] = {}
         if selected == "legal_representative":
             data = self._person_data_for_fill(OcrPerson("", role="legal_representative"))
-        elif selected.startswith("personal_profile:"):
-            try:
-                profile_index = int(selected.split(":", 1)[1])
-            except ValueError:
-                return
-            if 0 <= profile_index < len(self.personal_profiles):
-                data = self.personal_profiles[profile_index]
         elif selected.startswith("person:"):
             try:
                 person_index = int(selected.split(":", 1)[1])
@@ -1799,9 +1779,6 @@ class BusinessRegistrationWorkspace(QWidget):
         if target == "authorized_person":
             self._add_authorized_person_default_options(selector)
         else:
-            for index, profile in enumerate(self.personal_profiles):
-                name = profile.get("legal_representative_full_name") or f"Profile cá nhân {index + 1}"
-                selector.addItem(name, f"personal_profile:{index}")
             for display_index, (person_index, person) in enumerate(self._unique_saved_people(), start=1):
                 selector.addItem(self._person_display_name(display_index, person), f"person:{person_index}")
         if current_data:
@@ -1821,8 +1798,7 @@ class BusinessRegistrationWorkspace(QWidget):
         return f"name:{name.casefold()}" if name else ""
 
     def _unique_saved_people(self) -> list[tuple[int, OcrPerson]]:
-        identities = {self._person_identity(self._normalize_person_fill_data(profile)) for profile in self.personal_profiles}
-        identities.discard("")
+        identities: set[str] = set()
         people: list[tuple[int, OcrPerson]] = []
         for index, person in enumerate(self.ocr_people):
             if not self._person_has_saved_data(person):
@@ -1864,15 +1840,6 @@ class BusinessRegistrationWorkspace(QWidget):
             return
         if selected.startswith("authorized_profile:"):
             self._fill_authorized_person_from_profile(selected)
-            return
-        if selected.startswith("personal_profile:"):
-            try:
-                profile_index = int(selected.split(":", 1)[1])
-            except ValueError:
-                return
-            if 0 <= profile_index < len(self.personal_profiles):
-                profile = self.personal_profiles[profile_index]
-                self._fill_section_from_person(target, OcrPerson(profile.get("legal_representative_full_name", ""), data=profile))
             return
         if not selected.startswith("person:"):
             return
@@ -2016,16 +1983,7 @@ class BusinessRegistrationWorkspace(QWidget):
 
     def _person_data_for_fill(self, person: OcrPerson) -> dict[str, str]:
         if person.data:
-            data = self._normalize_person_fill_data(person.data)
-            identity = self._person_identity(data)
-            # A saved profile is authoritative after edited CCCD data is
-            # stored. The OcrPerson saved in a case can retain an old address.
-            if identity:
-                for profile in reversed(self.personal_profiles):
-                    saved_data = self._normalize_person_fill_data(profile)
-                    if self._person_identity(saved_data) == identity:
-                        return saved_data
-            return data
+            return self._normalize_person_fill_data(person.data)
         values = self.form_values()
         if person.role == "legal_representative":
             return self._normalize_person_fill_data({
@@ -2308,13 +2266,50 @@ class BusinessRegistrationWorkspace(QWidget):
                 for key in ORGANIZATION_OWNER_FIELD_KEYS
                 if values.get(f"person_{index}_organization_{key}", "")
             }
+            prefix = f"person_{index}_"
+            metadata_keys = {
+                "name", "role", "front_path", "back_path", "recognition_type",
+                "raw_text", "organization_extraction_method",
+            }
+            person.data.update({
+                key.removeprefix(prefix): value
+                for key, value in values.items()
+                if key.startswith(prefix)
+                and not key.startswith(f"{prefix}organization_")
+                and key.removeprefix(prefix) not in metadata_keys
+                and value
+            })
+            person.organization_data.update({
+                key.removeprefix(f"{prefix}organization_"): value
+                for key, value in values.items()
+                if key.startswith(f"{prefix}organization_") and value
+            })
             if not person.recognition_type:
                 person.recognition_type = "organization" if person.organization_data else "individual" if person.data else ""
             people.append(person)
         self.ocr_people = people or self.ocr_people
+        self._restore_case_organization_profiles()
+        self._refresh_person_fill_selectors()
+        self._refresh_beneficial_owner_list_selector()
+        self._refresh_organization_representative_selector()
+        self._refresh_organization_owner_selector()
         self.current_person_index = 0
         self._refresh_people_buttons()
         self._refresh_selected_person_images()
+
+    def _restore_case_organization_profiles(self) -> None:
+        """Rebuild selectable organizations from the open case only."""
+        self.organization_profiles = []
+        known_identities: set[str] = set()
+        for person in self.ocr_people:
+            profile = person.organization_data
+            registration_number = profile.get("organization_owner_registration_number", "").strip()
+            name = profile.get("organization_owner_name", "").strip()
+            identity = registration_number or name.casefold()
+            if not identity or identity in known_identities:
+                continue
+            known_identities.add(identity)
+            self.organization_profiles.append(dict(profile))
 
     @staticmethod
     def _business_line_indices(values: dict[str, str]) -> list[int]:
@@ -2939,21 +2934,7 @@ class BusinessRegistrationWorkspace(QWidget):
         values["legal_representative_ethnicity"] = self._field_value("legal_representative_ethnicity")
         values["personal_phone"] = self._field_value("legal_representative_phone") or self._field_value("applicant_phone")
         values["personal_email"] = self._field_value("legal_representative_email") or self._field_value("applicant_email")
-        saved = self.profile_repository.upsert(dict(values))
-        known_id_numbers = {number for number in (id_number, previous_id_number) if number}
-        existing = next(
-            (
-                profile
-                for profile in self.personal_profiles
-                if profile.get("legal_representative_id_number", "").strip() in known_id_numbers
-            ),
-            None,
-        )
-        if existing is None:
-            self.personal_profiles.append(saved)
-        else:
-            existing.update(saved)
-            saved = existing
+        saved = dict(values)
         self._refresh_person_fill_selectors()
         self._refresh_beneficial_owner_list_selector()
         self._refresh_organization_representative_selector()
