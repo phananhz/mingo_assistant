@@ -202,7 +202,9 @@ class AdministrativePlaceMatcher:
                 for district_index in (ward_index - 1, ward_index + 1):
                     if not 0 <= district_index < len(parts) - 1:
                         continue
-                    if not self._same_place(parts[district_index], candidate.district_name):
+                    if not self._matches_legacy_district_part(
+                        parts[district_index], candidate.district_name
+                    ):
                         continue
                     key = (
                         candidate.new_ward_name,
@@ -215,6 +217,20 @@ class AdministrativePlaceMatcher:
                         seen.add(key)
                         matches.append((candidate, ward_index, district_index))
         return matches
+
+    def _matches_legacy_district_part(self, value: str, district_name: str) -> bool:
+        """Match an exact legacy district or a safe two-token abbreviation."""
+        if self._same_place(value, district_name):
+            return True
+        abbreviated = self._strip_admin_prefix(self._fold(value)).split()
+        canonical = self._strip_admin_prefix(self._fold(district_name)).split()
+        return (
+            len(abbreviated) == len(canonical)
+            and len(abbreviated) >= 2
+            and len(abbreviated[0]) == 1
+            and abbreviated[0] == canonical[0][:1]
+            and abbreviated[1:] == canonical[1:]
+        )
 
     def _canonicalize_current_two_tier_tail(self, parts: list[str]) -> list[str]:
         """Keep an already-current ward/province pair out of legacy conversion."""
@@ -289,7 +305,13 @@ class AdministrativePlaceMatcher:
         """Split common Vietnamese administrative labels that OCR joins together."""
         repaired = address or ""
         repaired = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", repaired)
-        repaired = re.sub(r"(?i)\bp\.?\s*(\d+)\b", r"Phường \1", repaired)
+        # ``P3409 Tòa...`` is a flat/apartment code, while ``P. 14, Q. 11``
+        # is a ward. Expand the latter only at an administrative boundary.
+        repaired = re.sub(
+            r"(?i)\bp\.?\s*(\d+)\b(?=\s*(?:[,;]|$|(?:q\.?|quan|huyen|thi xa)\b))",
+            r"Phường \1",
+            repaired,
+        )
         repaired = re.sub(r"(?i)\bph(?:uong|ng)\s*(\d+)\b", r"Phường \1", repaired)
         repaired = re.sub(r"(?i)\bq\.?\s*(\d+)\b", r"Quận \1", repaired)
         repaired = re.sub(r"(?i)\bq(?:uan|un)\b\s*", "Quận ", repaired)

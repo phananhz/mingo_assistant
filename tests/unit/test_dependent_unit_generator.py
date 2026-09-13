@@ -264,6 +264,12 @@ class DependentUnitTemplateGeneratorTest(unittest.TestCase):
                 table for table in document.tables
                 if "thong tin dang ky thue" in generator._fold(" ".join(cell.text for row in table.rows for cell in row.cells))
             )
+            tax_heading = next(
+                paragraph for paragraph in generator._iter_paragraphs(document)
+                if "6. thong tin dang ky thue" in generator._fold(paragraph.text)
+            )
+            self.assertTrue(tax_heading.runs)
+            self.assertTrue(all(run.font.bold for run in tax_heading.runs))
             tax_runs = [run for paragraph in generator._table_paragraphs([tax_table]) for run in paragraph.runs]
             placeholder_runs = [
                 run for run in tax_runs

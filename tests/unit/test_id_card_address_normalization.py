@@ -234,6 +234,25 @@ Nu"""
 
         self.assertEqual(result, "Tổ 56, Xã Ô Diên, Thành phố Hà Nội")
 
+    def test_parser_converts_abbreviated_hoang_mai_district_without_misclassifying_home_number(self) -> None:
+        result = AddressParser().parse(
+            "P3409 Tòa Tháp C Vinaconex Kđt Kim Văn Kim Lũ, Đại Kim, H.Mai, Hà Nội"
+        )
+
+        self.assertEqual(result.street_line, "P3409 Tòa Tháp C Vinaconex Kđt Kim Văn Kim Lũ")
+        self.assertEqual(result.ward, "Phường Định Công")
+        self.assertEqual(result.province, "Thành phố Hà Nội")
+        self.assertEqual(
+            result.normalized_address,
+            "P3409 Tòa Tháp C Vinaconex Kđt Kim Văn Kim Lũ, Phường Định Công, Thành phố Hà Nội",
+        )
+    def test_matcher_keeps_flat_code_starting_with_p_as_address_detail(self) -> None:
+        result = AdministrativePlaceMatcher().normalize_address(
+            "P3409 Tòa Tháp C Vinaconex Kđt Kim Văn Kim Lũ, Đại Kim, H.Mai, Hà Nội"
+        )
+
+        self.assertTrue(result.startswith("P3409 Tòa Tháp C"))
+        self.assertNotIn("Phường 3409", result)
     def test_address_parser_uses_current_two_tier_tail_for_form_fields(self) -> None:
         result = AddressParser().parse(
             "34F Ngõ 784 Bạch Đằng Tổ 56, Hồng Hà, Hà Nội"

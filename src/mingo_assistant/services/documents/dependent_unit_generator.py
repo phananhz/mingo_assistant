@@ -181,11 +181,11 @@ class DependentUnitTemplateGenerator(DocxTemplateGenerator):
         if template_name.startswith('H'):
             highlighted_values['legal_representative_full_name'] = str(values.get('legal_representative_full_name', '')).title()
         highlighted_values["tax_accounting_dependent_x"] = (
-            "X" if values.get("tax_accounting_method") == "H\u1ea1ch to\u00e1n ph\u1ee5 thu\u1ed9c" else ""
+            "S    " if values.get("tax_accounting_method") == "H\u1ea1ch to\u00e1n ph\u1ee5 thu\u1ed9c" else ""
         )
-        highlighted_values["tax_bot_project_x"] = "" if str(values.get("tax_bot_project", "") or "").strip() else "X"
+        highlighted_values["tax_bot_project_x"] = "" if str(values.get("tax_bot_project", "") or "").strip() else "S    "
         highlighted_values["tax_vat_deduction_x"] = (
-            "X" if values.get("tax_vat_method") == "Kh\u1ea5u tr\u1eeb" else ""
+            "S    " if values.get("tax_vat_method") == "Kh\u1ea5u tr\u1eeb" else ""
         )
         DocxTemplateGenerator._replace_highlighted_runs(self, document, template_name, highlighted_values)
         if template_name.startswith('2.') and values.get('legal_representative_person_type') == 'Người nước ngoài':
@@ -212,7 +212,11 @@ class DependentUnitTemplateGenerator(DocxTemplateGenerator):
         if template_name.startswith('1.'):
             for paragraph in self._iter_paragraphs(document):
                 folded = self._fold(paragraph.text)
-                if '6. thong tin dang ky thue' in folded or 'ca nhan duoi day' in folded:
+                if '6. thong tin dang ky thue' in folded:
+                    for run in paragraph.runs:
+                        run.font.size = Pt(13)
+                        run.font.bold = True
+                elif 'ca nhan duoi day' in folded:
                     for run in paragraph.runs:
                         run.font.size = Pt(13)
         document.save(docx_path)
@@ -251,7 +255,7 @@ class DependentUnitTemplateGenerator(DocxTemplateGenerator):
 
     @staticmethod
     def _set_symbol_checkbox_value(run, value: str) -> None:
-        """Use the two glyphs already used by the protected template."""
+        """Use the template's Wingdings 2 checked-box symbol (clipboard: S)."""
         selected = bool(str(value or "").strip())
         for symbol in run._r.findall(qn("w:sym")):
             symbol.set(qn("w:font"), "Wingdings 2" if selected else "Webdings")
