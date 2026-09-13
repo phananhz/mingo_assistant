@@ -95,8 +95,13 @@ class LiquidGlassModalBox(QFrame):
             )
             x = (self.width() - scaled.width()) // 2
             y = (self.height() - scaled.height()) // 2
-            painter.setOpacity(self._bg_opacity)
+            painter.setOpacity(self._bg_opacity * 0.58)
             painter.drawPixmap(x, y, scaled)
+
+            # A light veil reduces background contrast while preserving the
+            # frosted-glass depth behind the cards.
+            painter.setOpacity(1.0)
+            painter.fillRect(rect, QColor(255, 255, 255, 38))
 
         # 3. Soft luminous outer/inner border stroke
         painter.setOpacity(1.0)
@@ -436,17 +441,10 @@ class DossierListItem(QFrame):
 
         layout.addLayout(info_layout, 1)
 
-        # Right: Selection Indicator
-        self.indicator = QLabel("✓")
-        self.indicator.setObjectName("DossierItemIndicator")
-        self.indicator.setAlignment(Qt.AlignCenter)
-        self.indicator.setFixedSize(30, 30)
-        layout.addWidget(self.indicator)
 
     def set_selected(self, is_selected: bool) -> None:
         self.is_selected = is_selected
         self.setProperty("selected", "true" if is_selected else "false")
-        self.indicator.setVisible(is_selected)
         self._hover_effect.setColor(QColor(90, 70, 174, 128 if is_selected else 38))
         self._hover_effect.setOffset(0, 7 if is_selected else 3)
         self._hover_effect.setBlurRadius(22 if is_selected else 8)
@@ -538,13 +536,13 @@ class BusinessCreationModal(QDialog):
         self._layout_mode = layout_mode
         self._is_liquid_glass = (self._layout_mode == "liquid_glass")
 
-        # Load user opacity preference (default 75% matching Image 3)
-        initial_opacity_pct = 75
+        # Keep the wallpaper subdued so the procedure cards remain the visual focus.
+        initial_opacity_pct = 48
         try:
-            initial_opacity_pct = int(saved_settings.get("modal_bg_opacity", "75"))
+            initial_opacity_pct = int(saved_settings.get("modal_bg_opacity", "48"))
             initial_opacity_pct = max(0, min(100, initial_opacity_pct))
         except (ValueError, TypeError):
-            initial_opacity_pct = 75
+            initial_opacity_pct = 48
 
         # Timer for debounced setting persistence
         self._save_timer = QTimer(self)

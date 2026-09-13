@@ -201,6 +201,10 @@ QLabel#CompanyTypeSelection {color: white; font-size: 10px; font-weight: 800; ba
 QFrame#DossierListItem[hovered="true"] {background: rgba(255,255,255,220); border: 1px solid rgba(164,139,224,190); border-radius: 20px;}
 QFrame#DossierListItem[selected="true"] {background: qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 rgba(249,247,255,238),stop:0.52 rgba(235,229,253,226),stop:1 rgba(224,242,250,220)); border: 2px solid rgba(139,111,207,210); border-radius: 20px;}
 QFrame#DossierListItem[selected="true"] QLabel#DossierItemTitle {color: #553d8d;}
+QDialog#BusinessCreationModal QFrame#DossierListItem {background: rgba(255,255,255,178); border: 1px solid rgba(255,255,255,225); border-radius: 18px;}
+QDialog#BusinessCreationModal QFrame#DossierListItem[hovered="true"] {background: rgba(255,255,255,226); border: 1px solid rgba(169,139,232,220);}
+QDialog#BusinessCreationModal QFrame#DossierListItem[selected="true"] {background: qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 rgba(249,247,255,246),stop:0.52 rgba(235,229,253,238),stop:1 rgba(224,242,250,232)); border: 2px solid rgba(139,111,207,235); border-radius: 18px;}
+QDialog#BusinessCreationModal QFrame#DossierListItem[selected="true"] QLabel#DossierItemTitle {color: #553d8d; font-weight: 800;}
 QLabel#DossierItemIndicator {background: qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #ac92e5,stop:1 #654ba5); color: white; border: 1px solid rgba(255,255,255,210); border-radius: 15px; font-size: 14px; font-weight: 900;}
 """
     for name in ('PrimaryButton', 'CompactPrimaryButton', 'ModalCreateButton',

@@ -843,6 +843,9 @@ QScrollArea#DossierScrollArea, QScrollArea#DossierScrollArea::viewport, QScrollA
 QFrame#DossierListItem { background: rgba(255, 255, 255, 0.72); border: 1.5px solid rgba(255, 255, 255, 0.85); border-radius: 14px; }
 QFrame#DossierListItem:hover { border-color: #e38ab0; background: rgba(255, 255, 255, 0.88); }
 QFrame#DossierListItem[selected="true"] { border: 2px solid #d4598b; background: rgba(255, 255, 255, 0.90); }
+QDialog#BusinessCreationModal QFrame#DossierListItem { background: rgba(255, 255, 255, 0.88); border: 1.5px solid rgba(255, 255, 255, 0.95); border-radius: 18px; }
+QDialog#BusinessCreationModal QFrame#DossierListItem[selected="true"] { border: 2px solid #8b6fcf; background: rgba(249, 247, 255, 0.96); }
+QDialog#BusinessCreationModal QFrame#DossierListItem[selected="true"] QLabel#DossierItemTitle { color: #553d8d; font-weight: 800; }
 QLabel#DossierItemIcon { font-size: 20px; background: rgba(255, 255, 255, 0.85); border-radius: 10px; border: 1px solid rgba(241, 245, 249, 0.8); }
 QFrame#DossierListItem[selected="true"] QLabel#DossierItemIcon { background: #ffffff; border-color: #fbcfe8; }
 QLabel#DossierItemTitle { font-size: 14.5px; font-weight: 700; color: #0f172a; }

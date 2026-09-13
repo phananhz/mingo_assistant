@@ -117,8 +117,6 @@ class TestAllModalsAndNavigation(unittest.TestCase):
                 "dissolution",
                 "dependent_units",
                 "industry_lookup",
-                "templates",
-                "people",
                 "trash",
             ],
         )

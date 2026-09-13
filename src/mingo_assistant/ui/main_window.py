@@ -67,13 +67,11 @@ from mingo_assistant.ui.widgets.combo_box import NoWheelComboBox
 
 
 NAV_ITEMS = [
-    ("business_registration", "1. Thủ tục thành lập doanh nghiệp"),
+    ("business_registration", "1. Thủ tục thành lập DN"),
     ("business_amendment", "2. Thủ tục thay đổi ĐKDN"),
     ("dissolution", "3. Thủ tục giải thể DN"),
     ("dependent_units", "4. Thủ tục của đơn vị phụ thuộc"),
-    ("industry_lookup", "Tra cứu ngành nghề kinh doanh"),
-    ("templates", "Quản lý mẫu Word"),
-    ("people", "Kho cá nhân/tổ chức"),
+    ("industry_lookup", "Tra cứu NNKD"),
     ("trash", "Thùng rác"),
 ]
 
@@ -1334,7 +1332,7 @@ class MainWindow(QMainWindow):
         layout.setSpacing(18)
 
         header = QVBoxLayout()
-        title = QLabel("Tra cứu ngành nghề kinh doanh")
+        title = QLabel("Tra cứu NNKD")
         title.setObjectName("IndustryLookupTitle")
         description = QLabel("Tra cứu mã ngành, tên ngành và nội dung ngành theo Hệ thống ngành kinh tế Việt Nam 2025.")
         description.setObjectName("IndustryLookupDescription")
