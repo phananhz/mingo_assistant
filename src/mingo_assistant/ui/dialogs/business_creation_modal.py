@@ -429,6 +429,9 @@ class DossierListItem(QFrame):
 
         self.badge_label = QLabel(option.badge)
         self.badge_label.setObjectName("DossierItemBadgeReady" if option.is_ready else "DossierItemBadgeDev")
+        if option.id == "dossier_tnhh_2tv_personal":
+            self.badge_label.setText("S?n s?ng s? d?ng")
+            self.badge_label.setObjectName("DossierItemBadgeReady")
         header_row.addWidget(self.badge_label)
         header_row.addStretch(1)
 

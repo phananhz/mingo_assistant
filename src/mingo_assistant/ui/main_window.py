@@ -51,6 +51,9 @@ from mingo_assistant.models.case import CaseSummary
 from mingo_assistant.repositories.authorized_person_repository import AuthorizedPersonProfileRepository
 from mingo_assistant.repositories.case_repository import CaseRepository
 from mingo_assistant.services.business_lines.industry_lookup import IndustryCatalog, IndustryRow
+from mingo_assistant.services.documents.business_registration_variants import (
+    TWO_MEMBER_INDIVIDUAL_VARIANT,
+)
 from mingo_assistant.ui.dialogs.settings_dialog import SettingsDialog, SettingsView
 from mingo_assistant.ui.styles import (
     EFFECT_SHADOW_OPTIONS,
@@ -2156,6 +2159,8 @@ class MainWindow(QMainWindow):
         def on_chosen(case_type: str, is_ready: bool) -> None:
             chosen["case_type"] = case_type
             chosen["is_ready"] = is_ready
+            if case_type.startswith("TNHH hai") and "(C" in case_type:
+                chosen["is_ready"] = True
 
         modal.dossier_chosen.connect(on_chosen)
         was_visible = self.sidebar.isVisible() if hasattr(self, "sidebar") and self.sidebar else False
@@ -2173,7 +2178,13 @@ class MainWindow(QMainWindow):
                     self._apply_layout_structure(self.current_layout)
         if result == QDialog.DialogCode.Accepted and chosen["case_type"]:
             if chosen["is_ready"]:
-                self._open_new_business_case()
+                template_variant = ""
+                if str(chosen["case_type"]).startswith("TNHH hai") and "(C" in str(chosen["case_type"]):
+                    template_variant = TWO_MEMBER_INDIVIDUAL_VARIANT
+                if not template_variant:
+                    self._open_new_business_case()
+                    return
+                self._open_new_business_case(template_variant=template_variant)
             else:
                 self._show_coming_soon(str(chosen["case_type"]), "business_registration")
 
@@ -2267,9 +2278,6 @@ class MainWindow(QMainWindow):
                     self._apply_layout_structure(self.current_layout)
         if result == QDialog.DialogCode.Accepted and chosen["title"]:
             self._show_coming_soon(str(chosen["title"]), "dissolution")
-
-    def _open_new_business_case(self) -> None:
-        self._open_case_workspace(None)
 
     def _build_authorized_person_page(self) -> QWidget:
         page = QWidget()
@@ -2566,6 +2574,11 @@ class MainWindow(QMainWindow):
     def _save_authorized_person(self, values: dict[str, str]) -> None:
         values.setdefault("id", str(uuid4()))
         self._save_authorized_person_profiles({"selected_profile_id": values["id"], "profiles": [values]})
+
+    def _open_new_business_case(self, *, template_variant: str = "") -> None:
+        self._open_case_workspace(None)
+        if template_variant and isinstance(self.current_workspace, BusinessRegistrationWorkspace):
+            self.current_workspace.template_variant = template_variant
 
     def _open_case_workspace(self, case: CaseSummary | None) -> None:
         if case is not None:

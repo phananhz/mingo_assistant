@@ -43,6 +43,12 @@ from mingo_assistant.application.people import PersonIdentityRules
 from mingo_assistant.domains.business_registration import VietnameseMoneyFormatter
 from mingo_assistant.models.case import CaseSummary
 from mingo_assistant.services.documents.docx_generator import DocxTemplateGenerator
+from mingo_assistant.services.documents.docx_generator import TwoMemberIndividualFile1DocxTemplateGenerator
+from mingo_assistant.services.documents.business_registration_variants import (
+    TWO_MEMBER_INDIVIDUAL_CASE_TYPE,
+    TWO_MEMBER_INDIVIDUAL_TEMPLATE_RELATIVE_DIR,
+    TWO_MEMBER_INDIVIDUAL_VARIANT,
+)
 from mingo_assistant.services.business_lines.industry_lookup import IndustryCatalog, IndustryRow
 from mingo_assistant.models.business_registration import OcrPerson
 from mingo_assistant.ui.widgets.combo_box import NoWheelComboBox
@@ -91,12 +97,16 @@ class BusinessRegistrationWorkspace(QWidget):
         bundle_root: Path | None = None,
         default_export_root: Path | None = None,
         services: BusinessRegistrationServices | None = None,
+        template_variant: str = "",
     ) -> None:
         super().__init__()
         self.on_back = on_back
         self.on_save = on_save
         self.on_export = on_export
         self.case = case
+        self.template_variant = str(
+            template_variant or (case.form_values.get("registration_template_variant", "") if case else "")
+        ).strip()
         self.case_id = case.id if case else str(uuid4())
         self.bundle_root = bundle_root or get_app_paths().bundle_root
         self.default_export_root = default_export_root or get_app_paths().documents_root
@@ -3103,6 +3113,8 @@ class BusinessRegistrationWorkspace(QWidget):
 
     def _document_generator_class(self) -> type:
         """Return the generator class used by this dossier procedure."""
+        if self.template_variant == TWO_MEMBER_INDIVIDUAL_VARIANT:
+            return TwoMemberIndividualFile1DocxTemplateGenerator
         return DocxTemplateGenerator
 
     def _export_case_name(self, values: dict[str, str]) -> str:
@@ -3236,8 +3248,12 @@ class BusinessRegistrationWorkspace(QWidget):
         QMessageBox.warning(self, "Mẫu Word cần kiểm tra", self._format_template_issues(template_issues))
 
     def _template_and_export_dirs(self) -> tuple[Path, Path]:
+        template_root = self.bundle_root / "assets" / "templates" / "word" / "business_registration"
+        template_dir = template_root
+        if self.template_variant == TWO_MEMBER_INDIVIDUAL_VARIANT:
+            template_dir = template_root / TWO_MEMBER_INDIVIDUAL_TEMPLATE_RELATIVE_DIR
         return (
-            self.bundle_root / "assets" / "templates" / "word" / "business_registration",
+            template_dir,
             self.selected_export_root or self.default_export_root,
         )
 
@@ -3374,6 +3390,7 @@ class BusinessRegistrationWorkspace(QWidget):
 
     def form_values(self, apply_defaults: bool = True) -> dict[str, str]:
         values: dict[str, str] = {}
+        values["registration_template_variant"] = self.template_variant
         for key in self.fields:
             values[key] = self._field_value(key)
         for index, row in enumerate(self.business_line_rows, start=1):
@@ -3476,9 +3493,13 @@ class BusinessRegistrationWorkspace(QWidget):
         )
 
     def _company_member_count(self) -> int:
+        if self.template_variant == TWO_MEMBER_INDIVIDUAL_VARIANT:
+            return 2
         return 1
 
     def _case_type_for_members(self, member_count: int) -> str:
+        if self.template_variant == TWO_MEMBER_INDIVIDUAL_VARIANT:
+            return TWO_MEMBER_INDIVIDUAL_CASE_TYPE
         return self.value_composer.case_type_for_members(member_count)
 
     def _missing_required_fields(self, values: dict[str, str]) -> list[str]:

@@ -44,6 +44,11 @@ FIELD_GROUPS = [
     ("Thông tin người được ủy quyền", [("authorized_person_full_name", "Họ tên"), ("authorized_person_date_of_birth", "Ngày sinh"), ("authorized_person_gender", "Giới tính"), ("authorized_person_id_number", "Số CCCD"), ("authorized_person_issue_date", "Ngày cấp CCCD"), ("authorized_person_issue_place", "Nơi cấp CCCD"), ("authorized_person_contact_address", "Địa chỉ liên lạc"), ("authorized_person_phone", "Điện thoại"), ("authorized_person_email", "Email (nếu có)")]),
 ]
 
+FIELD_GROUPS = [
+    (section, [(key, "S\u1ed1 \u0111\u1ecbnh danh c\u00e1 nh\u00e2n" if key == "applicant_id_number" else label) for key, label in fields])
+    for section, fields in FIELD_GROUPS
+]
+
 BUSINESS_LINE_FIELD_DEFINITIONS = [
     (f"business_line_{index}_name", f"Ngành {index}") for index in range(1, 11)
 ] + [

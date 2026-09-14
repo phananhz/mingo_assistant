@@ -23,6 +23,9 @@ from mingo_assistant.services.documents.package_editor import DocxPackageEditor
 from mingo_assistant.services.documents.template_repository import BusinessRegistrationTemplateRepository
 from mingo_assistant.services.documents.value_formatter import DocumentValueFormatter
 from mingo_assistant.services.documents.context_builder import DocumentContextBuilder
+from mingo_assistant.services.documents.business_registration_variants import (
+    TWO_MEMBER_INDIVIDUAL_FILE1,
+)
 from mingo_assistant.services.normalization.administrative_place_matcher import AdministrativePlaceMatcher
 
 
@@ -2723,3 +2726,134 @@ class DocxTemplateGenerator:
 
 
 
+
+class TwoMemberIndividualFile1DocxTemplateGenerator(DocxTemplateGenerator):
+    """Generate only File 1 for the all-individual 2-member-company workflow.
+
+    This bundle deliberately has its own manifest and selection rule. The
+    legacy one-member generator therefore keeps selecting and filling its
+    original five templates unchanged.
+    """
+
+    def _selected_templates(self, values: dict[str, str]) -> list[Path]:
+        template = self.template_dir / TWO_MEMBER_INDIVIDUAL_FILE1
+        if not template.is_file():
+            raise FileNotFoundError(f"Missing Word template: {template}")
+        return [template]
+
+    def _replace_case_type_text(self, document: Document, values: dict[str, str]) -> None:
+        # The supplied File 1 already contains the legally correct 2-member
+        # wording. Do not apply legacy one-member text substitutions here.
+        return
+
+    def _remove_file1_owner_name_spacer(
+        self, document: Document, template_name: str, values: dict[str, str]
+    ) -> None:
+        # This template has a different section structure from the old File 1.
+        return
+
+    def _apply_template_checkbox_rules(
+        self, document: Document, template_name: str, values: dict[str, str]
+    ) -> None:
+        # Preserve the source template's native Word checkbox glyphs and layout.
+        # Its selection rules will be introduced with the remaining 2-member files.
+        self._apply_two_member_file1_contact_and_gender_fields(document, values)
+        return
+
+    def _apply_two_member_file1_contact_and_gender_fields(
+        self, document: Document, values: dict[str, str]
+    ) -> None:
+        """Fill the non-highlighted File 1 fields without rebuilding template tables."""
+        company_phone = str(values.get("company_phone", "") or "").strip()
+        company_fax = str(values.get("company_fax", "") or "").strip()
+        company_email = str(values.get("company_email", "") or "").strip()
+        company_website = str(values.get("company_website", "") or "").strip()
+        director_gender = str(
+            values.get("director_gender") or values.get("legal_representative_gender") or ""
+        ).strip()
+
+        def placeholder(value: str) -> str:
+            return value or ".................."
+
+        def write_pair(paragraph, left_label: str, left_value: str, right_label: str, right_value: str) -> None:
+            self._replace_paragraph_with_highlighted_values(
+                paragraph,
+                (
+                    (left_label, False),
+                    (placeholder(left_value), bool(left_value)),
+                    ("\t" + right_label, False),
+                    (placeholder(right_value), bool(right_value)),
+                ),
+            )
+            try:
+                paragraph.paragraph_format.tab_stops.add_tab_stop(Inches(4.1))
+            except Exception:
+                pass
+
+        in_company_address = False
+        in_tax_director = False
+        in_tax_notice_address = False
+        for paragraph in self._iter_paragraphs(document):
+            folded = self._fold(paragraph.text)
+            if folded.startswith("3. dia chi tru so chinh"):
+                in_company_address = True
+            elif in_company_address and folded.startswith("4."):
+                in_company_address = False
+
+            if "thong tin ve giam doc" in folded:
+                in_tax_director = True
+            elif folded.startswith("9.2"):
+                in_tax_director = False
+            if "dia chi nhan thong bao thue" in folded:
+                in_tax_notice_address = True
+            elif folded.startswith("9.4"):
+                in_tax_notice_address = False
+
+            if in_company_address and "dien thoai" in folded and "so fax" in folded:
+                write_pair(
+                    paragraph,
+                    "\u0110i\u1ec7n tho\u1ea1i: ",
+                    company_phone,
+                    "S\u1ed1 fax (n\u1ebfu c\u00f3): ",
+                    company_fax,
+                )
+                continue
+            if in_company_address and "thu dien tu" in folded and "website" in folded:
+                write_pair(
+                    paragraph,
+                    "Th\u01b0 \u0111i\u1ec7n t\u1eed (n\u1ebfu c\u00f3): ",
+                    company_email,
+                    "Website (n\u1ebfu c\u00f3): ",
+                    company_website,
+                )
+                continue
+            if in_tax_director and folded.startswith("gioi tinh"):
+                self._replace_paragraph_with_highlighted_values(
+                    paragraph,
+                    (("Gi\u1edbi t\u00ednh: ", False), (placeholder(director_gender), bool(director_gender))),
+                )
+                continue
+            if in_tax_director and folded.startswith("dien thoai"):
+                self._replace_paragraph_with_highlighted_values(
+                    paragraph,
+                    (("\u0110i\u1ec7n tho\u1ea1i: ", False), (placeholder(company_phone), bool(company_phone))),
+                )
+                continue
+            if in_tax_notice_address and "dien thoai" in folded and "so fax" in folded:
+                write_pair(
+                    paragraph,
+                    "\u0110i\u1ec7n tho\u1ea1i (n\u1ebfu c\u00f3): ",
+                    company_phone,
+                    "S\u1ed1 fax (n\u1ebfu c\u00f3): ",
+                    company_fax,
+                )
+                try:
+                    paragraph.paragraph_format.tab_stops.add_tab_stop(Inches(3.25))
+                except Exception:
+                    pass
+                continue
+            if in_tax_notice_address and folded.startswith("thu dien tu"):
+                self._replace_paragraph_with_highlighted_values(
+                    paragraph,
+                    (("Th\u01b0 \u0111i\u1ec7n t\u1eed (n\u1ebfu c\u00f3): ", False), (placeholder(company_email), bool(company_email))),
+                )
