@@ -52,7 +52,12 @@ from mingo_assistant.services.documents.business_registration_variants import (
 from mingo_assistant.services.business_lines.industry_lookup import IndustryCatalog, IndustryRow
 from mingo_assistant.models.business_registration import OcrPerson
 from mingo_assistant.ui.widgets.combo_box import NoWheelComboBox
-from mingo_assistant.ui.views.business_registration.components import BusinessLineRow, ClickableImageLabel
+from mingo_assistant.ui.views.business_registration.components import (
+    BeneficialOwnerRow,
+    BusinessLineRow,
+    ClickableImageLabel,
+    CompanyMemberRow,
+)
 from mingo_assistant.ui.views.business_registration.export_worker import DocxExportWorker
 from mingo_assistant.ui.views.business_registration.schema import (
     ASSET_CONTRIBUTION_LABELS,
@@ -66,9 +71,14 @@ from mingo_assistant.ui.views.business_registration.schema import (
     ORGANIZATION_OWNER_FIELD_KEYS,
     ORGANIZATION_OWNER_REPRESENTATIVE_FIELD_KEYS,
     PERSON_ROLES,
-    POSITION_OPTIONS,
 )
 
+
+MEMBER_SECTION_TITLE = "Danh s\u00e1ch th\u00e0nh vi\u00ean"
+MEMBER_CAPITAL_SECTION_TITLE = "Phần vốn góp của thành viên"
+MIN_TWO_MEMBER_ROWS = 2
+DEFAULT_MEMBER_CAPITAL_ASSET_TYPE = "Tiền mặt"
+DEFAULT_MEMBER_CAPITAL_DEADLINE = "Trong thời hạn 90 ngày kể từ ngày được cấp Giấy chứng nhận đăng ký doanh nghiệp"
 
 AUTO_FILL_PROMPT = "\u0043h\u1ecdn \u0111\u1ec3 t\u1ef1 \u0111\u1ed9ng \u0111i\u1ec1n"
 
@@ -105,7 +115,9 @@ class BusinessRegistrationWorkspace(QWidget):
         self.on_export = on_export
         self.case = case
         self.template_variant = str(
-            template_variant or (case.form_values.get("registration_template_variant", "") if case else "")
+            template_variant
+            or (case.form_values.get("registration_template_variant", "") if case else "")
+            or (TWO_MEMBER_INDIVIDUAL_VARIANT if case and case.case_type == TWO_MEMBER_INDIVIDUAL_CASE_TYPE else "")
         ).strip()
         self.case_id = case.id if case else str(uuid4())
         self.bundle_root = bundle_root or get_app_paths().bundle_root
@@ -127,6 +139,8 @@ class BusinessRegistrationWorkspace(QWidget):
         self.fields: dict[str, QLineEdit | QTextEdit | QCheckBox | QComboBox] = {}
         self.beneficial_owner_list_auto_fields: dict[str, QLineEdit | QTextEdit] = {}
         self.beneficial_owner_list_selector: QComboBox | None = None
+        self.two_member_beneficial_owner_rows: list[BeneficialOwnerRow] = []
+        self.two_member_beneficial_owner_table: QFrame | None = None
         self.ocr_card_fields: dict[str, QLineEdit | QTextEdit | QComboBox] = {}
         self.cccd_address_status_label: QLabel | None = None
         self._cccd_address_status = ""
@@ -135,6 +149,11 @@ class BusinessRegistrationWorkspace(QWidget):
         self.organization_card_fields: dict[str, QLineEdit | QTextEdit] = {}
         self.business_line_rows: list[BusinessLineRow] = []
         self.business_line_table: QFrame | None = None
+        self.company_member_rows: list[CompanyMemberRow] = []
+        self.company_member_table: QFrame | None = None
+        self.member_contribution_table: QFrame | None = None
+        self.member_contribution_rows: dict[int, tuple[QWidget, ...]] = {}
+        self.updating_member_contributions = False
         self.industry_search_input = QLineEdit()
         self.industry_results_table = QTableWidget()
         self.industry_detail = QTextEdit()
@@ -166,6 +185,10 @@ class BusinessRegistrationWorkspace(QWidget):
         self._director_sync_timer.setSingleShot(True)
         self._director_sync_timer.setInterval(180)
         self._director_sync_timer.timeout.connect(self._sync_director_from_legal_representative)
+        self._financial_autosave_timer = QTimer(self)
+        self._financial_autosave_timer.setSingleShot(True)
+        self._financial_autosave_timer.setInterval(650)
+        self._financial_autosave_timer.timeout.connect(self._autosave_existing_case_financial_values)
         self._refreshing_preview = False
         self._preview_refresh_pending = False
         self.last_export_dir: Path | None = None
@@ -576,12 +599,35 @@ class BusinessRegistrationWorkspace(QWidget):
         layout.addWidget(self.form_stack, 0, Qt.AlignTop)
 
         ordered_field_groups = list(FIELD_GROUPS)
-        owner_index = next(index for index, (title, _) in enumerate(ordered_field_groups) if title == "Thông tin chủ sở hữu")
-        legal_index = next(index for index, (title, _) in enumerate(ordered_field_groups) if title == "Thông tin người đại diện pháp luật")
+        if self.template_variant == TWO_MEMBER_INDIVIDUAL_VARIANT:
+            # A multi-member LLC has members, not a single-owner record.  Keep
+            # the legacy owner form available for its existing company flows.
+            ordered_field_groups = [
+                (title, fields)
+                for title, fields in ordered_field_groups
+                if not any(key == "beneficial_owner_full_name" for key, _label in fields)
+            ]
+            ordered_field_groups.insert(0, (MEMBER_SECTION_TITLE, []))
+
+        legal_index = next(
+            index
+            for index, (_title, fields) in enumerate(ordered_field_groups)
+            if any(key == "legal_representative_full_name" for key, _label in fields)
+        )
         legal_group = ordered_field_groups.pop(legal_index)
-        if legal_index < owner_index:
-            owner_index -= 1
-        ordered_field_groups.insert(owner_index, legal_group)
+        legal_target_index = next(
+            index
+            for index, (_title, fields) in enumerate(ordered_field_groups)
+            if any(key in {"beneficial_owner_full_name", "charter_capital_number"} for key, _label in fields)
+        )
+        ordered_field_groups.insert(legal_target_index, legal_group)
+        if self.template_variant == TWO_MEMBER_INDIVIDUAL_VARIANT:
+            capital_index = next(
+                index
+                for index, (_title, fields) in enumerate(ordered_field_groups)
+                if any(key == "charter_capital_number" for key, _label in fields)
+            )
+            ordered_field_groups.insert(capital_index + 1, (MEMBER_CAPITAL_SECTION_TITLE, []))
 
         for index, (title, fields) in enumerate(ordered_field_groups):
             button = QPushButton(title)
@@ -594,7 +640,11 @@ class BusinessRegistrationWorkspace(QWidget):
             self.form_nav_buttons[title] = button
             self.form_nav_layout.addWidget(button)
 
-            if title == "Ngành nghề kinh doanh":
+            if title == MEMBER_SECTION_TITLE:
+                section = self._build_company_members_section()
+            elif title == MEMBER_CAPITAL_SECTION_TITLE:
+                section = self._build_member_capital_contributions_section()
+            elif title == "Ngành nghề kinh doanh":
                 section = self._build_business_lines_section()
             elif title == "Vốn điều lệ và vốn góp":
                 section = self._build_capital_section()
@@ -623,7 +673,7 @@ class BusinessRegistrationWorkspace(QWidget):
             button.style().polish(button)
 
     def _show_beneficial_owner_list_section(self) -> None:
-        for index, (title, _fields) in enumerate(FIELD_GROUPS):
+        for index, title in enumerate(self.form_sections):
             if title == "Danh s\u00e1ch ch\u1ee7 s\u1edf h\u1eefu h\u01b0\u1edfng l\u1ee3i":
                 self._select_form_section(index)
                 return
@@ -643,6 +693,8 @@ class BusinessRegistrationWorkspace(QWidget):
                 stack_layout.activate()
             self.form_stack.setFixedHeight(max(280, current.sizeHint().height() + 20))
     def _build_beneficial_owner_list_section(self, fields: list[tuple[str, str]]) -> QWidget:
+        if self.template_variant == TWO_MEMBER_INDIVIDUAL_VARIANT:
+            return self._build_two_member_beneficial_owner_section(fields)
         section = QGroupBox("Danh sách chủ sở hữu hưởng lợi")
         layout = QVBoxLayout(section)
         layout.setContentsMargins(14, 14, 14, 14)
@@ -711,6 +763,316 @@ class BusinessRegistrationWorkspace(QWidget):
         layout.addWidget(benefit_group)
         self._refresh_beneficial_owner_list_selector()
         return section
+    def _build_two_member_beneficial_owner_section(self, fields: list[tuple[str, str]]) -> QWidget:
+        section = QGroupBox("Danh s\u00e1ch ch\u1ee7 s\u1edf h\u1eefu h\u01b0\u1edfng l\u1ee3i")
+        layout = QVBoxLayout(section)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(10)
+        hint = QLabel(
+            "Ch\u1ecdn th\u00e0nh vi\u00ean c\u00f4ng ty cho m\u1ed7i d\u00f2ng. "
+            "C\u00f3 th\u1ec3 th\u00eam ho\u1eb7c x\u00f3a d\u00f2ng ch\u1ee7 s\u1edf h\u1eefu h\u01b0\u1edfng l\u1ee3i."
+        )
+        hint.setObjectName("FilterLabel")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        table = QFrame()
+        table.setObjectName("BusinessLineTable")
+        table_layout = QVBoxLayout(table)
+        table_layout.setContentsMargins(0, 0, 0, 0)
+        table_layout.setSpacing(10)
+        self.two_member_beneficial_owner_table = table
+        self._append_two_member_beneficial_owner_row(visible=True, benefit_fields=fields)
+        layout.addWidget(table)
+
+        add_button = QPushButton("+ Th\u00eam ch\u1ee7 s\u1edf h\u1eefu h\u01b0\u1edfng l\u1ee3i")
+        add_button.setObjectName("PrimaryButton")
+        add_button.clicked.connect(lambda: self._show_next_two_member_beneficial_owner_row(fields))
+        layout.addWidget(add_button, 0, Qt.AlignRight)
+        return section
+
+    @staticmethod
+    def _two_member_beneficial_owner_key(index: int, suffix: str) -> str:
+        return f"beneficial_owner_row_{index}_{suffix}"
+
+    @staticmethod
+    def _two_member_beneficial_owner_index(row: BeneficialOwnerRow) -> int:
+        return int(row.card.property("beneficial_owner_index") or 0)
+
+    def _append_two_member_beneficial_owner_row(
+        self,
+        visible: bool,
+        benefit_fields: list[tuple[str, str]],
+    ) -> None:
+        table = self.two_member_beneficial_owner_table
+        if table is None or not isinstance(table.layout(), QVBoxLayout):
+            return
+        index = len(self.two_member_beneficial_owner_rows) + 1
+        card = QFrame()
+        card.setObjectName("BusinessLineRow")
+        card.setFrameShape(QFrame.Box)
+        card.setLineWidth(2)
+        card.setProperty("beneficial_owner_index", index)
+        grid = QGridLayout(card)
+        grid.setContentsMargins(14, 12, 14, 12)
+        grid.setHorizontalSpacing(14)
+        grid.setVerticalSpacing(9)
+        grid.setColumnStretch(1, 1)
+        grid.setColumnStretch(3, 1)
+
+        title = QLabel(f"Ch\u1ee7 s\u1edf h\u1eefu h\u01b0\u1edfng l\u1ee3i {index}")
+        title.setObjectName("FilterLabel")
+        member_selector = NoWheelComboBox()
+        member_selector.currentIndexChanged.connect(
+            lambda _value, owner_index=index: self._fill_two_member_beneficial_owner_from_member(owner_index)
+        )
+        delete_button = QPushButton("X\u00f3a")
+        delete_button.setObjectName("GhostButton")
+        delete_button.clicked.connect(
+            lambda checked=False, owner_index=index: self._delete_two_member_beneficial_owner_row(owner_index)
+        )
+        grid.addWidget(title, 0, 0)
+        grid.addWidget(member_selector, 0, 1, 1, 2)
+        grid.addWidget(delete_button, 0, 3, Qt.AlignRight)
+
+        labels = {key: label for key, label in benefit_fields}
+        field_specs = [
+            ("number", "STT", False),
+            ("full_name", "H\u1ecd v\u00e0 t\u00ean", False),
+            ("date_of_birth", "Ng\u00e0y sinh", False),
+            ("gender", "Gi\u1edbi t\u00ednh", False),
+            ("identity", "Gi\u1ea5y t\u1edd ph\u00e1p l\u00fd", True),
+            ("nationality", "Qu\u1ed1c t\u1ecbch", False),
+            ("ethnicity", "D\u00e2n t\u1ed9c", False),
+            ("address", "\u0110\u1ecba ch\u1ec9 li\u00ean l\u1ea1c", True),
+            ("capital_direct", labels.get("beneficial_owner_list_capital_direct", "V\u1ed1n \u0111i\u1ec1u l\u1ec7 tr\u1ef1c ti\u1ebfp"), False),
+            ("capital_indirect", labels.get("beneficial_owner_list_capital_indirect", "V\u1ed1n \u0111i\u1ec1u l\u1ec7 gi\u00e1n ti\u1ebfp"), False),
+            ("capital_total", labels.get("beneficial_owner_list_capital_total", "T\u1ed5ng v\u1ed1n \u0111i\u1ec1u l\u1ec7"), False),
+            ("voting_direct", labels.get("beneficial_owner_list_voting_direct", "Bi\u1ec3u quy\u1ebft tr\u1ef1c ti\u1ebfp"), False),
+            ("voting_indirect", labels.get("beneficial_owner_list_voting_indirect", "Bi\u1ec3u quy\u1ebft gi\u00e1n ti\u1ebfp"), False),
+            ("voting_total", labels.get("beneficial_owner_list_voting_total", "T\u1ed5ng bi\u1ec3u quy\u1ebft"), False),
+            ("general_partner", labels.get("beneficial_owner_list_general_partner", "Th\u00e0nh vi\u00ean h\u1ee3p danh"), False),
+            ("related_group", labels.get("beneficial_owner_list_related_group", "Nh\u00f3m c\u00e1 nh\u00e2n li\u00ean quan"), False),
+            ("control", labels.get("beneficial_owner_list_control", "Ki\u1ec3m so\u00e1t doanh nghi\u1ec7p"), False),
+            ("manager", labels.get("beneficial_owner_list_manager", "Ng\u01b0\u1eddi qu\u1ea3n l\u00fd doanh nghi\u1ec7p"), False),
+        ]
+        row_fields: dict[str, QLineEdit | QTextEdit] = {}
+        for position, (suffix, label_text, multiline) in enumerate(field_specs):
+            row_number, pair = divmod(position, 2)
+            label = QLabel(label_text)
+            label.setObjectName("FilterLabel")
+            label.setWordWrap(True)
+            field: QLineEdit | QTextEdit
+            if multiline:
+                field = QTextEdit()
+                field.setFixedHeight(54)
+                field.textChanged.connect(self._refresh_preview)
+            else:
+                field = QLineEdit()
+                field.textChanged.connect(self._refresh_preview)
+            if suffix == "number" and isinstance(field, QLineEdit):
+                field.setReadOnly(True)
+                field.setAlignment(Qt.AlignCenter)
+                field.setText(str(index))
+            key = self._two_member_beneficial_owner_key(index, suffix)
+            self.fields[key] = field
+            row_fields[suffix] = field
+            grid.addWidget(label, row_number + 1, pair * 2)
+            grid.addWidget(field, row_number + 1, pair * 2 + 1)
+        table.layout().addWidget(card)
+        self.two_member_beneficial_owner_rows.append(
+            BeneficialOwnerRow(member_selector, row_fields, delete_button, card)
+        )
+        self._refresh_two_member_beneficial_owner_selectors()
+        card.setVisible(visible)
+        self._renumber_two_member_beneficial_owner_rows()
+
+    def _refresh_two_member_beneficial_owner_selectors(self) -> None:
+        if self.template_variant != TWO_MEMBER_INDIVIDUAL_VARIANT:
+            return
+        for owner_row in self.two_member_beneficial_owner_rows:
+            selector = owner_row.member_selector
+            selected = str(selector.currentData() or "")
+            selector.blockSignals(True)
+            selector.clear()
+            selector.addItem(AUTO_FILL_PROMPT, "")
+            for member_index, member_row in enumerate(self.company_member_rows, start=1):
+                if member_row.card.isHidden():
+                    continue
+                name = self._field_value(f"member_{member_index}_full_name") or f"Th\u00e0nh vi\u00ean {member_index}"
+                selector.addItem(f"{member_index}. {name}", f"member:{member_index}")
+            selected_index = selector.findData(selected)
+            if selected_index >= 0:
+                selector.setCurrentIndex(selected_index)
+            selector.blockSignals(False)
+        self._renumber_two_member_beneficial_owner_rows()
+
+    def _show_next_two_member_beneficial_owner_row(self, benefit_fields: list[tuple[str, str]]) -> None:
+        for owner_row in self.two_member_beneficial_owner_rows:
+            if owner_row.card.isHidden():
+                index = self._two_member_beneficial_owner_index(owner_row)
+                self._clear_two_member_beneficial_owner_row(index)
+                owner_row.member_selector.setCurrentIndex(0)
+                owner_row.card.setVisible(True)
+                self._renumber_two_member_beneficial_owner_rows()
+                self._refresh_preview()
+                self._sync_form_stack_height()
+                return
+        self._append_two_member_beneficial_owner_row(visible=True, benefit_fields=benefit_fields)
+        self._sync_form_stack_height()
+
+    def _delete_two_member_beneficial_owner_row(self, index: int) -> None:
+        row = next(
+            (candidate for candidate in self.two_member_beneficial_owner_rows if self._two_member_beneficial_owner_index(candidate) == index),
+            None,
+        )
+        if row is None:
+            return
+        has_data = any(
+            self._field_value(self._two_member_beneficial_owner_key(index, suffix))
+            for suffix in row.fields
+            if suffix != "number"
+        )
+        if has_data and QMessageBox.question(
+            self,
+            "X\u00f3a ch\u1ee7 s\u1edf h\u1eefu h\u01b0\u1edfng l\u1ee3i",
+            f"D\u00f2ng ch\u1ee7 s\u1edf h\u1eefu h\u01b0\u1edfng l\u1ee3i {index} \u0111ang c\u00f3 th\u00f4ng tin. B\u1ea1n c\u00f3 mu\u1ed1n x\u00f3a kh\u00f4ng?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        ) != QMessageBox.Yes:
+            return
+        self._clear_two_member_beneficial_owner_row(index)
+        row.member_selector.setCurrentIndex(0)
+        row.card.setVisible(False)
+        self._renumber_two_member_beneficial_owner_rows()
+        self._refresh_preview()
+        self._sync_form_stack_height()
+
+    def _clear_two_member_beneficial_owner_row(self, index: int) -> None:
+        row = next(
+            (candidate for candidate in self.two_member_beneficial_owner_rows if self._two_member_beneficial_owner_index(candidate) == index),
+            None,
+        )
+        if row is None:
+            return
+        for suffix in row.fields:
+            self._set_field(self._two_member_beneficial_owner_key(index, suffix), "")
+
+    def _renumber_two_member_beneficial_owner_rows(self) -> None:
+        number = 1
+        for row in self.two_member_beneficial_owner_rows:
+            if row.card.isHidden():
+                continue
+            index = self._two_member_beneficial_owner_index(row)
+            self._set_field(self._two_member_beneficial_owner_key(index, "number"), str(number))
+            number += 1
+
+    def _fill_two_member_beneficial_owner_from_member(self, owner_index: int) -> None:
+        owner_row = next(
+            (candidate for candidate in self.two_member_beneficial_owner_rows if self._two_member_beneficial_owner_index(candidate) == owner_index),
+            None,
+        )
+        if owner_row is None:
+            return
+        selected = str(owner_row.member_selector.currentData() or "")
+        if not selected.startswith("member:"):
+            self._clear_two_member_beneficial_owner_row(owner_index)
+            self._renumber_two_member_beneficial_owner_rows()
+            self._refresh_preview()
+            return
+        try:
+            member_index = int(selected.split(":", 1)[1])
+        except ValueError:
+            return
+        id_number = self._field_value(f"member_{member_index}_id_number")
+        values = {
+            "full_name": self._field_value(f"member_{member_index}_full_name"),
+            "date_of_birth": self._field_value(f"member_{member_index}_date_of_birth"),
+            "gender": self._field_value(f"member_{member_index}_gender"),
+            "identity": f"S\u1ed1 \u0111\u1ecbnh danh c\u00e1 nh\u00e2n: {id_number}" if id_number else "",
+            "nationality": self._field_value(f"member_{member_index}_nationality"),
+            "ethnicity": self._field_value(f"member_{member_index}_ethnicity"),
+            "address": self._field_value(f"member_{member_index}_permanent_address"),
+        }
+        for suffix, value in values.items():
+            self._set_field(self._two_member_beneficial_owner_key(owner_index, suffix), value)
+        self._renumber_two_member_beneficial_owner_rows()
+        self._refresh_preview()
+
+    def _restore_two_member_beneficial_owners(self, values: dict[str, str]) -> None:
+        if self.template_variant != TWO_MEMBER_INDIVIDUAL_VARIANT:
+            return
+        source = dict(values)
+        suffixes = (
+            "number", "full_name", "date_of_birth", "gender", "identity", "nationality", "ethnicity", "address",
+            "capital_direct", "capital_indirect", "capital_total", "voting_direct", "voting_indirect", "voting_total",
+            "general_partner", "related_group", "control", "manager",
+        )
+        indexes = {
+            int(match.group(1))
+            for key in source
+            if (match := re.match(r"^beneficial_owner_row_(\d+)_(?:number|full_name|date_of_birth|gender|identity|nationality|ethnicity|address|capital_direct|capital_indirect|capital_total|voting_direct|voting_indirect|voting_total|general_partner|related_group|control|manager|member_index)$", key))
+        }
+        has_legacy_owner_data = any(source.get(f"beneficial_owner_list_{suffix}", "").strip() for suffix in suffixes)
+        if not indexes and has_legacy_owner_data:
+            for suffix in suffixes:
+                source[self._two_member_beneficial_owner_key(1, suffix)] = source.get(f"beneficial_owner_list_{suffix}", "")
+            indexes.add(1)
+        if not indexes:
+            self._renumber_two_member_beneficial_owner_rows()
+            return
+        while len(self.two_member_beneficial_owner_rows) < max(indexes, default=1):
+            self._append_two_member_beneficial_owner_row(visible=False, benefit_fields=[])
+        self._refresh_two_member_beneficial_owner_selectors()
+        for row in self.two_member_beneficial_owner_rows:
+            index = self._two_member_beneficial_owner_index(row)
+            row_has_data = any(source.get(self._two_member_beneficial_owner_key(index, suffix), "").strip() for suffix in suffixes if suffix != "number")
+            row.card.setVisible(row_has_data)
+            member_index = source.get(self._two_member_beneficial_owner_key(index, "member_index"), "")
+            selector_index = row.member_selector.findData(f"member:{member_index}")
+            row.member_selector.blockSignals(True)
+            row.member_selector.setCurrentIndex(selector_index if selector_index >= 0 else 0)
+            row.member_selector.blockSignals(False)
+            for suffix in suffixes:
+                self._set_field(self._two_member_beneficial_owner_key(index, suffix), source.get(self._two_member_beneficial_owner_key(index, suffix), ""))
+        self._renumber_two_member_beneficial_owner_rows()
+
+    def _synchronize_two_member_beneficial_owner_values(self, values: dict[str, str]) -> None:
+        aliases = {
+            "number": "beneficial_owner_list_number",
+            "full_name": "beneficial_owner_list_full_name",
+            "date_of_birth": "beneficial_owner_list_date_of_birth",
+            "gender": "beneficial_owner_list_gender",
+            "identity": "beneficial_owner_list_identity",
+            "nationality": "beneficial_owner_list_nationality",
+            "ethnicity": "beneficial_owner_list_ethnicity",
+            "address": "beneficial_owner_list_address",
+            "capital_direct": "beneficial_owner_list_capital_direct",
+            "capital_indirect": "beneficial_owner_list_capital_indirect",
+            "capital_total": "beneficial_owner_list_capital_total",
+            "voting_direct": "beneficial_owner_list_voting_direct",
+            "voting_indirect": "beneficial_owner_list_voting_indirect",
+            "voting_total": "beneficial_owner_list_voting_total",
+            "general_partner": "beneficial_owner_list_general_partner",
+            "related_group": "beneficial_owner_list_related_group",
+            "control": "beneficial_owner_list_control",
+            "manager": "beneficial_owner_list_manager",
+        }
+        for alias in aliases.values():
+            values[alias] = ""
+        visible_rows = [row for row in self.two_member_beneficial_owner_rows if not row.card.isHidden()]
+        values["beneficial_owner_list_count"] = str(len(visible_rows))
+        for output_index, row in enumerate(visible_rows, start=1):
+            internal_index = self._two_member_beneficial_owner_index(row)
+            values[self._two_member_beneficial_owner_key(internal_index, "member_index")] = str(
+                row.member_selector.currentData() or ""
+            ).removeprefix("member:")
+            for suffix, alias in aliases.items():
+                value = self._field_value(self._two_member_beneficial_owner_key(internal_index, suffix))
+                values[f"beneficial_owner_list_{output_index}_{suffix}"] = value
+                if output_index == 1:
+                    values[alias] = value
+
     def _build_company_section(self, fields: list[tuple[str, str]]) -> QWidget:
         section = QGroupBox("Th\u00f4ng tin doanh nghi\u1ec7p")
         layout = QVBoxLayout(section)
@@ -1186,10 +1548,9 @@ class BusinessRegistrationWorkspace(QWidget):
             field.setToolTip("Đánh dấu khi doanh nghiệp có giấy chứng nhận quyền sử dụng đất thuộc khu vực nêu trong mẫu")
             field.stateChanged.connect(self._refresh_preview)
         elif key == "legal_representative_position":
-            field = NoWheelComboBox()
-            field.addItems(POSITION_OPTIONS)
-            field.currentTextChanged.connect(self._refresh_preview)
-            field.currentTextChanged.connect(self._schedule_director_sync)
+            field = QLineEdit()
+            field.textChanged.connect(self._refresh_preview)
+            field.textChanged.connect(self._schedule_director_sync)
         elif key in {"tax_consolidated_financial_statement", "tax_bot_project"}:
             field = QCheckBox("Tích chọn")
             field.setToolTip("Tích để xuất dấu X vào ô vuông tương ứng trong mẫu Word")
@@ -1219,6 +1580,7 @@ class BusinessRegistrationWorkspace(QWidget):
             field.textChanged.connect(self._refresh_preview)
             if key == "charter_capital_number":
                 field.textChanged.connect(self._handle_capital_number_changed)
+                field.textChanged.connect(self._schedule_existing_case_financial_autosave)
             if key == "business_registration_office":
                 self._setup_registration_office_field(field)
                 field.textChanged.connect(self._sync_document_place_from_registration_office)
@@ -1301,6 +1663,8 @@ class BusinessRegistrationWorkspace(QWidget):
             field = self._create_field(key)
             if key != "charter_capital_number":
                 field.setReadOnly(True)
+            elif isinstance(field, QLineEdit):
+                field.textChanged.connect(self._recalculate_member_contributions)
             summary.addWidget(label, index // 2, (index % 2) * 2)
             summary.addWidget(field, index // 2, (index % 2) * 2 + 1)
         layout.addLayout(summary)
@@ -1379,6 +1743,228 @@ class BusinessRegistrationWorkspace(QWidget):
         self._set_field(f"{prefix}_total_amount", self._format_money(str(total)) if total else "0")
         self._set_field(f"{prefix}_total_ratio", "100" if total else "0")
         return total
+
+
+    def _build_member_capital_contributions_section(self) -> QWidget:
+        section = QGroupBox(MEMBER_CAPITAL_SECTION_TITLE)
+        layout = QVBoxLayout(section)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(10)
+        hint = QLabel("Nh\u1eadp ph\u1ea7n v\u1ed1n g\u00f3p c\u1ee7a th\u00e0nh vi\u00ean 1. Ph\u1ea7n c\u00f2n l\u1ea1i v\u00e0 t\u1ef7 l\u1ec7 s\u1ebd t\u1ef1 t\u00ednh theo v\u1ed1n \u0111i\u1ec1u l\u1ec7.")
+        hint.setObjectName("FilterLabel")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        table = QFrame()
+        table.setObjectName("BusinessLineTable")
+        grid = QGridLayout(table)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(7)
+        grid.setVerticalSpacing(8)
+        for column, heading in enumerate(("STT", "Th\u00e0nh vi\u00ean", "Ph\u1ea7n v\u1ed1n g\u00f3p (VN\u0110)", "T\u1ef7 l\u1ec7 (%)", "Lo\u1ea1i t\u00e0i s\u1ea3n", "Th\u1eddi h\u1ea1n g\u00f3p v\u1ed1n")):
+            header = QLabel(heading)
+            header.setObjectName("TableHeader")
+            header.setAlignment(Qt.AlignCenter)
+            header.setWordWrap(True)
+            header.setMinimumHeight(44)
+            grid.addWidget(header, 0, column)
+        grid.setColumnStretch(1, 2)
+        grid.setColumnStretch(2, 2)
+        grid.setColumnStretch(5, 4)
+        self.member_contribution_table = table
+        for index, row in enumerate(self.company_member_rows, start=1):
+            self._ensure_member_contribution_row(index)
+            self._set_member_contribution_row_visible(index, not row.card.isHidden())
+        layout.addWidget(table)
+        return section
+
+    def _ensure_member_contribution_row(self, index: int) -> None:
+        if index in self.member_contribution_rows:
+            return
+        table = self.member_contribution_table
+        if table is None or not isinstance(table.layout(), QGridLayout):
+            return
+        grid = table.layout()
+        row_number = QLabel(str(index)); row_number.setAlignment(Qt.AlignCenter)
+        member_name = QLabel(); member_name.setWordWrap(True)
+        amount = QLineEdit(); amount.setAlignment(Qt.AlignRight)
+        ratio = QLineEdit(); ratio.setReadOnly(True); ratio.setAlignment(Qt.AlignCenter)
+        asset_type = QLineEdit(); asset_type.setText(DEFAULT_MEMBER_CAPITAL_ASSET_TYPE)
+        deadline = QTextEdit(); deadline.setFixedHeight(54); deadline.setPlainText(DEFAULT_MEMBER_CAPITAL_DEADLINE)
+        amount.setReadOnly(index != 1)
+        amount.textChanged.connect(self._recalculate_member_contributions)
+        amount.textChanged.connect(self._schedule_existing_case_financial_autosave)
+        asset_type.textChanged.connect(self._refresh_preview)
+        asset_type.textChanged.connect(self._schedule_existing_case_financial_autosave)
+        deadline.textChanged.connect(self._refresh_preview)
+        deadline.textChanged.connect(self._schedule_existing_case_financial_autosave)
+        for column, widget in enumerate((row_number, member_name, amount, ratio, asset_type, deadline)):
+            grid.addWidget(widget, index, column)
+        self.fields[f"member_{index}_capital_amount"] = amount
+        self.fields[f"member_{index}_capital_ratio"] = ratio
+        self.fields[f"member_{index}_capital_asset_type"] = asset_type
+        self.fields[f"member_{index}_capital_deadline"] = deadline
+        self.member_contribution_rows[index] = (row_number, member_name, amount, ratio, asset_type, deadline)
+        self._refresh_member_contribution_names()
+
+    def _set_member_contribution_row_visible(self, index: int, visible: bool) -> None:
+        for widget in self.member_contribution_rows.get(index, ()):
+            widget.setVisible(visible)
+
+    def _refresh_member_contribution_names(self) -> None:
+        for index, widgets in self.member_contribution_rows.items():
+            name = self._field_value(f"member_{index}_full_name") or f"Th\u00e0nh vi\u00ean {index}"
+            name_label = widgets[1]
+            if isinstance(name_label, QLabel):
+                name_label.setText(name)
+
+    def _recalculate_member_contributions(self) -> None:
+        if self.updating_member_contributions or self.template_variant != TWO_MEMBER_INDIVIDUAL_VARIANT:
+            return
+        visible_indexes = [index for index, row in enumerate(self.company_member_rows, start=1) if not row.card.isHidden()]
+        if not visible_indexes or 1 not in self.member_contribution_rows:
+            return
+        self.updating_member_contributions = True
+        try:
+            total_digits = self.money_formatter.digits(self._field_value("charter_capital_number"))
+            total = int(total_digits) if total_digits else 0
+            first_digits = self.money_formatter.digits(self._field_value("member_1_capital_amount"))
+            first_amount = int(first_digits) if first_digits else 0
+            if first_digits:
+                self._set_field("member_1_capital_amount", self._format_money(first_digits))
+            if total and first_amount > total:
+                first_amount = total
+                self._set_field("member_1_capital_amount", self._format_money(str(first_amount)))
+            amounts: dict[int, int] = {1: first_amount}
+            remaining_indexes = visible_indexes[1:]
+            if total and remaining_indexes:
+                each, remainder = divmod(max(0, total - first_amount), len(remaining_indexes))
+                for offset, index in enumerate(remaining_indexes):
+                    amounts[index] = each + (remainder if offset == len(remaining_indexes) - 1 else 0)
+            for index in visible_indexes:
+                self._ensure_member_contribution_row(index)
+                amount = amounts.get(index, 0)
+                if index != 1:
+                    self._set_field(f"member_{index}_capital_amount", self._format_money(str(amount)) if total else "")
+                ratio = amount * 100 / total if total else 0
+                self._set_field(f"member_{index}_capital_ratio", f"{ratio:.2f}".rstrip("0").rstrip(".") + ("%" if total else ""))
+                self._set_field_if_empty(f"member_{index}_capital_asset_type", DEFAULT_MEMBER_CAPITAL_ASSET_TYPE)
+                self._set_field_if_empty(f"member_{index}_capital_deadline", DEFAULT_MEMBER_CAPITAL_DEADLINE)
+        finally:
+            self.updating_member_contributions = False
+        self._refresh_preview()
+
+    def _build_company_members_section(self) -> QWidget:
+        section = QGroupBox(MEMBER_SECTION_TITLE)
+        layout = QVBoxLayout(section)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(10)
+        hint = QLabel("Danh s\u00e1ch l\u00e0 ngu\u1ed3n d\u1eef li\u1ec7u duy nh\u1ea5t cho th\u00e0nh vi\u00ean, v\u1ed1n g\u00f3p v\u00e0 ch\u1eef k\u00fd trong h\u1ed3 s\u01a1.")
+        hint.setObjectName("FilterLabel")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        table = QFrame()
+        table.setObjectName("BusinessLineTable")
+        table_layout = QVBoxLayout(table)
+        table_layout.setContentsMargins(0, 0, 0, 0)
+        table_layout.setSpacing(10)
+        self.company_member_table = table
+        for _ in range(MIN_TWO_MEMBER_ROWS):
+            self._append_company_member_row(visible=True)
+        layout.addWidget(table)
+        add_button = QPushButton("+ Th\u00eam th\u00e0nh vi\u00ean")
+        add_button.setObjectName("PrimaryButton")
+        add_button.clicked.connect(self._show_next_company_member_row)
+        layout.addWidget(add_button, 0, Qt.AlignRight)
+        return section
+
+    def _append_company_member_row(self, visible: bool) -> None:
+        table = self.company_member_table
+        if table is None or not isinstance(table.layout(), QVBoxLayout):
+            return
+        index = len(self.company_member_rows) + 1
+        card = QFrame()
+        card.setObjectName("BusinessLineRow")
+        card.setFrameShape(QFrame.Box)
+        card.setLineWidth(2)
+        grid = QGridLayout(card)
+        grid.setContentsMargins(14, 12, 14, 12)
+        grid.setHorizontalSpacing(14)
+        grid.setVerticalSpacing(9)
+        grid.setColumnStretch(1, 1)
+        grid.setColumnStretch(3, 1)
+        selector = NoWheelComboBox()
+        selector.currentIndexChanged.connect(lambda _value, member_index=index: self._fill_company_member_from_selector(member_index))
+        delete_button = QPushButton("X\u00f3a")
+        delete_button.setObjectName("GhostButton")
+        delete_button.clicked.connect(lambda checked=False, member_index=index: self._delete_company_member_row(member_index))
+        title = QLabel(f"Th\u00e0nh vi\u00ean {index}")
+        title.setObjectName("FilterLabel")
+        grid.addWidget(title, 0, 0)
+        grid.addWidget(selector, 0, 1, 1, 2)
+        grid.addWidget(delete_button, 0, 3, Qt.AlignRight)
+        full_name = QLineEdit(); date_of_birth = QLineEdit(); gender = QLineEdit(); id_number = QLineEdit(); address = QTextEdit()
+        address.setFixedHeight(62)
+        specifications = (("H\u1ecd v\u00e0 t\u00ean", full_name, "full_name"), ("Ng\u00e0y sinh", date_of_birth, "date_of_birth"), ("Gi\u1edbi t\u00ednh", gender, "gender"), ("S\u1ed1 \u0111\u1ecbnh danh c\u00e1 nh\u00e2n", id_number, "id_number"), ("\u0110\u1ecba ch\u1ec9 li\u00ean l\u1ea1c", address, "permanent_address"), ("Qu\u1ed1c t\u1ecbch (File 3)", QLineEdit(), "nationality"), ("D\u00e2n t\u1ed9c (File 3)", QLineEdit(), "ethnicity"), ("Ch\u1eef k\u00fd th\u00e0nh vi\u00ean (File 3)", QLineEdit(), "signature"), ("Ghi ch\u00fa (File 3)", QLineEdit(), "note"))
+        for position, (label_text, field, suffix) in enumerate(specifications):
+            row, pair = divmod(position, 2)
+            label = QLabel(label_text); label.setObjectName("FilterLabel")
+            grid.addWidget(label, row + 1, pair * 2)
+            grid.addWidget(field, row + 1, pair * 2 + 1)
+            self.fields[f"member_{index}_{suffix}"] = field
+            field.textChanged.connect(self._refresh_preview)
+        table.layout().addWidget(card)
+        self.company_member_rows.append(CompanyMemberRow(selector, full_name, date_of_birth, gender, id_number, address, delete_button, card))
+        full_name.textChanged.connect(self._refresh_member_contribution_names)
+        full_name.textChanged.connect(self._refresh_two_member_beneficial_owner_selectors)
+        self._ensure_member_contribution_row(index)
+        self._refresh_company_member_profile_selector(index)
+        card.setVisible(visible)
+
+    def _show_next_company_member_row(self) -> None:
+        for index, row in enumerate(self.company_member_rows, start=1):
+            if row.card.isHidden():
+                row.card.setVisible(True)
+                self._ensure_member_contribution_row(index)
+                self._set_member_contribution_row_visible(index, True)
+                self._recalculate_member_contributions()
+                self._sync_form_stack_height(); return
+        self._append_company_member_row(visible=True)
+        self._recalculate_member_contributions()
+        self._sync_form_stack_height()
+
+    def _delete_company_member_row(self, index: int) -> None:
+        row = self.company_member_rows[index - 1]
+        has_data = any((row.full_name_field.text().strip(), row.date_of_birth_field.text().strip(), row.gender_field.text().strip(), row.id_number_field.text().strip(), row.address_field.toPlainText().strip()))
+        if has_data and QMessageBox.question(self, "X\u00f3a th\u00e0nh vi\u00ean", f"Th\u00e0nh vi\u00ean {index} \u0111ang c\u00f3 th\u00f4ng tin. B\u1ea1n c\u00f3 mu\u1ed1n x\u00f3a kh\u00f4ng?", QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes: return
+        for suffix in ("full_name", "date_of_birth", "gender", "id_number", "permanent_address", "nationality", "ethnicity", "signature", "note", "capital_amount", "capital_ratio", "capital_asset_type", "capital_deadline"): self._set_field(f"member_{index}_{suffix}", "")
+        row.profile_selector.setCurrentIndex(0)
+        if index > MIN_TWO_MEMBER_ROWS:
+            row.card.setVisible(False)
+            self._set_member_contribution_row_visible(index, False)
+        self._recalculate_member_contributions()
+        self._refresh_preview(); self._sync_form_stack_height()
+
+    def _refresh_company_member_profile_selectors(self) -> None:
+        for index in range(1, len(self.company_member_rows) + 1): self._refresh_company_member_profile_selector(index)
+
+    def _refresh_company_member_profile_selector(self, index: int) -> None:
+        selector = self.company_member_rows[index - 1].profile_selector; selected = selector.currentData(); selector.blockSignals(True); selector.clear(); selector.addItem(AUTO_FILL_PROMPT, "")
+        for display_index, (person_index, person) in enumerate(self._unique_saved_people(), start=1): selector.addItem(self._person_display_name(display_index, person), f"person:{person_index}")
+        if selected:
+            selected_index = selector.findData(selected)
+            if selected_index >= 0: selector.setCurrentIndex(selected_index)
+        selector.blockSignals(False)
+
+    def _fill_company_member_from_selector(self, index: int) -> None:
+        selected = str(self.company_member_rows[index - 1].profile_selector.currentData() or "")
+        if not selected.startswith("person:"): return
+        try: person_index = int(selected.split(":", 1)[1])
+        except ValueError: return
+        if not 0 <= person_index < len(self.ocr_people): return
+        data = self._person_data_for_fill(self.ocr_people[person_index])
+        self._set_fields_from_mapping({f"member_{index}_full_name": data.get("legal_representative_full_name", ""), f"member_{index}_date_of_birth": data.get("legal_representative_date_of_birth", ""), f"member_{index}_gender": data.get("legal_representative_gender", ""), f"member_{index}_id_number": data.get("legal_representative_id_number", ""), f"member_{index}_permanent_address": data.get("legal_representative_permanent_address", "")})
+        self._refresh_preview()
+
     def _build_business_lines_section(self) -> QWidget:
         section = QGroupBox("Ngành nghề kinh doanh")
         layout = QVBoxLayout(section)
@@ -1777,6 +2363,7 @@ class BusinessRegistrationWorkspace(QWidget):
     def _refresh_person_fill_selectors(self) -> None:
         for target in list(self.person_fill_selectors):
             self._refresh_person_fill_selector(target)
+        self._refresh_company_member_profile_selectors()
 
     def _refresh_person_fill_selector(self, target: str) -> None:
         selector = self.person_fill_selectors.get(target)
@@ -2161,8 +2748,8 @@ class BusinessRegistrationWorkspace(QWidget):
     def _sync_capital_breakdowns_from_charter(self, formatted: str) -> None:
         if "asset_contribution_1_amount" not in self.fields:
             return
-        source_other = any(self._money_digits(self._field_value(f"capital_source_{index}_amount")) for index in (1, 3, 4))
-        asset_other = any(self._money_digits(self._field_value(f"asset_contribution_{index}_amount")) for index in range(2, 7))
+        source_other = any(int(self._money_digits(self._field_value(f"capital_source_{index}_amount")) or "0") for index in (1, 3, 4))
+        asset_other = any(int(self._money_digits(self._field_value(f"asset_contribution_{index}_amount")) or "0") for index in range(2, 7))
         self.updating_capital = True
         try:
             if not source_other:
@@ -2180,6 +2767,27 @@ class BusinessRegistrationWorkspace(QWidget):
     def _format_money(self, digits: str) -> str:
         return self.money_formatter.format_digits(digits)
 
+    def _schedule_existing_case_financial_autosave(self, _value: str = "") -> None:
+        """Persist financial edits made from an existing dossier without a separate save click."""
+        if self._initializing or self.case is None:
+            return
+        self._financial_autosave_timer.start()
+
+    def _autosave_existing_case_financial_values(self) -> None:
+        existing = self.case
+        if existing is None:
+            return
+        saved_case = self.build_case_summary(
+            status=existing.status,
+            condition=existing.condition,
+            warning=existing.warning,
+            export_dir=existing.export_dir,
+            exported_at=existing.exported_at,
+            generated_documents=existing.generated_documents,
+            export_versions=existing.export_versions,
+        )
+        self.on_save(saved_case)
+        self.case = saved_case
     def _number_to_vietnamese_words(self, number: int) -> str:
         return self.money_formatter.to_words(number)
 
@@ -2213,7 +2821,6 @@ class BusinessRegistrationWorkspace(QWidget):
             "document_month": f"{today.month:02d}",
             "document_year": str(today.year),
             "legal_representative_nationality": "Việt Nam",
-            "legal_representative_position": "Giám đốc",
             "director_position": "Giám đốc",
             "authorized_person_gender": "Nữ",
             "tax_accounting_method": "Hạch toán độc lập",
@@ -2231,16 +2838,24 @@ class BusinessRegistrationWorkspace(QWidget):
             defaults.update(
                 {
                     "company_name": case.company_name,
-                    "charter_capital_number": case.capital,
                     "legal_representative_full_name": case.owner,
                 }
             )
             defaults.update(case.form_values)
         self._clear_cross_person_authorized_contacts(defaults)
-        for key, value in defaults.items():
-            self._set_field(key, value)
+        # Restore financial fields together, without recalculating partial rows.
+        self.updating_capital = True
+        self.updating_member_contributions = True
+        try:
+            for key, value in defaults.items():
+                self._set_field(key, value)
+        finally:
+            self.updating_capital = False
+            self.updating_member_contributions = False
         self._restore_business_lines(case.form_values if case else {})
         self._restore_people(case.form_values if case else {})
+        self._restore_company_members(case.form_values if case else {})
+        self._restore_two_member_beneficial_owners(case.form_values if case else {})
 
     def _restore_people(self, values: dict[str, str]) -> None:
         try:
@@ -2329,6 +2944,19 @@ class BusinessRegistrationWorkspace(QWidget):
             if (match := re.match(r"^business_line_(\d+)_(?:name|detail|code|is_main)$", key))
         }
         return sorted(index for index in indices if index > 0)
+
+    def _restore_company_members(self, values: dict[str, str]) -> None:
+        if self.template_variant != TWO_MEMBER_INDIVIDUAL_VARIANT: return
+        suffixes = ("full_name", "date_of_birth", "gender", "id_number", "permanent_address", "nationality", "ethnicity", "signature", "note", "capital_amount", "capital_ratio", "capital_asset_type", "capital_deadline")
+        indexes = {int(match.group(1)) for key in values if (match := re.match(r"^member_(\d+)_(?:full_name|date_of_birth|gender|id_number|permanent_address|nationality|ethnicity|signature|note|capital_amount|capital_ratio|capital_asset_type|capital_deadline)$", key))}
+        while len(self.company_member_rows) < max(indexes, default=MIN_TWO_MEMBER_ROWS): self._append_company_member_row(visible=False)
+        for index, row in enumerate(self.company_member_rows, start=1):
+            row.card.setVisible(index <= MIN_TWO_MEMBER_ROWS or any(str(values.get(f"member_{index}_{suffix}", "") or "").strip() for suffix in suffixes))
+            for suffix in suffixes: self._set_field(f"member_{index}_{suffix}", str(values.get(f"member_{index}_{suffix}", "") or ""))
+        self._refresh_company_member_profile_selectors()
+        self._refresh_two_member_beneficial_owner_selectors()
+        self._refresh_member_contribution_names()
+        self._recalculate_member_contributions()
 
     def _restore_business_lines(self, values: dict[str, str]) -> None:
         saved_indices = self._business_line_indices(values)
@@ -3428,6 +4056,10 @@ class BusinessRegistrationWorkspace(QWidget):
             for key, value in person.data.items():
                 values[f"person_{index}_{key}"] = value
 
+        if self.template_variant == TWO_MEMBER_INDIVIDUAL_VARIANT:
+            self._synchronize_two_member_list_values(values)
+            return
+
         owner_prefix = "beneficial_owner" if values.get("beneficial_owner_full_name", "").strip() else "legal_representative"
         values["member_1_full_name"] = values.get(f"{owner_prefix}_full_name", "")
         values["member_1_id_number"] = values.get(f"{owner_prefix}_id_number", "")
@@ -3435,6 +4067,19 @@ class BusinessRegistrationWorkspace(QWidget):
         values["member_1_gender"] = values.get(f"{owner_prefix}_gender", "")
         address_key = "beneficial_owner_address" if owner_prefix == "beneficial_owner" else "legal_representative_permanent_address"
         values["member_1_permanent_address"] = values.get(address_key, "")
+
+    def _synchronize_two_member_list_values(self, values: dict[str, str]) -> None:
+        count = self._company_member_count(); values["member_count"] = str(count); values["owner_type"] = "C\u00e1 nh\u00e2n"
+        first = {suffix: str(values.get(f"member_1_{suffix}", "") or "").strip() for suffix in ("full_name", "date_of_birth", "gender", "id_number", "permanent_address")}
+        values.update({"beneficial_owner_full_name": first["full_name"], "beneficial_owner_date_of_birth": first["date_of_birth"], "beneficial_owner_gender": first["gender"], "beneficial_owner_id_number": first["id_number"], "beneficial_owner_address": first["permanent_address"]})
+        digits = self.money_formatter.digits(values.get("charter_capital_number", "")); total = int(digits) if digits else 0
+        for index in range(1, count + 1):
+            amount_key = f"member_{index}_capital_amount"; ratio_key = f"member_{index}_capital_ratio"
+            if total and not str(values.get(amount_key, "") or "").strip():
+                amount, remainder = divmod(total, count); values[amount_key] = self._format_money(str(amount + (remainder if index == count else 0)))
+            if not str(values.get(ratio_key, "") or "").strip():
+                ratio, remainder = divmod(10000, count); values[ratio_key] = f"{(ratio + (remainder if index == count else 0)) / 100:.2f}".rstrip("0").rstrip(".") + "%"
+        self._synchronize_two_member_beneficial_owner_values(values)
 
     def _copy_person_to_member_values(self, values: dict[str, str], member_index: int, person: OcrPerson) -> None:
         data = person.data
@@ -3494,7 +4139,7 @@ class BusinessRegistrationWorkspace(QWidget):
 
     def _company_member_count(self) -> int:
         if self.template_variant == TWO_MEMBER_INDIVIDUAL_VARIANT:
-            return 2
+            return max(MIN_TWO_MEMBER_ROWS, sum(1 for row in self.company_member_rows if not row.card.isHidden()))
         return 1
 
     def _case_type_for_members(self, member_count: int) -> str:
@@ -3520,11 +4165,12 @@ class BusinessRegistrationWorkspace(QWidget):
             for person in self.ocr_people
         )
         self.registration_view_model.replace(values)
-        return list(
-            self.registration_view_model.validate(
-                address_confirmation_required=address_confirmation_required,
-            ).errors
-        )
+        issues = list(self.registration_view_model.validate(address_confirmation_required=address_confirmation_required).errors)
+        if self.template_variant == TWO_MEMBER_INDIVIDUAL_VARIANT:
+            for index in range(1, MIN_TWO_MEMBER_ROWS + 1):
+                if not str(values.get(f"member_{index}_full_name", "") or "").strip(): issues.append(f"Thành viên {index}: chưa có họ và tên")
+                if not str(values.get(f"member_{index}_id_number", "") or "").strip(): issues.append(f"Thành viên {index}: chưa có số định danh cá nhân")
+        return issues
 
 
     def _set_field_if_empty(self, key: str, value: str) -> None:

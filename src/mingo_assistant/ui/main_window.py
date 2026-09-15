@@ -2576,11 +2576,9 @@ class MainWindow(QMainWindow):
         self._save_authorized_person_profiles({"selected_profile_id": values["id"], "profiles": [values]})
 
     def _open_new_business_case(self, *, template_variant: str = "") -> None:
-        self._open_case_workspace(None)
-        if template_variant and isinstance(self.current_workspace, BusinessRegistrationWorkspace):
-            self.current_workspace.template_variant = template_variant
+        self._open_case_workspace(None, template_variant=template_variant)
 
-    def _open_case_workspace(self, case: CaseSummary | None) -> None:
+    def _open_case_workspace(self, case: CaseSummary | None, *, template_variant: str = "") -> None:
         if case is not None:
             case = self.case_use_cases.get(case.id) or case
         if case is not None and case.case_type == LOCATION_CASE_TYPE:
@@ -2605,6 +2603,7 @@ class MainWindow(QMainWindow):
             bundle_root=self.app_paths.bundle_root,
             default_export_root=self.app_paths.documents_root,
             services=self.registration_services,
+            template_variant=template_variant,
         )
         self.stack.addWidget(self.current_workspace)
         self.stack.setCurrentWidget(self.current_workspace)
