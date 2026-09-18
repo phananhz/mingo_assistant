@@ -1,6 +1,7 @@
 """Template-safe generation for dependent-unit procedures."""
 from __future__ import annotations
 
+import copy
 import re
 import shutil
 import tempfile
@@ -11,6 +12,7 @@ from pathlib import Path
 from docx import Document
 from docx.shared import Pt
 from docx.enum.text import WD_COLOR_INDEX
+from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
 from mingo_assistant.services.documents.docx_generator import DocxTemplateGenerator, GeneratedDocument, GenerationResult
@@ -35,6 +37,48 @@ class DependentUnitTemplateGenerator(DocxTemplateGenerator):
         "tax_notification_fax",
         "tax_notification_email",
     )
+    _NOTIFICATION_CHANGE_TARGETS = {
+        "new_location_business_name": "change_name_selected",
+        "new_location_business_english_name": "change_name_selected",
+        "new_location_business_short_name": "change_name_selected",
+        "new_location_address_detail": "change_address_selected",
+        "new_location_ward": "change_address_selected",
+        "new_location_province": "change_address_selected",
+        "new_location_phone": "change_address_selected",
+        "new_location_fax": "change_address_selected",
+        "new_location_email": "change_address_selected",
+        "new_location_website": "change_address_selected",
+        "location_manager_full_name": "change_manager_selected",
+        "location_manager_date_of_birth": "change_manager_selected",
+        "location_manager_gender": "change_manager_selected",
+        "location_manager_id_number": "change_manager_selected",
+        "location_manager_address_detail": "change_manager_selected",
+        "location_manager_ward": "change_manager_selected",
+        "location_manager_province": "change_manager_selected",
+        "location_manager_nationality": "change_manager_selected",
+        "location_manager_phone": "change_manager_selected",
+        "location_manager_email": "change_manager_selected",
+        "tax_accountant_full_name": "change_tax_selected",
+        "tax_accountant_date_of_birth": "change_tax_selected",
+        "tax_accountant_gender": "change_tax_selected",
+        "tax_accountant_id_number": "change_tax_selected",
+        "tax_accountant_phone": "change_tax_selected",
+        "tax_notification_address_detail": "change_tax_selected",
+        "tax_notification_ward": "change_tax_selected",
+        "tax_notification_province": "change_tax_selected",
+        "tax_notification_phone": "change_tax_selected",
+        "tax_notification_email": "change_tax_selected",
+        "tax_accounting_independent_x": "change_tax_selected",
+        "tax_accounting_consolidated_x": "change_tax_selected",
+        "tax_accounting_dependent_x": "change_tax_selected",
+        "tax_financial_year_start": "change_tax_selected",
+        "tax_financial_year_end": "change_tax_selected",
+        "tax_labor_count": "change_tax_selected",
+        "supplemental_registration_content_1": "change_supplemental_selected",
+        "supplemental_registration_content_2": "change_supplemental_selected",
+        "supplemental_registration_content_3": "change_supplemental_selected",
+    }
+
     def __init__(self, template_dir: Path, export_root: Path) -> None:
         self.template_dir = template_dir
         self.export_root = export_root
@@ -75,8 +119,13 @@ class DependentUnitTemplateGenerator(DocxTemplateGenerator):
         return report
 
     def _output_filename(self, template_name: str, values: dict[str, str], case_name: str) -> str:
-        label = ('Thong bao lap dia diem' if template_name.startswith('1.') else
-                 'Giay uy quyen' if template_name.startswith('2.') else 'Huong dan ky')
+        folded_template_name = self._fold(template_name)
+        label = (
+            'Thong bao thay doi' if folded_template_name.startswith('thong bao thay doi') else
+            'Thong bao lap dia diem' if template_name.startswith('1.') else
+            'Giay uy quyen' if template_name.startswith('2.') or folded_template_name.startswith('giay uy quyen') else
+            'Huong dan ky'
+        )
         name = values.get('parent_entity_name') or values.get('company_name') or case_name
         name = self._fold(name)
         name = re.sub(r'^(cong ty|doanh nghiep)\s*', '', name)
@@ -86,11 +135,15 @@ class DependentUnitTemplateGenerator(DocxTemplateGenerator):
         return f'{label}_{suffix}.docx'
 
     def unresolved_placeholders(self, docx_path: Path) -> list[str]:
+        """Report placeholder text, not drawing metadata that happens to use brackets."""
         matches: list[str] = []
         with zipfile.ZipFile(docx_path, "r") as archive:
             for entry in archive.infolist():
-                if entry.filename.startswith("word/") and entry.filename.endswith(".xml"):
-                    matches.extend(re.findall(r"\[([^\[\]\r\n]{1,120})\]", archive.read(entry.filename).decode("utf-8", "ignore")))
+                if not entry.filename.startswith("word/") or not entry.filename.endswith(".xml"):
+                    continue
+                xml = archive.read(entry.filename).decode("utf-8", "ignore")
+                for text_node in re.findall(r"<w:t(?:\s[^>]*)?>(.*?)</w:t>", xml, flags=re.DOTALL):
+                    matches.extend(re.findall(r"\[([^\[\]\r\n]{1,120})\]", text_node))
         return sorted(set(matches))
 
     def _templates(self, values: dict[str, str] | None = None) -> list[Path]:
@@ -135,24 +188,59 @@ class DependentUnitTemplateGenerator(DocxTemplateGenerator):
             return {}
         return self._config(template_name)
 
+    @classmethod
+    def _notification_selection_flag(cls, target: str) -> str:
+        return cls._NOTIFICATION_CHANGE_TARGETS.get(target, "")
+
     def _should_preserve_highlighted_placeholder(
         self, template_name: str, target: str, values: dict[str, str]
     ) -> bool:
-        """Keep Section 6 optional fields exactly as the protected template shows them."""
-        return target in self._TAX_OPTIONAL_TEXT_FIELDS and not str(values.get(target, "") or "").strip()
+        """Fill notification runs from entered data, never from UI visibility state."""
+        if self._fold(template_name).startswith("thong bao thay doi"):
+            selection_flag = self._notification_selection_flag(target)
+            if selection_flag:
+                # The checkbox only opens or hides its UI form. A supplied
+                # value must always replace its own yellow template run.
+                return not str(self._value_for_template_target(target, values) or "").strip()
+        return template_name.startswith("1.") and target in {
+            "tax_accounting_dependent_x",
+            "tax_bot_project_x",
+            "tax_vat_deduction_x",
+        }
+
+    def _assert_notification_highlight_count(self, document: Document, template_name: str) -> None:
+        """Fail clearly when a protected notification template no longer matches its manifest."""
+        if not self._fold(template_name).startswith("thong bao thay doi"):
+            return
+        config = self._config(template_name)
+        expected = config.get("expected_highlight_count")
+        if expected is None:
+            return
+        actual = sum(
+            1
+            for paragraph in self._iter_paragraphs(document)
+            for run in paragraph.runs
+            if run.font.highlight_color == WD_COLOR_INDEX.YELLOW
+        )
+        if actual != int(expected):
+            raise ValueError(
+                f"Template {template_name} has {actual} yellow-highlight runs; "
+                f"the manifest expects {expected}. Update the mapping before export."
+            )
 
     def _empty_highlighted_placeholder(self, run, target: str, values: dict[str, str]) -> str:
-        """Keep visible dotted placeholders for empty location-dossier fields."""
+        """Keep untouched yellow template runs exactly as supplied."""
         if target == "__clear" or target.endswith("_x") or target.endswith("_is_main"):
             return ""
         template_text = str(getattr(run, "text", "") or "")
         stripped = template_text.strip()
-        if stripped and re.fullmatch(r"[\s.…/·_-]+", stripped):
+        if stripped and re.fullmatch(r"[\s.\u2026/\u00b7_-]+", stripped):
             return template_text
         if any(part in target for part in ("date", "day", "month", "year")):
-            return "……/……/……"
+            return "\u2026\u2026/\u2026\u2026/\u2026\u2026"
         width = min(max(len(stripped), 10), 48)
         return "." * width
+
     def _replace_highlighted_runs(self, docx_path: Path, template_name: str, values: dict[str, str]) -> None:
         """Use the company-dossier writer, then apply this form's protected tables."""
         document = Document(docx_path)
@@ -180,25 +268,47 @@ class DependentUnitTemplateGenerator(DocxTemplateGenerator):
             highlighted_values['legal_representative_id_number'] = values.get('legal_representative_passport_number', '')
         if template_name.startswith('H'):
             highlighted_values['legal_representative_full_name'] = str(values.get('legal_representative_full_name', '')).title()
-        # Section 6 checkboxes are owned by the Word template.
-        # Do not replace their yellow symbol runs during generic replacement.
-        highlighted_values["tax_accounting_dependent_x"] = ""
-        highlighted_values["tax_bot_project_x"] = ""
-        highlighted_values["tax_vat_deduction_x"] = ""
-        DocxTemplateGenerator._replace_highlighted_runs(self, document, template_name, highlighted_values)
+        # Symbol checkboxes are completed manually in the final Word file.
+        # Never write an X automatically into a highlighted checkbox slot.
+        for key in (
+            "tax_accounting_independent_x",
+            "tax_accounting_consolidated_x",
+            "tax_accounting_dependent_x",
+            "tax_bot_project_x",
+            "tax_vat_deduction_x",
+        ):
+            highlighted_values[key] = ""
+        is_update_notification = self._fold(template_name).startswith('thong bao thay doi')
+        self._assert_notification_highlight_count(document, template_name)
+        self._active_template_name = template_name
+        try:
+            DocxTemplateGenerator._replace_highlighted_runs(self, document, template_name, highlighted_values)
+        finally:
+            self._active_template_name = ""
+        if is_update_notification:
+            self._normalize_notification_entered_value_fonts(document, template_name, values)
+            self._remove_name_tab_stops_for_entered_values(document, values)
+            self._remove_address_contact_dotted_fillers(document, values)
+            self._fill_notification_person_fields(document, values)
+            self._remove_notification_inline_dotted_leaders(document, values)
+            self._collapse_notification_supplemental_lines(document, values)
+            self._repair_notification_manager_email_label(document)
+            self._remove_manager_date_separators_for_entered_value(document, values)
         if template_name.startswith('2.') and values.get('legal_representative_person_type') == 'Người nước ngoài':
             for paragraph in self._iter_paragraphs(document):
                 if self._fold(paragraph.text).startswith('so dinh danh ca nhan'):
                     for run in paragraph.runs:
                         run.text = run.text.replace('Số định danh cá nhân', 'Số hộ chiếu')
                     break
-        DocxTemplateGenerator._replace_business_lines_tables_v2(
-            self,
-            document,
-            values,
-            keep_file1_business_line_numbers_on_one_line=True,
-        )
-        self._remove_empty_business_line_rows(document, values)
+        if not is_update_notification or self._business_lines(values):
+            business_line_values = dict(values)
+            DocxTemplateGenerator._replace_business_lines_tables_v2(
+                self,
+                document,
+                business_line_values,
+                keep_file1_business_line_numbers_on_one_line=True,
+            )
+            self._remove_empty_business_line_rows(document, values)
         self._restore_foreign_permanent_address_placeholder(document, template_name)
         if template_name.startswith('H'):
             signer = str(values.get('legal_representative_full_name', '')).strip()
@@ -219,15 +329,354 @@ class DependentUnitTemplateGenerator(DocxTemplateGenerator):
                         run.font.size = Pt(13)
         document.save(docx_path)
 
-    def _should_preserve_highlighted_placeholder(
-        self, template_name: str, target: str, values: dict[str, str]
-    ) -> bool:
-        """Leave File 1 tax checkboxes exactly as supplied by the Word template."""
-        return template_name.startswith("1.") and target in {
-            "tax_accounting_dependent_x",
-            "tax_bot_project_x",
-            "tax_vat_deduction_x",
-        }
+    def _normalize_notification_entered_value_fonts(
+        self, document: Document, template_name: str, values: dict[str, str]
+    ) -> None:
+        """Keep every entered yellow notification value at the template's 12.5pt size."""
+        highlighted_fields = self._config(template_name).get("highlighted_fields", {})
+        highlighted_index = 0
+        for paragraph in self._iter_paragraphs(document):
+            for run in paragraph.runs:
+                if run.font.highlight_color != WD_COLOR_INDEX.YELLOW:
+                    continue
+                target = highlighted_fields.get(str(highlighted_index), "")
+                highlighted_index += 1
+                if not target:
+                    continue
+                value = str(self._value_for_template_target(target, values) or "").strip()
+                if not value:
+                    continue
+                properties = run._r.get_or_add_rPr()
+                for tag in (qn("w:sz"), qn("w:szCs")):
+                    for element in list(properties.findall(tag)):
+                        properties.remove(element)
+                    size = OxmlElement("w:sz" if tag == qn("w:sz") else "w:szCs")
+                    size.set(qn("w:val"), "25")
+                    properties.append(size)
+
+    def _fill_notification_person_fields(self, document: Document, values: dict[str, str]) -> None:
+        """Fill the protected person blocks using the template's own 12.5pt runs.
+
+        A few yellow-looking slots in this legacy form are shading rather than
+        Word ``highlight`` runs, so they cannot safely be addressed by the
+        ordinal highlight manifest.  Replace only their dotted runs, retain the
+        source run properties, and remove tab leaders once a value exists.
+        """
+        paragraphs = list(self._iter_paragraphs(document))
+        manager_start = next(
+            (index for index, paragraph in enumerate(paragraphs)
+             if "dang ky thay doi nguoi dung dau dia diem kinh doanh" in self._fold(paragraph.text)),
+            None,
+        )
+        manager_end = next(
+            (index for index, paragraph in enumerate(paragraphs)
+             if "dang ky thay doi thong tin dang ky thue" in self._fold(paragraph.text)),
+            len(paragraphs),
+        )
+        if manager_start is not None:
+            manager_fields = (
+                ("ho chu dem va ten", "location_manager_full_name"),
+                ("ngay thang nam sinh", "location_manager_date_of_birth"),
+                ("gioi tinh", "location_manager_gender"),
+                ("so dinh danh ca nhan", "location_manager_id_number"),
+                ("so nha/phong", "location_manager_address_detail"),
+                ("xa/phuong", "location_manager_ward"),
+                ("tinh/thanh pho", "location_manager_province"),
+                ("quoc gia", "location_manager_nationality"),
+            )
+            manager_paragraphs = paragraphs[manager_start:manager_end]
+            for label, target in manager_fields:
+                self._fill_notification_inline_field(manager_paragraphs, label, values.get(target, ""))
+
+        accountant_paragraphs = []
+        for table in document.tables:
+            table_text = "\n".join(cell.text for row in table.rows for cell in row.cells)
+            if "thong tin ve ke toan truong" not in self._fold(table_text):
+                continue
+            accountant_paragraphs = [
+                paragraph for row in table.rows for cell in row.cells for paragraph in cell.paragraphs
+            ]
+            break
+        if not accountant_paragraphs:
+            return
+        accountant_fields = (
+            ("ho chu dem va ten ke toan truong", "tax_accountant_full_name"),
+            ("ngay thang nam sinh", "tax_accountant_date_of_birth"),
+            ("gioi tinh", "tax_accountant_gender"),
+            ("so dinh danh ca nhan", "tax_accountant_id_number"),
+            ("dien thoai", "tax_accountant_phone"),
+        )
+        for label, target in accountant_fields:
+            self._fill_notification_inline_field(accountant_paragraphs, label, values.get(target, ""))
+
+    def _remove_notification_inline_dotted_leaders(self, document: Document, values: dict[str, str]) -> None:
+        """Remove a legacy dotted tab leader before an entered inline person value."""
+        fields = (
+            ("ho, chu dem va ten (ghi bang chu in hoa)", "location_manager_full_name"),
+            ("ho, chu dem va ten ke toan truong", "tax_accountant_full_name"),
+        )
+        for label, target in fields:
+            value = str(values.get(target, "") or "").strip()
+            if not value:
+                continue
+            paragraph = next(
+                (item for item in self._iter_paragraphs(document) if label in self._fold(item.text)),
+                None,
+            )
+            if paragraph is None:
+                continue
+            value_index = next(
+                (index for index, run in enumerate(paragraph.runs) if value in str(run.text or "")),
+                None,
+            )
+            if value_index is not None:
+                for run in paragraph.runs[:value_index]:
+                    if "\t" in str(run.text or ""):
+                        run.text = run.text.replace("\t", "")
+            for tab in paragraph._p.xpath(".//w:tab"):
+                tab.attrib.pop(qn("w:leader"), None)
+
+    def _fill_notification_inline_field(self, paragraphs, label: str, raw_value: object) -> None:
+        value = str(raw_value or "").strip()
+        if not value:
+            return
+        paragraph = next(
+            (item for item in paragraphs if label in self._fold(item.text)),
+            None,
+        )
+        if paragraph is None:
+            return
+        runs = paragraph.runs
+        value_index = next(
+            (index for index, run in enumerate(runs) if value in str(run.text or "")),
+            None,
+        )
+        if value_index is None:
+            value_index = next(
+                (index for index in range(len(runs) - 1, -1, -1)
+                 if re.search(r"[.\u2026]{3,}", str(runs[index].text or ""))),
+                None,
+            )
+            if value_index is None:
+                value_index = next(
+                    (index for index in range(len(runs) - 1, -1, -1)
+                     if "\t" in str(runs[index].text or "")),
+                    None,
+                )
+            if value_index is None:
+                return
+            runs[value_index].text = value
+        value_run = runs[value_index]
+        self._copy_notification_label_format(paragraph, value_run)
+
+        for preceding in reversed(runs[:value_index]):
+            text = str(preceding.text or "")
+            if "\t" in text:
+                preceding.text = text.replace("\t", "")
+                continue
+            if ":" in text and re.search(r"[.\u2026]+$", text):
+                preceding.text = re.sub(r"[.\u2026]+$", "", text)
+                break
+            if not text.strip():
+                preceding.text = ""
+                continue
+            break
+        for following in runs[value_index + 1:]:
+            text = str(following.text or "")
+            if re.fullmatch(r"[\s.\u2026]+", text):
+                following.text = re.sub(r"[.\u2026]", "", text)
+                continue
+            break
+        p_pr = paragraph._p.pPr
+        if p_pr is not None:
+            tabs = p_pr.find(qn("w:tabs"))
+            if tabs is not None:
+                for tab in tabs.findall(qn("w:tab")):
+                    tab.attrib.pop(qn("w:leader"), None)
+
+    @staticmethod
+    def _copy_notification_label_format(paragraph, value_run) -> None:
+        """Give an inserted value the adjacent template label's font/size."""
+        source_run = next(
+            (run for run in paragraph.runs
+             if run is not value_run and str(run.text or "").strip()
+             and not re.fullmatch(r"[\s.\u2026/]+", str(run.text or ""))),
+            None,
+        )
+        if source_run is None or source_run._r.rPr is None:
+            return
+        original_properties = value_run._r.rPr
+        retained = []
+        if original_properties is not None:
+            retained = [
+                copy.deepcopy(child) for child in original_properties
+                if child.tag in {qn("w:highlight"), qn("w:shd")}
+            ]
+        properties = value_run._r.get_or_add_rPr()
+        for child in list(properties):
+            properties.remove(child)
+        properties.extend(copy.deepcopy(child) for child in source_run._r.rPr)
+        properties.extend(retained)
+
+    def _collapse_notification_supplemental_lines(self, document: Document, values: dict[str, str]) -> None:
+        """Part B is one entered statement, despite three spare template lines."""
+        if not str(values.get("supplemental_registration_content_1", "") or "").strip():
+            return
+        paragraphs = list(self._iter_paragraphs(document))
+        heading_index = next(
+            (index for index, paragraph in enumerate(paragraphs)
+             if "bo sung, cap nhat thong tin dang ky hoat dong dia diem kinh doanh" in self._fold(paragraph.text)),
+            None,
+        )
+        if heading_index is None:
+            return
+        spare_lines = []
+        for paragraph in paragraphs[heading_index + 1:]:
+            if "de nghi hieu dinh" in self._fold(paragraph.text):
+                break
+            if any(run.font.highlight_color == WD_COLOR_INDEX.YELLOW for run in paragraph.runs):
+                spare_lines.append(paragraph)
+        for paragraph in spare_lines[1:]:
+            paragraph._element.getparent().remove(paragraph._element)
+
+    def _remove_name_tab_stops_for_entered_values(self, document: Document, values: dict[str, str]) -> None:
+        """Let entered location names wrap naturally after their labels."""
+        if not any(
+            str(values.get(key, "") or "").strip()
+            for key in (
+                "new_location_business_name",
+                "new_location_business_english_name",
+                "new_location_business_short_name",
+            )
+        ):
+            return
+        labels = (
+            "T\u00ean \u0111\u1ecba \u0111i\u1ec3m kinh doanh vi\u1ebft b\u1eb1ng ti\u1ebfng Vi\u1ec7t sau khi thay \u0111\u1ed5i",
+            "T\u00ean \u0111\u1ecba \u0111i\u1ec3m kinh doanh vi\u1ebft b\u1eb1ng ti\u1ebfng n\u01b0\u1edbc ngo\u00e0i sau khi thay \u0111\u1ed5i",
+            "T\u00ean \u0111\u1ecba \u0111i\u1ec3m kinh doanh vi\u1ebft t\u1eaft sau khi thay \u0111\u1ed5i",
+        )
+        for paragraph in self._iter_paragraphs(document):
+            if not any(label in paragraph.text for label in labels):
+                continue
+            for run in paragraph.runs:
+                if run.text == "\t":
+                    run.text = ""
+
+    def _remove_address_contact_dotted_fillers(self, document: Document, values: dict[str, str]) -> None:
+        """Clear only the dotted filler belonging to an entered address contact value.
+
+        The notification template deliberately places phone/fax and email/website
+        in the same paragraph.  Clearing an entire paragraph would collapse that
+        prescribed two-column line, so replace dots only in the run immediately
+        following each populated yellow field and stop at the next label.
+        """
+        contact_lines = (
+            ("Điện thoại (nếu có)", "Số fax", "new_location_phone"),
+            ("Điện thoại (nếu có)", "", "new_location_fax"),
+            ("Thư điện tử (nếu có)", "Website", "new_location_email"),
+            ("Thư điện tử (nếu có)", "", "new_location_website"),
+        )
+        for paragraph in self._iter_paragraphs(document):
+            paragraph_text = paragraph.text
+            entered_pair_value = False
+            for line_label, stop_label, target in contact_lines:
+                value = str(values.get(target, "") or "").strip()
+                if not value or line_label not in paragraph_text:
+                    continue
+                entered_pair_value = True
+                value_run_index = next(
+                    (index for index, run in enumerate(paragraph.runs) if value in str(run.text or "")),
+                    None,
+                )
+                if value_run_index is None:
+                    continue
+                preceding_run = paragraph.runs[value_run_index - 1] if value_run_index else None
+                if preceding_run is not None and re.fullmatch(r"\s+", str(preceding_run.text or "")):
+                    # The template stores the first slot's tab in a separate
+                    # yellow-shaded run.  Its dotted leader was the blank form
+                    # field; once a value is present, remove the tab itself so
+                    # the highlight begins exactly at the entered value.
+                    preceding_run.text = ""
+                for run in paragraph.runs[value_run_index + 1 :]:
+                    if stop_label and stop_label in str(run.text or ""):
+                        break
+                    text = str(run.text or "")
+                    if re.fullmatch(r"[\s.\u2026]+", text):
+                        # Preserve tabs/spaces so both template columns remain
+                        # on their original single line.
+                        run.text = re.sub(r"[.\u2026]", "", text)
+                        continue
+                    break
+            if not entered_pair_value:
+                continue
+            p_pr = paragraph._p.pPr
+            if p_pr is None:
+                continue
+            # These template tabs use dotted leaders. Once a yellow slot is
+            # filled, the leader is no longer a placeholder; leaving it visible
+            # creates apparent trailing dots even though the run itself changed.
+            # Retain the tabs and their positions, so phone/fax and
+            # email/website remain prescribed pairs on one physical line.
+            tabs = p_pr.find(qn("w:tabs"))
+            if tabs is not None:
+                for index, tab in enumerate(tabs.findall(qn("w:tab"))):
+                    tab.attrib.pop(qn("w:leader"), None)
+                    if index == 0:
+                        tab.set(qn("w:pos"), "4100")
+            justification = p_pr.find(qn("w:jc"))
+            if justification is not None:
+                justification.set(qn("w:val"), "left")
+
+    def _repair_notification_manager_email_label(self, document: Document) -> None:
+        """Repair the damaged manager-email label while retaining the template font."""
+        source_run = None
+        for paragraph in self._iter_paragraphs(document):
+            for run in paragraph.runs:
+                if run.text.startswith("Th\u01b0 "):
+                    source_run = run
+                    break
+            if source_run is not None:
+                break
+        if source_run is None:
+            return
+        for paragraph in self._iter_paragraphs(document):
+            for index, run in enumerate(paragraph.runs):
+                if "Th? ?i?n t?" not in run.text:
+                    continue
+                runs = paragraph.runs
+                if index + 4 >= len(runs):
+                    return
+                spacer, email_run, optional_run, colon_run = runs[index + 1:index + 5]
+                if "(n\u1ebfu c\u00f3)" not in optional_run.text or not colon_run.text.startswith(":"):
+                    return
+                run.text = "    Th\u01b0 \u0111i\u1ec7n t\u1eed"
+                properties = run._r.get_or_add_rPr()
+                for child in list(properties):
+                    properties.remove(child)
+                source_properties = source_run._r.rPr
+                if source_properties is not None:
+                    properties.extend(copy.deepcopy(child) for child in source_properties)
+                spacer.text = " "
+                colon_run.text = ": "
+                email_run._r.addprevious(optional_run._r)
+                email_run._r.addprevious(colon_run._r)
+                return
+
+    def _remove_manager_date_separators_for_entered_value(self, document: Document, values: dict[str, str]) -> None:
+        """The manager date occupies one yellow slot, so remove the obsolete split separators."""
+        if not str(values.get("location_manager_date_of_birth", "") or "").strip():
+            return
+        for paragraph in self._iter_paragraphs(document):
+            if "Ng\u00e0y, th\u00e1ng, n\u0103m sinh" not in paragraph.text:
+                continue
+            for index, run in enumerate(paragraph.runs):
+                if index < 3 or not str(run.text or "").strip():
+                    continue
+                previous = paragraph.runs[index - 3:index]
+                if [item.text for item in previous] == ["\t/", "\t/", "\t"]:
+                    for item in previous:
+                        item.text = ""
+                    return
 
     def _restore_foreign_permanent_address_placeholder(self, document: Document, template_name: str) -> None:
         """Keep the template label ``Nơi thường trú:`` unchanged."""

@@ -1965,7 +1965,7 @@ class BusinessRegistrationWorkspace(QWidget):
         self._set_fields_from_mapping({f"member_{index}_full_name": data.get("legal_representative_full_name", ""), f"member_{index}_date_of_birth": data.get("legal_representative_date_of_birth", ""), f"member_{index}_gender": data.get("legal_representative_gender", ""), f"member_{index}_id_number": data.get("legal_representative_id_number", ""), f"member_{index}_permanent_address": data.get("legal_representative_permanent_address", "")})
         self._refresh_preview()
 
-    def _build_business_lines_section(self) -> QWidget:
+    def _build_business_lines_section(self, max_rows: int = 10) -> QWidget:
         section = QGroupBox("Ngành nghề kinh doanh")
         layout = QVBoxLayout(section)
         layout.setSpacing(10)
@@ -1995,7 +1995,7 @@ class BusinessRegistrationWorkspace(QWidget):
         table_layout.setColumnStretch(2, 1)
         table_layout.setColumnStretch(3, 1)
 
-        for index in range(1, 11):
+        for index in range(1, max_rows + 1):
             self._add_business_line_row(table_layout, index, visible=index == 1)
 
         layout.addWidget(table, 0, Qt.AlignTop)
@@ -2135,8 +2135,9 @@ class BusinessRegistrationWorkspace(QWidget):
             QMessageBox.warning(self, "Mã ngành nghề đã tồn tại", f"Đã có mã ngành nghề này trong danh sách: {code}.")
             return
         target_index = self._first_available_business_line_index()
-        if target_index > len(self.business_line_rows):
-            self._append_business_line_row(visible=True)
+        if target_index > len(self.business_line_rows) and not self._append_business_line_row(visible=True):
+            QMessageBox.warning(self, "Không thể thêm ngành nghề", "Không thể tạo thêm dòng ngành nghề. Vui lòng thử lại.")
+            return
         business_row = self.business_line_rows[target_index - 1]
         business_row.name_field.setText(self._industry_row_form_text(row))
         business_row.detail_field.clear()
@@ -2283,13 +2284,17 @@ class BusinessRegistrationWorkspace(QWidget):
             cell_layout.addWidget(widget, 1)
         return cell
 
-    def _append_business_line_row(self, visible: bool) -> None:
+    def _append_business_line_row(self, visible: bool) -> bool:
+        # Business-registration procedures have no fixed legal or document
+        # row limit. Rows are added lazily so a dossier may contain any number
+        # of industries without pre-creating hundreds of widgets.
         if self.business_line_table is None:
-            return
+            return False
         layout = self.business_line_table.layout()
         if not isinstance(layout, QGridLayout):
-            return
+            return False
         self._add_business_line_row(layout, len(self.business_line_rows) + 1, visible=visible)
+        return True
 
     def _show_next_business_line_row(self) -> None:
         for index, row in enumerate(self.business_line_rows, start=1):
@@ -2337,7 +2342,7 @@ class BusinessRegistrationWorkspace(QWidget):
         QTimer.singleShot(0, self._sync_form_stack_height)
 
     def _set_main_business_line(self, index: int, state: int) -> None:
-        if state != Qt.Checked:
+        if state != Qt.CheckState.Checked.value:
             self._refresh_preview()
             return
         for other_index, row in enumerate(self.business_line_rows, start=1):

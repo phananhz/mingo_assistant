@@ -1358,10 +1358,11 @@ class DocxTemplateGenerator:
         # value is written explicitly, so numPr would render a duplicate.
         for numbering in p_pr.findall(qn("w:numPr")):
             p_pr.remove(numbering)
-        if alignment == "left" or no_wrap:
+        if alignment != "left" or no_wrap:
             # Some legacy file-1 sample rows carry an indentation intended for
             # a single digit. It reduces the usable width enough for 10, 11,
-            # ... to split vertically. The STT cell owns its full width.
+            # ... to split vertically. Centered STT/code/X cells likewise need
+            # their full cell width for true visual centering.
             for indentation in p_pr.findall(qn("w:ind")):
                 p_pr.remove(indentation)
             for tab_stops in p_pr.findall(qn("w:tabs")):
@@ -1394,8 +1395,16 @@ class DocxTemplateGenerator:
                 for element in list(r_pr.findall(qn(tag))):
                     r_pr.remove(element)
                 size = OxmlElement(tag)
-                size.set(qn("w:val"), "24")
+                size.set(qn("w:val"), "25")
                 r_pr.append(size)
+            for element in list(r_pr.findall(qn("w:color"))):
+                r_pr.remove(element)
+            color = OxmlElement("w:color")
+            color.set(qn("w:val"), "000000")
+            r_pr.append(color)
+            for hidden_tag in (qn("w:vanish"), qn("w:specVanish")):
+                for element in list(r_pr.findall(hidden_tag)):
+                    r_pr.remove(element)
             run.append(r_pr)
             text_node = OxmlElement("w:t")
             text_node.text = line

@@ -27,6 +27,11 @@ class DocumentContextBuilder:
     def value_for_target(self, target: str, values: Mapping[str, str]) -> str:
         if target == "__clear":
             return ""
+        if target == "business_registration_office_prefix":
+            return "Ph\u00f2ng \u0110\u0103ng k\u00fd kinh doanh " if str(values.get("business_registration_office", "") or "").strip() else ""
+        if target == "business_registration_office_province":
+            office = str(values.get("business_registration_office", "") or "").strip()
+            return re.sub(r"^\s*Ph\u00f2ng\s+\u0110\u0103ng\s+k\u00fd\s+kinh\s+doanh\s*", "", office, flags=re.IGNORECASE)
         if target.endswith("_date_of_birth_day"):
             return self._formatter.date_component(values.get(target.removesuffix("_day"), ""), 0)
         if target.endswith("_date_of_birth_month"):

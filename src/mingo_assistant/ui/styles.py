@@ -248,6 +248,66 @@ QGroupBox::title {
     padding: 0 6px;
 }
 
+QGroupBox#ChangeDetailFormLight {
+    background: #f9fbff;
+    border: 2px solid #6689b5;
+    border-radius: 9px;
+    margin-top: 16px;
+    padding: 16px;
+    color: #234c78;
+}
+
+QGroupBox#ChangeDetailFormDark {
+    background: #e8f0fa;
+    border: 2px solid #426d9f;
+    border-radius: 9px;
+    margin-top: 16px;
+    padding: 16px;
+    color: #173f6a;
+}
+
+QGroupBox#ChangeDetailFormLight::title,
+QGroupBox#ChangeDetailFormDark::title {
+    subcontrol-origin: margin;
+    left: 12px;
+    padding: 0 7px;
+    font-weight: 800;
+}
+
+QFrame#ChangeOptionCard {
+    background: #f8fafc;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+}
+QFrame#ChangeOptionCard:hover {
+    background: #f1f5f9;
+    border-color: #94a3b8;
+}
+QFrame#ChangeOptionCard[selected="true"] {
+    background: #eef2ff;
+    border: 2px solid #7c6acb;
+}
+QFrame#ChangeOptionCard[selected="true"][completed="true"] {
+    background: #edfdf5;
+    border-color: #3d9b72;
+}
+QLabel#ChangeOptionCompleteIndicator {
+    background: #2f855a;
+    border: 1px solid #237143;
+    border-radius: 4px;
+    color: #ffffff;
+    font-size: 14px;
+    font-weight: 900;
+}
+
+#ManualXNotice {
+    color: #8b4f00;
+    background: #fff6d7;
+    border: 1px solid #e7c266;
+    border-radius: 5px;
+    padding: 8px 10px;
+}
+
 QGroupBox#CccdResultCard {
     background: #fbfdff;
     border: 1px solid #b9d7f2;

@@ -648,7 +648,7 @@ class LocationBusinessWorkspace(BusinessRegistrationWorkspace):
         prefix = next((item for item in prefixes if upper.startswith(item)), "")
         values["parent_entity_name_prefix"] = prefix
         values["parent_entity_name_suffix"] = upper[len(prefix):].strip() if prefix else upper
-        for index in range(1, 12):
+        for index in self._business_line_indices(values):
             populated = any(values.get(f"business_line_{index}_{part}", "").strip() for part in ("name", "detail", "code"))
             values[f"business_line_{index}_number"] = str(index) if populated else ""
         values["tax_notification_phone"] = values.get("location_phone", "")
@@ -697,7 +697,10 @@ class LocationBusinessWorkspace(BusinessRegistrationWorkspace):
                 missing.append("Số hộ chiếu người đứng đầu")
         elif not values.get("location_manager_id_number", "").strip():
             missing.append("Số định danh người đứng đầu địa điểm")
-        if not any(values.get(f"business_line_{index}_name", "").strip() for index in range(1, 12)):
+        if not any(
+            values.get(f"business_line_{index}_name", "").strip()
+            for index in self._business_line_indices(values)
+        ):
             missing.append("Ít nhất một ngành nghề kinh doanh")
         return missing
 
