@@ -118,13 +118,17 @@ class LocationBusinessUpdateWorkspaceTest(unittest.TestCase):
                 self.assertFalse(workspace.fields["tax_notification_phone"].isReadOnly())
                 self.assertFalse(workspace.fields["tax_notification_email"].isReadOnly())
                 supplemental = workspace.fields["supplemental_registration_content"]
-                self.assertIsInstance(supplemental, QLineEdit)
-                supplemental.setText("N\u1ed9i dung b\u1ed5 sung")
+                self.assertIsInstance(supplemental, QTextEdit)
+                supplemental.setPlainText("N\u1ed9i dung b\u1ed5 sung\nD\u00f2ng th\u1ee9 hai\n\nD\u00f2ng th\u1ee9 t\u01b0")
                 self.assertFalse(workspace.fields["change_supplemental_selected"].isChecked())
                 self.assertFalse(workspace.change_option_indicators["change_supplemental_selected"].isHidden())
                 workspace.fields["legal_representative_full_name"].setText("NGUYEN VAN A")
                 values = workspace.form_values()
-                self.assertEqual("N\u1ed9i dung b\u1ed5 sung", values["supplemental_registration_content_1"])
+                self.assertEqual(
+                    "N\u1ed9i dung b\u1ed5 sung\nD\u00f2ng th\u1ee9 hai\n\nD\u00f2ng th\u1ee9 t\u01b0",
+                    values["supplemental_registration_content"],
+                )
+                self.assertEqual(values["supplemental_registration_content"], values["supplemental_registration_content_1"])
                 self.assertEqual("", values["supplemental_registration_content_2"])
                 self.assertEqual("", values["supplemental_registration_content_3"])
                 self.assertEqual("", values["tax_accounting_independent_x"])
@@ -192,7 +196,7 @@ class LocationBusinessUpdateWorkspaceTest(unittest.TestCase):
             finally:
                 workspace.deleteLater()
 
-    def test_update_rejects_more_than_three_supplemental_lines(self) -> None:
+    def test_update_accepts_unlimited_supplemental_lines(self) -> None:
         project_root = Path(__file__).resolve().parents[2]
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = LocationBusinessUpdateWorkspace(
@@ -203,7 +207,7 @@ class LocationBusinessUpdateWorkspaceTest(unittest.TestCase):
             )
             try:
                 values = {"supplemental_registration_content": "one\ntwo\nthree\nfour"}
-                self.assertIn(
+                self.assertNotIn(
                     "N\u1ed9i dung b\u1ed5 sung, c\u1eadp nh\u1eadt ch\u1ec9 h\u1ed7 tr\u1ee3 t\u1ed1i \u0111a 3 d\u00f2ng theo m\u1eabu Word",
                     workspace._missing_required_fields(values),
                 )

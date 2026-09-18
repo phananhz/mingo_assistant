@@ -201,12 +201,19 @@ class LocationBusinessUpdateWorkspace(LocationBusinessWorkspace):
                 organization.get("organization_owner_province", ""),
                 organization.get("organization_owner_country", ""),
             ) if part)
-        supplemental_text = values.get("supplemental_registration_content", "").strip()
-        supplemental_lines = [line.strip() for line in supplemental_text.splitlines() if line.strip()][:3]
-        for index in range(1, 4):
-            values[f"supplemental_registration_content_{index}"] = (
-                supplemental_lines[index - 1] if index <= len(supplemental_lines) else ""
-            )
+        supplemental_field = self.fields.get("supplemental_registration_content")
+        if isinstance(supplemental_field, QTextEdit):
+            # Keep the complete plain-text editor content, including explicit
+            # line breaks. The first manifest slot is the expandable Part B
+            # content area; the remaining legacy slots stay empty so the
+            # generator can remove the template's spare yellow paragraphs.
+            supplemental_text = supplemental_field.toPlainText()
+            values["supplemental_registration_content"] = supplemental_text
+        else:
+            supplemental_text = str(values.get("supplemental_registration_content", "") or "")
+        values["supplemental_registration_content_1"] = supplemental_text
+        values["supplemental_registration_content_2"] = ""
+        values["supplemental_registration_content_3"] = ""
         # Tax checkbox symbols still require manual completion in the exported Word file.
         for key in (
             "tax_accounting_independent_x",
@@ -251,7 +258,7 @@ class LocationBusinessUpdateWorkspace(LocationBusinessWorkspace):
             ("change_business_lines_selected", "\u0110\u0103ng k\u00fd thay \u0111\u1ed5i ng\u00e0nh, ngh\u1ec1 kinh doanh/n\u1ed9i dung ho\u1ea1t \u0111\u1ed9ng", ()),
             ("change_manager_selected", "\u0110\u0103ng k\u00fd thay \u0111\u1ed5i ng\u01b0\u1eddi \u0111\u1ee9ng \u0111\u1ea7u \u0111\u1ecba \u0111i\u1ec3m kinh doanh", (("location_manager_full_name", "H\u1ecd, ch\u1eef \u0111\u1ec7m v\u00e0 t\u00ean (ghi b\u1eb1ng ch\u1eef in hoa)"), ("location_manager_date_of_birth", "Ng\u00e0y, th\u00e1ng, n\u0103m sinh"), ("location_manager_gender", "Gi\u1edbi t\u00ednh"), ("location_manager_id_number", "S\u1ed1 \u0111\u1ecbnh danh c\u00e1 nh\u00e2n"), ("location_manager_address_detail", "S\u1ed1 nh\u00e0/ph\u00f2ng, ng\u00e1ch/h\u1ebbm, ng\u00f5/ki\u1ebft, \u0111\u01b0\u1eddng/ph\u1ed1/\u0111\u1ea1i l\u1ed9, t\u1ed5/x\u00f3m/\u1ea5p/th\u00f4n"), ("location_manager_ward", "X\u00e3/Ph\u01b0\u1eddng/\u0110\u1eb7c khu"), ("location_manager_province", "T\u1ec9nh/Th\u00e0nh ph\u1ed1 tr\u1ef1c thu\u1ed9c trung \u01b0\u01a1ng"), ("location_manager_nationality", "Qu\u1ed1c gia"), ("location_manager_phone", "\u0110\u1ec7n tho\u1ea1i (n\u1ebfu c\u00f3)"), ("location_manager_email", "Th\u01b0 \u0111i\u1ec7n t\u1eed (n\u1ebfu c\u00f3)"))),
             ("change_tax_selected", "\u0110\u0103ng k\u00fd thay \u0111\u1ed5i th\u00f4ng tin \u0111\u0103ng k\u00fd thu\u1ebf", (("tax_accountant_full_name", "H\u1ecd, ch\u1eef \u0111\u1ec7m v\u00e0 t\u00ean K\u1ebf to\u00e1n tr\u01b0\u1edfng/Ph\u1ee5 tr\u00e1ch k\u1ebf to\u00e1n (n\u1ebfu c\u00f3)"), ("tax_accountant_date_of_birth", "Ng\u00e0y, th\u00e1ng, n\u0103m sinh"), ("tax_accountant_gender", "Gi\u1edbi t\u00ednh"), ("tax_accountant_id_number", "S\u1ed1 \u0111\u1ecbnh danh c\u00e1 nh\u00e2n"), ("tax_accountant_phone", "\u0110i\u1ec7n tho\u1ea1i"), ("tax_notification_address_detail", "\u0110\u1ecba ch\u1ec9 nh\u1eadn th\u00f4ng b\u00e1o thu\u1ebf (n\u1ebfu c\u00f3) - s\u1ed1 nh\u00e0/ph\u00f2ng, \u0111\u01b0\u1eddng/ph\u1ed1"), ("tax_notification_ward", "\u0110\u1ecba ch\u1ec9 nh\u1eadn th\u00f4ng b\u00e1o thu\u1ebf (n\u1ebfu c\u00f3) - x\u00e3/ph\u01b0\u1eddng/\u0111\u1eb7c khu"), ("tax_notification_province", "\u0110\u1ecba ch\u1ec9 nh\u1eadn th\u00f4ng b\u00e1o thu\u1ebf (n\u1ebfu c\u00f3) - t\u1ec9nh/th\u00e0nh ph\u1ed1"), ("tax_notification_phone", "\u0110\u1ec7n tho\u1ea1i nh\u1eadn th\u00f4ng b\u00e1o thu\u1ebf (n\u1ebfu c\u00f3)"), ("tax_notification_email", "Th\u01b0 \u0111i\u1ec7n t\u1eed nh\u1eadn th\u00f4ng b\u00e1o thu\u1ebf (n\u1ebfu c\u00f3)"), ("tax_accounting_independent_x", "H\u1ea1ch to\u00e1n \u0111\u1ed9c l\u1eadp"), ("tax_accounting_consolidated_x", "C\u00f3 b\u00e1o c\u00e1o t\u00e0i ch\u00ednh h\u1ee3p nh\u1ea5t"), ("tax_accounting_dependent_x", "H\u1ea1ch to\u00e1n ph\u1ee5 thu\u1ed9c"), ("tax_financial_year_start", "N\u0103m t\u00e0i ch\u00ednh - \u00e1p d\u1ee5ng t\u1eeb ng\u00e0y"), ("tax_financial_year_end", "N\u0103m t\u00e0i ch\u00ednh - \u0111\u1ebfn ng\u00e0y"), ("tax_labor_count", "T\u1ed5ng s\u1ed1 lao \u0111\u1ed9ng"))),
-            ("change_supplemental_selected", "\u0110\u0103ng k\u00fd b\u1ed5 sung, c\u1eadp nh\u1eadt th\u00f4ng tin \u0111\u0103ng k\u00fd ho\u1ea1t \u0111\u1ed9ng", (("supplemental_registration_content", "N\u1ed9i dung b\u1ed5 sung, c\u1eadp nh\u1eadt (t\u1ed1i \u0111a 3 d\u00f2ng)"),)),
+            ("change_supplemental_selected", "\u0110\u0103ng k\u00fd b\u1ed5 sung, c\u1eadp nh\u1eadt th\u00f4ng tin \u0111\u0103ng k\u00fd ho\u1ea1t \u0111\u1ed9ng", (("supplemental_registration_content", "N\u1ed9i dung b\u1ed5 sung, c\u1eadp nh\u1eadt"),)),
             ("change_correction_selected", "\u0110\u0103ng k\u00fd hi\u1ec7u \u0111\u00ednh th\u00f4ng tin \u0111\u0103ng k\u00fd ho\u1ea1t \u0111\u1ed9ng", ()),
         )
         self.change_option_cards: dict[str, QFrame] = {}
@@ -367,8 +374,10 @@ class LocationBusinessUpdateWorkspace(LocationBusinessWorkspace):
     def _create_change_value_field(self, key: str) -> QWidget:
         manual_x_keys = {"tax_accounting_independent_x", "tax_accounting_consolidated_x", "tax_accounting_dependent_x"}
         if key == "supplemental_registration_content":
-            field = QLineEdit()
-            field.setPlaceholderText("Nhập một nội dung bổ sung, cập nhật.")
+            field = QTextEdit()
+            field.setAcceptRichText(False)
+            field.setFixedHeight(100)
+            field.setPlaceholderText("Nhập nội dung bổ sung, cập nhật. Có thể xuống dòng không giới hạn.")
             field.textChanged.connect(self._on_supplemental_content_changed)
             self.fields[key] = field
             return field
@@ -400,7 +409,7 @@ class LocationBusinessUpdateWorkspace(LocationBusinessWorkspace):
     def _supplemental_content_lines(self) -> list[str]:
         field = self.fields.get("supplemental_registration_content")
         if isinstance(field, QTextEdit):
-            return [line.strip() for line in field.toPlainText().splitlines() if line.strip()]
+            return [line for line in field.toPlainText().splitlines() if line.strip()]
         if isinstance(field, QLineEdit) and field.text().strip():
             return [field.text().strip()]
         return []
@@ -600,13 +609,6 @@ class LocationBusinessUpdateWorkspace(LocationBusinessWorkspace):
                 missing.append("\u00cdt nh\u1ea5t m\u1ed9t ng\u00e0nh ngh\u1ec1 kinh doanh thay \u0111\u1ed5i")
             elif not any(values.get(f"business_line_{index}_is_main", "").strip() for index in business_line_indices):
                 missing.append("\u0110\u0103ng k\u00fd thay \u0111\u1ed5i ng\u00e0nh, ngh\u1ec1 kinh doanh ph\u1ea3i ch\u1ecdn m\u1ed9t ng\u00e0nh ngh\u1ec1 kinh doanh ch\u00ednh")
-        supplemental_lines = [
-            line.strip()
-            for line in values.get("supplemental_registration_content", "").splitlines()
-            if line.strip()
-        ]
-        if len(supplemental_lines) > 3:
-            missing.append("N\u1ed9i dung b\u1ed5 sung, c\u1eadp nh\u1eadt ch\u1ec9 h\u1ed7 tr\u1ee3 t\u1ed1i \u0111a 3 d\u00f2ng theo m\u1eabu Word")
         for key, label in (
             ("location_manager_date_of_birth", "Ng\u00e0y sinh ng\u01b0\u1eddi \u0111\u1ee9ng \u0111\u1ea7u \u0111\u1ecba \u0111i\u1ec3m kinh doanh"),
             ("tax_accountant_date_of_birth", "Ng\u00e0y sinh K\u1ebf to\u00e1n tr\u01b0\u1edfng/Ph\u1ee5 tr\u00e1ch k\u1ebf to\u00e1n"),

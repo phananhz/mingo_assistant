@@ -292,19 +292,25 @@ class DdkdUpdateTemplatesTest(unittest.TestCase):
             value_run = next(run for run in paragraph.runs if value in run.text)
             self.assertEqual(12.5, value_run.font.size.pt)
 
-    def test_notification_writes_one_supplemental_content_line_and_removes_spares(self) -> None:
+    def test_notification_writes_unlimited_multiline_supplemental_content_and_removes_spares(self) -> None:
         values = dict(self.values)
         values.update({
-            "supplemental_registration_content_1": "BO SUNG NOI DUNG MOT",
-            "supplemental_registration_content_2": "BO SUNG NOI DUNG HAI",
-            "supplemental_registration_content_3": "BO SUNG NOI DUNG BA",
+            "supplemental_registration_content": "BO SUNG NOI DUNG MOT\nBO SUNG NOI DUNG HAI\nBO SUNG NOI DUNG BA\nBO SUNG NOI DUNG BON",
         })
         result = self._generate(values)
         notification = next(item.output_path for item in result.generated if item.source_name == "Thong bao thay doi.docx")
-        text = "\n".join(paragraph.text for paragraph in _paragraphs(Document(notification)))
-        self.assertIn("BO SUNG NOI DUNG MOT", text)
-        self.assertNotIn("BO SUNG NOI DUNG HAI", text)
-        self.assertNotIn("BO SUNG NOI DUNG BA", text)
+        paragraphs = list(_paragraphs(Document(notification)))
+        text = "\n".join(paragraph.text for paragraph in paragraphs)
+        for line in (
+            "BO SUNG NOI DUNG MOT",
+            "BO SUNG NOI DUNG HAI",
+            "BO SUNG NOI DUNG BA",
+            "BO SUNG NOI DUNG BON",
+        ):
+            self.assertIn(line, text)
+        supplemental_paragraph = next(paragraph for paragraph in paragraphs if "BO SUNG NOI DUNG MOT" in paragraph.text)
+        self.assertIn("\n", supplemental_paragraph.text)
+        self.assertNotIn("....", supplemental_paragraph.text)
 
     def test_notification_fills_entered_values_without_change_checkboxes(self) -> None:
         values = dict(self.values)

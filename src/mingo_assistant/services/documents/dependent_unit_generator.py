@@ -279,6 +279,16 @@ class DependentUnitTemplateGenerator(DocxTemplateGenerator):
         ):
             highlighted_values[key] = ""
         is_update_notification = self._fold(template_name).startswith('thong bao thay doi')
+        if is_update_notification:
+            # The protected template still has three legacy yellow slots for
+            # Part B, but the form now supplies one unrestricted plain-text
+            # statement. Put the complete content into the first slot and
+            # clear the legacy slots so their spare paragraphs can be removed.
+            supplemental_content = self._notification_supplemental_content(values)
+            highlighted_values["supplemental_registration_content"] = supplemental_content
+            highlighted_values["supplemental_registration_content_1"] = supplemental_content
+            highlighted_values["supplemental_registration_content_2"] = ""
+            highlighted_values["supplemental_registration_content_3"] = ""
         self._assert_notification_highlight_count(document, template_name)
         self._active_template_name = template_name
         try:
@@ -286,12 +296,12 @@ class DependentUnitTemplateGenerator(DocxTemplateGenerator):
         finally:
             self._active_template_name = ""
         if is_update_notification:
-            self._normalize_notification_entered_value_fonts(document, template_name, values)
+            self._normalize_notification_entered_value_fonts(document, template_name, highlighted_values)
             self._remove_name_tab_stops_for_entered_values(document, values)
             self._remove_address_contact_dotted_fillers(document, values)
             self._fill_notification_person_fields(document, values)
             self._remove_notification_inline_dotted_leaders(document, values)
-            self._collapse_notification_supplemental_lines(document, values)
+            self._collapse_notification_supplemental_lines(document, highlighted_values)
             self._repair_notification_manager_email_label(document)
             self._remove_manager_date_separators_for_entered_value(document, values)
         if template_name.startswith('2.') and values.get('legal_representative_person_type') == 'Người nước ngoài':
@@ -518,9 +528,23 @@ class DependentUnitTemplateGenerator(DocxTemplateGenerator):
         properties.extend(copy.deepcopy(child) for child in source_run._r.rPr)
         properties.extend(retained)
 
+    @staticmethod
+    def _notification_supplemental_content(values: dict[str, str]) -> str:
+        """Return Part B as one unrestricted statement with line breaks intact."""
+        raw_content = str(values.get("supplemental_registration_content", "") or "")
+        if raw_content.strip():
+            return raw_content.strip()
+        # Accept old saved/exported values that used three separate template
+        # slots, joining them without imposing the former three-line limit.
+        legacy_lines = [
+            str(values.get(f"supplemental_registration_content_{index}", "") or "").strip()
+            for index in range(1, 4)
+        ]
+        return "\n".join(line for line in legacy_lines if line)
+
     def _collapse_notification_supplemental_lines(self, document: Document, values: dict[str, str]) -> None:
-        """Part B is one entered statement, despite three spare template lines."""
-        if not str(values.get("supplemental_registration_content_1", "") or "").strip():
+        """Keep one expandable Part B paragraph and remove spare template rows."""
+        if not self._notification_supplemental_content(values):
             return
         paragraphs = list(self._iter_paragraphs(document))
         heading_index = next(
