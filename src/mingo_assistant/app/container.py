@@ -44,7 +44,7 @@ class AppContainer:
         registration_services = BusinessRegistrationServices(
             ocr_service=IdentityQrScanner(paths.bundle_root),
             id_card_parser=IdCardParser(place_matcher),
-            organization_document_service=OrganizationDocumentService(address_parser),
+            organization_document_service=OrganizationDocumentService(address_parser, paths.bundle_root),
             profile_repository=PersonalProfileRepository(paths.personal_profiles_file),
             address_parser=address_parser,
             industry_catalog=industry_catalog,

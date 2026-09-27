@@ -70,6 +70,10 @@ from mingo_assistant.ui.views.location_business_update_workspace import (
     LOCATION_UPDATE_CASE_TYPE,
     LocationBusinessUpdateWorkspace,
 )
+from mingo_assistant.ui.views.location_business_termination_workspace import (
+    LOCATION_TERMINATION_CASE_TYPE,
+    LocationBusinessTerminationWorkspace,
+)
 from mingo_assistant.ui.widgets.combo_box import NoWheelComboBox
 
 
@@ -2123,7 +2127,7 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _is_dependent_case(case: CaseSummary) -> bool:
-        return case.case_type in {LOCATION_CASE_TYPE, LOCATION_UPDATE_CASE_TYPE}
+        return case.case_type in {LOCATION_CASE_TYPE, LOCATION_UPDATE_CASE_TYPE, LOCATION_TERMINATION_CASE_TYPE}
 
     def _refresh_dependent_cases(self) -> None:
         layout = self.dependent_cases_layout
@@ -2255,6 +2259,8 @@ class MainWindow(QMainWindow):
                 self._open_location_business_update_workspace(None)
             elif chosen["action"] == "create":
                 self._open_location_business_workspace(None)
+            elif chosen["action"] == "terminate":
+                self._open_location_business_termination_workspace(None)
             else:
                 self._show_coming_soon(str(chosen["title"]), "dependent_units")
         elif result == QDialog.DialogCode.Accepted and chosen["title"]:
@@ -2595,6 +2601,9 @@ class MainWindow(QMainWindow):
         if case is not None and case.case_type == LOCATION_UPDATE_CASE_TYPE:
             self._open_location_business_update_workspace(case)
             return
+        if case is not None and case.case_type == LOCATION_TERMINATION_CASE_TYPE:
+            self._open_location_business_termination_workspace(case)
+            return
         if self.current_workspace is not None:
             self.stack.removeWidget(self.current_workspace)
             self.current_workspace.deleteLater()
@@ -2654,6 +2663,9 @@ class MainWindow(QMainWindow):
     def _open_location_business_update_workspace(self, case: CaseSummary | None) -> None:
         self._open_location_business_workspace(case, workspace_class=LocationBusinessUpdateWorkspace)
 
+    def _open_location_business_termination_workspace(self, case: CaseSummary | None) -> None:
+        self._open_location_business_workspace(case, workspace_class=LocationBusinessTerminationWorkspace)
+
     def _open_case_documents(self, case: CaseSummary) -> None:
         case = self.case_use_cases.get(case.id) or case
         if self.current_workspace is not None:
@@ -2667,7 +2679,7 @@ class MainWindow(QMainWindow):
 
         self.current_documents_view = BusinessRegistrationDocumentsView(
             case=case,
-            on_back=self._return_to_dependent_units if case.case_type in {LOCATION_CASE_TYPE, LOCATION_UPDATE_CASE_TYPE} else self._return_to_business_list,
+            on_back=self._return_to_dependent_units if self._is_dependent_case(case) else self._return_to_business_list,
             on_edit=lambda selected_id=case.id: self._open_case_workspace(self.case_use_cases.get(selected_id) or case),
         )
         self.stack.addWidget(self.current_documents_view)

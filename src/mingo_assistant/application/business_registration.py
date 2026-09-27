@@ -40,7 +40,7 @@ class BusinessRegistrationServices:
         return cls(
             ocr_service=IdentityQrScanner(bundle_root),
             id_card_parser=IdCardParser(),
-            organization_document_service=OrganizationDocumentService(),
+            organization_document_service=OrganizationDocumentService(bundle_root=bundle_root),
             profile_repository=PersonalProfileRepository(),
             address_parser=address_parser,
             industry_catalog=IndustryCatalog.load_from_project(bundle_root),
