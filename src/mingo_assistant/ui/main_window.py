@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 from uuid import uuid4
 
-from PySide6.QtCore import QRectF, Qt, QUrl
+from PySide6.QtCore import QTimer, QRectF, Qt, QUrl
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -293,6 +293,8 @@ class MainWindow(QMainWindow):
         self.dependent_cases_layout: QGridLayout | None = None
         self.current_dependent_card_columns = 0
         self.dependent_cases_count_label: QLabel | None = None
+        self.authorized_person_scroll: QScrollArea | None = None
+        self.trash_scroll: QScrollArea | None = None
         self.trash_container = QWidget()
         self.trash_layout = QVBoxLayout(self.trash_container)
         self.industry_search_input = QLineEdit()
@@ -1327,6 +1329,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(header)
 
         scroll = QScrollArea()
+        self.trash_scroll = scroll
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         self.trash_layout.setContentsMargins(0, 0, 0, 0)
@@ -1531,6 +1534,7 @@ class MainWindow(QMainWindow):
             self.filters_layout.setColumnStretch(column, 1 if column < columns else 0)
 
     def _refresh_cases(self) -> None:
+        scroll_positions = self._capture_scroll_positions(self.cards_scroll, self.dependent_cases_scroll)
         filtered_cases = self._filtered_cases()
         self.result_text.setText(f"{len(filtered_cases)} hồ sơ được tìm thấy")
         self._clear_cards()
@@ -1552,6 +1556,7 @@ class MainWindow(QMainWindow):
             self.cards_layout.setColumnStretch(column, 1)
         if hasattr(self, "_visual_effects_manager") and self._visual_effects_manager is not None:
             self._visual_effects_manager.refresh()
+        self._restore_scroll_positions_later(scroll_positions)
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -1688,6 +1693,7 @@ class MainWindow(QMainWindow):
         self._refresh_cases()
 
     def _refresh_trash(self) -> None:
+        scroll_positions = self._capture_scroll_positions(self.trash_scroll)
         while self.trash_layout.count():
             item = self.trash_layout.takeAt(0)
             widget = item.widget()
@@ -1700,11 +1706,13 @@ class MainWindow(QMainWindow):
             empty.setObjectName("EmptyDescription")
             self.trash_layout.addWidget(empty)
             self.trash_layout.addStretch(1)
+            self._restore_scroll_positions_later(scroll_positions)
             return
 
         for case in deleted_cases:
             self.trash_layout.addWidget(self._build_trash_row(case))
         self.trash_layout.addStretch(1)
+        self._restore_scroll_positions_later(scroll_positions)
 
     def _build_trash_row(self, case: CaseSummary) -> QWidget:
         row = QFrame()
@@ -2130,6 +2138,7 @@ class MainWindow(QMainWindow):
         return case.case_type in {LOCATION_CASE_TYPE, LOCATION_UPDATE_CASE_TYPE, LOCATION_TERMINATION_CASE_TYPE}
 
     def _refresh_dependent_cases(self) -> None:
+        scroll_positions = self._capture_scroll_positions(self.dependent_cases_scroll)
         layout = self.dependent_cases_layout
         if layout is None:
             return
@@ -2150,6 +2159,7 @@ class MainWindow(QMainWindow):
             empty.setAlignment(Qt.AlignCenter)
             layout.addWidget(empty, 0, 0, 1, 4)
             self.current_dependent_card_columns = 0
+            self._restore_scroll_positions_later(scroll_positions)
             return
 
         columns = self._card_column_count()
@@ -2158,6 +2168,32 @@ class MainWindow(QMainWindow):
             layout.addWidget(self._build_case_card(case), index // columns, index % columns)
         for column in range(5):
             layout.setColumnStretch(column, 1 if column < columns else 0)
+        self._restore_scroll_positions_later(scroll_positions)
+
+    @staticmethod
+    def _capture_scroll_positions(*scrolls: QScrollArea | None) -> dict[int, tuple[object, int, int]]:
+        positions: dict[int, tuple[object, int, int]] = {}
+        for scroll in scrolls:
+            if scroll is None:
+                continue
+            vertical = scroll.verticalScrollBar()
+            horizontal = scroll.horizontalScrollBar()
+            positions[id(scroll)] = (scroll, vertical.value(), horizontal.value())
+        return positions
+
+    @staticmethod
+    def _restore_scroll_positions_later(positions: dict[int, tuple[object, int, int]]) -> None:
+        if not positions:
+            return
+
+        def restore() -> None:
+            for scroll, vertical_value, horizontal_value in positions.values():
+                if scroll is None or scroll.isHidden():
+                    continue
+                scroll.verticalScrollBar().setValue(vertical_value)
+                scroll.horizontalScrollBar().setValue(horizontal_value)
+
+        QTimer.singleShot(0, restore)
     def _open_business_creation_modal(self) -> None:
         from mingo_assistant.ui.dialogs.business_creation_modal import BusinessCreationModal
 
@@ -2322,6 +2358,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(header)
 
         scroll = QScrollArea()
+        self.authorized_person_scroll = scroll
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         container = QWidget()
@@ -2475,6 +2512,7 @@ class MainWindow(QMainWindow):
     def _refresh_authorized_person_cards(self) -> None:
         if self.authorized_person_cards_layout is None:
             return
+        scroll_positions = self._capture_scroll_positions(self.authorized_person_scroll)
         while self.authorized_person_cards_layout.count():
             item = self.authorized_person_cards_layout.takeAt(0)
             widget = item.widget()
@@ -2491,6 +2529,7 @@ class MainWindow(QMainWindow):
                 index // 3,
                 index % 3,
             )
+        self._restore_scroll_positions_later(scroll_positions)
 
     def _build_authorized_profile_card(self, profile: dict[str, str], active: bool, on_edit, on_delete) -> QWidget:
         card = QFrame()
