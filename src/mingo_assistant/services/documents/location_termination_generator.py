@@ -197,7 +197,9 @@ class LocationTerminationTemplateGenerator(DependentUnitTemplateGenerator):
     def _fill_signing_guide(self, document: Document, values: dict[str, str]) -> None:
         if len(document.tables) != 1 or len(document.tables[0].rows) != 3:
             raise ValueError("Mẫu hướng dẫn ký đã thay đổi cấu trúc bảng.")
-        signer = str(values.get("legal_representative_full_name", "") or "").strip()
+        # The signing guide is an instruction sheet, so render the signer in
+        # normal name case even when legal-form data is stored in ALL CAPS.
+        signer = str(values.get("legal_representative_full_name", "") or "").strip().title()
         for row_index in (1, 2):
             paragraph = document.tables[0].cell(row_index, 3).paragraphs[0]
             runs = self._highlighted_runs(paragraph)

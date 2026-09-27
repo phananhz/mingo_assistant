@@ -120,8 +120,11 @@ class LocationBusinessTerminationWorkspace(LocationBusinessWorkspace):
         self.organization_document_label.setObjectName("FilterLabel")
         self.organization_document_label.setWordWrap(True)
         grid.addWidget(self.organization_document_label, 0, 0, 1, 4)
-        positions = ((1, 0, 1), (1, 2, 1), (2, 0, 3), (3, 0, 1),
-                     (4, 0, 3), (5, 0, 1), (5, 2, 1), (6, 0, 1), (6, 2, 1))
+        # A company name can be much longer than a tax code.  Give each of
+        # these identity values its own full-width row so the company name is
+        # never cramped against the tax-code field.
+        positions = ((1, 0, 3), (2, 0, 3), (3, 0, 3), (4, 0, 1),
+                     (5, 0, 3), (6, 0, 1), (6, 2, 1), (7, 0, 1), (7, 2, 1))
         for (key, label_text), (row, column, span) in zip(CERTIFICATE_FIELDS, positions):
             label = QLabel(label_text)
             label.setObjectName("FilterLabel")
@@ -134,7 +137,7 @@ class LocationBusinessTerminationWorkspace(LocationBusinessWorkspace):
         save = QPushButton("Lưu dữ liệu giấy chứng nhận")
         save.setObjectName("PrimaryButton")
         save.clicked.connect(self._save_organization_profile)
-        grid.addWidget(save, 7, 0, 1, 4, Qt.AlignRight)
+        grid.addWidget(save, 8, 0, 1, 4, Qt.AlignRight)
         return group
 
     def _build_form_section(self) -> QWidget:
@@ -181,6 +184,11 @@ class LocationBusinessTerminationWorkspace(LocationBusinessWorkspace):
                 label.setObjectName("FilterLabel")
                 grid.addWidget(label, row, column)
                 grid.addWidget(self._create_field(key), row, column + 1)
+            if title == "Thông tin người được ủy quyền":
+                export = QPushButton("Xuất hồ sơ")
+                export.setObjectName("PrimaryButton")
+                export.clicked.connect(self._export_documents)
+                grid.addWidget(export, offset + (len(fields) + 1) // 2, 0, 1, 4, Qt.AlignRight)
             self.form_sections[title] = section
             self.form_stack.addWidget(section)
         self.form_nav_layout.addStretch(1)
@@ -212,9 +220,6 @@ class LocationBusinessTerminationWorkspace(LocationBusinessWorkspace):
         person.name = values.get("location_business_name") or values.get("parent_entity_name") or person.name
         self._refresh_people_buttons()
         self._set_fields_from_mapping(values)
-        if values.get("location_province") and not self._field_value("business_registration_office"):
-            office = self.registration_office_catalog.display_name_for_province(values["location_province"])
-            self._set_field("business_registration_office", office)
         self._refresh_preview()
 
     def _organization_result_values(self) -> dict[str, str]:
@@ -253,13 +258,16 @@ class LocationBusinessTerminationWorkspace(LocationBusinessWorkspace):
         self.case = saved_case
         self.ocr_status_label.setText("Đã lưu dữ liệu giấy chứng nhận")
         QMessageBox.information(
-            self, "Đã lưu giấy chứng nhận",
-            "Thông tin giấy chứng nhận đã được điền vào phần doanh nghiệp "
-            "và lưu cùng hồ sơ nháp. Bạn có thể mở lại hồ sơ để tiếp tục.",
+            self,
+            "Đã lưu giấy chứng nhận",
+            "Đã lưu giấy chứng nhận",
         )
 
     def build_case_summary(self, *args, **kwargs) -> CaseSummary:
         return replace(super().build_case_summary(*args, **kwargs), case_type=LOCATION_TERMINATION_CASE_TYPE)
+
+    def _fill_registration_office_from_location(self) -> None:
+        """The receiving office must be explicitly selected by the user."""
 
     def form_values(self, apply_defaults: bool = True) -> dict[str, str]:
         values = super().form_values(apply_defaults)

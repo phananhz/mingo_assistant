@@ -67,6 +67,22 @@ class TerminationWorkspaceTests(unittest.TestCase):
         workspace = LocationBusinessTerminationWorkspace(on_back=lambda: None, on_save=lambda _: None)
         try:
             self.assertEqual([key for key, _ in CERTIFICATE_FIELDS], list(workspace.organization_card_fields))
+            certificate_group = next(
+                group for group in workspace.findChildren(QGroupBox)
+                if group.title() == "Thông tin giấy chứng nhận địa điểm kinh doanh nhận diện"
+            )
+            certificate_grid = certificate_group.layout()
+
+            def field_position(key: str) -> tuple[int, int, int, int]:
+                field = workspace.organization_card_fields[key]
+                index = next(
+                    index for index in range(certificate_grid.count())
+                    if certificate_grid.itemAt(index).widget() is field
+                )
+                return certificate_grid.getItemPosition(index)
+
+            self.assertEqual((1, 1, 1, 3), field_position("parent_entity_name"))
+            self.assertEqual((2, 1, 1, 3), field_position("parent_entity_registration_number"))
             self.assertEqual([title for title, _ in TERMINATION_FIELD_GROUPS], list(workspace.form_sections))
             self.assertEqual([
                 "Thông tin cơ quan tiếp nhận và thời gian ký",
@@ -79,11 +95,44 @@ class TerminationWorkspaceTests(unittest.TestCase):
             self.assertEqual(8, len(workspace.ocr_card_fields))
             self.assertEqual(LOCATION_TERMINATION_CASE_TYPE, workspace.build_case_summary().case_type)
             self.assertTrue(any(isinstance(section, QGroupBox) for section in workspace.form_sections.values()))
+            authorized_section = workspace.form_sections["Thông tin người được ủy quyền"]
+            export_button = next(
+                button for button in authorized_section.findChildren(QPushButton)
+                if button.text() == "Xuất hồ sơ"
+            )
+            self.assertEqual("PrimaryButton", export_button.objectName())
             option = next(p for unit in UNIT_TYPE_SPECS if unit["id"] == "ddkd"
                           for p in unit["procedures"] if p.id == "ddkd_terminate")
             self.assertTrue(option.is_ready)
         finally:
             workspace.deleteLater()
+
+    def test_open_uploaded_pdf_uses_windows_shell(self) -> None:
+        with TemporaryDirectory() as directory:
+            uploaded_pdf = Path(directory) / "certificate.pdf"
+            uploaded_pdf.touch()
+            workspace = LocationBusinessTerminationWorkspace(on_back=lambda: None, on_save=lambda _: None)
+            try:
+                workspace.ocr_people[0].front_path = str(uploaded_pdf)
+                with patch("mingo_assistant.ui.views.business_registration_workspace.os.startfile", create=True) as startfile:
+                    workspace._open_or_choose_person_image("front")
+                startfile.assert_called_once_with(str(uploaded_pdf))
+            finally:
+                workspace.deleteLater()
+
+    def test_open_uploaded_pdf_reports_missing_file_instead_of_silently_reopening_picker(self) -> None:
+        with TemporaryDirectory() as directory:
+            missing_pdf = Path(directory) / "missing.pdf"
+            workspace = LocationBusinessTerminationWorkspace(on_back=lambda: None, on_save=lambda _: None)
+            try:
+                workspace.ocr_people[0].front_path = str(missing_pdf)
+                with patch("mingo_assistant.ui.views.business_registration_workspace.QMessageBox.warning") as warning, \
+                     patch.object(workspace, "_choose_person_image") as choose:
+                    workspace._open_or_choose_person_image("front")
+                warning.assert_called_once()
+                choose.assert_not_called()
+            finally:
+                workspace.deleteLater()
 
     def test_pdf_scan_populates_form_without_assigning_legal_representative(self) -> None:
         workspace = LocationBusinessTerminationWorkspace(on_back=lambda: None, on_save=lambda _: None)
@@ -100,7 +149,16 @@ class TerminationWorkspaceTests(unittest.TestCase):
             summary = workspace.build_case_summary()
             self.assertEqual("00001", summary.form_values["location_business_code"])
             self.assertEqual("organization", workspace.ocr_people[0].recognition_type)
-            self.assertEqual("Phòng Đăng ký kinh doanh Thành phố Hồ Chí Minh", workspace._field_value("business_registration_office"))
+            self.assertEqual("", workspace._field_value("business_registration_office"))
+            self.assertEqual("27", workspace._field_value("document_day"))
+            self.assertEqual("09", workspace._field_value("document_month"))
+            self.assertEqual("2026", workspace._field_value("document_year"))
+            workspace._set_field("business_registration_office", "Phòng Đăng ký kinh doanh Thành phố Hồ Chí Minh")
+            self.assertEqual("Thành phố Hồ Chí Minh", workspace._field_value("document_place"))
+            self.assertEqual(
+                "Thành phố Hồ Chí Minh, ngày 27 tháng 09 năm 2026",
+                workspace._field_value("document_place_date"),
+            )
             reopened = LocationBusinessTerminationWorkspace(
                 on_back=lambda: None, on_save=lambda _: None, case=summary
             )
@@ -311,7 +369,7 @@ class TerminationNoticeTests(unittest.TestCase):
             output = Document(signing_guide_path)
             self.assertEqual(3, len(result.generated))
             for row_index in (1, 2):
-                self.assertIn(values["legal_representative_full_name"], output.tables[0].cell(row_index, 3).text)
+                self.assertIn("Nguyễn Văn A", output.tables[0].cell(row_index, 3).text)
             self.assertEqual(template.tables[0].cell(1, 1).text, output.tables[0].cell(1, 1).text)
             self.assertEqual(template.tables[0].cell(2, 4).text, output.tables[0].cell(2, 4).text)
             original_paragraphs = list(generator._iter_paragraphs(template))

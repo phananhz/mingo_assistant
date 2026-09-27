@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import unicodedata
 from datetime import datetime
@@ -3139,10 +3140,43 @@ class BusinessRegistrationWorkspace(QWidget):
     def _open_or_choose_person_image(self, side: str) -> None:
         person = self.ocr_people[self.current_person_index]
         image_path = person.front_path if side == "front" else person.back_path
-        if image_path and Path(image_path).exists():
-            QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(image_path))))
+        if not image_path:
+            self._choose_person_image(side)
             return
-        self._choose_person_image(side)
+
+        document_path = Path(image_path)
+        if not document_path.is_file():
+            QMessageBox.warning(
+                self,
+                "Không tìm thấy tài liệu",
+                f"Tài liệu đã tải lên không còn tồn tại:\n{document_path}",
+            )
+            return
+
+        self._open_local_document(document_path)
+
+    def _open_local_document(self, document_path: Path) -> bool:
+        """Open an uploaded file and never fail silently when no viewer is available."""
+        startfile = getattr(os, "startfile", None)
+        if callable(startfile):
+            try:
+                startfile(str(document_path))
+                return True
+            except OSError:
+                # Use Qt as a fallback for unusual shell associations.
+                pass
+
+        file_url = QUrl.fromLocalFile(str(document_path.resolve()))
+        if QDesktopServices.openUrl(file_url):
+            return True
+
+        QMessageBox.warning(
+            self,
+            "Không thể mở tài liệu",
+            "Windows chưa có ứng dụng để mở tài liệu này. "
+            "Vui lòng cài hoặc chọn một ứng dụng đọc PDF rồi thử lại.",
+        )
+        return False
 
     def _choose_person_image(self, side: str) -> None:
         path, _ = QFileDialog.getOpenFileName(
