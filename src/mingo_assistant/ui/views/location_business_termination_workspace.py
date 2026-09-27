@@ -307,9 +307,6 @@ class LocationBusinessTerminationWorkspace(LocationBusinessWorkspace):
         issues = [label for key, label in required.items() if not values.get(key, "").strip()]
         if not any(person.role == "legal_representative" for person in self.ocr_people):
             issues.append("Chọn người đại diện pháp luật từ danh sách đã quét")
-        province = values.get("location_province", "").strip()
-        if province and province.casefold() != "thành phố hồ chí minh":
-            issues.append("Mẫu Word số 1 đang ghi sẵn cơ quan tiếp nhận và nơi ký tại Thành phố Hồ Chí Minh")
         return issues
 
     def _document_generator_class(self) -> type:

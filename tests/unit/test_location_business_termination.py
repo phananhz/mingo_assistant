@@ -246,6 +246,17 @@ class TerminationWorkspaceTests(unittest.TestCase):
         finally:
             workspace.deleteLater()
 
+    def test_export_allows_a_receiving_office_outside_the_location_province(self) -> None:
+        workspace = LocationBusinessTerminationWorkspace(on_back=lambda: None, on_save=lambda _: None)
+        try:
+            issues = workspace._validation_issues({"location_province": "Thành phố Hải Phòng"})
+            self.assertNotIn(
+                "Mẫu Word số 1 đang ghi sẵn cơ quan tiếp nhận và nơi ký tại Thành phố Hồ Chí Minh",
+                issues,
+            )
+        finally:
+            workspace.deleteLater()
+
 
 class TerminationNoticeTests(unittest.TestCase):
     def test_fills_only_highlighted_runs_and_preserves_their_formatting(self) -> None:

@@ -20,6 +20,26 @@ class LocationCertificateService(OrganizationDocumentService):
     REQUIRED = ("parent_entity_name", "parent_entity_registration_number",
                 "location_business_name", "location_business_code", "location_full_address")
 
+    def _extract_page_with_ocr(self, legacy_engine, image_bytes: bytes, *, use_legacy: bool = False) -> str:
+        # Reuse one set of detected lines for Vietnamese refinement instead of
+        # detecting the same page with two complete OCR pipelines.
+        import cv2
+        import numpy as np
+        from mingo_assistant.services.ocr.vietnamese_line_refiner import VietnameseLineRefiner
+        result, _ = legacy_engine(image_bytes)
+        lines = result or []
+        if not use_legacy and self._vietnamese_ocr:
+            if not hasattr(self, "_line_refiner"):
+                self._line_refiner = VietnameseLineRefiner(self._vietnamese_ocr.model_dir)
+            try:
+                image = cv2.imdecode(np.frombuffer(image_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
+                lines = self._line_refiner.refine(image, lines)
+            except Exception:
+                # Optional model failures must keep basic scanning available.
+                import logging
+                logging.getLogger(__name__).exception("Vietnamese line refinement unavailable")
+        return "\n".join(str(line[1]).strip() for line in lines)
+
     def extract_pdf(self, path: str | Path, progress_callback: ProgressCallback | None = None) -> OrganizationDocumentResult:
         pdf_path = Path(path)
         if pdf_path.suffix.lower() != ".pdf":
@@ -39,7 +59,7 @@ class LocationCertificateService(OrganizationDocumentService):
                 primary_text = self._extract_with_ocr(document, progress_callback)
                 primary = self._parse_certificate(primary_text)
                 if primary:
-                    candidates.append(("ppocr_v6" if self._vietnamese_ocr and self._vietnamese_ocr.is_available else "rapidocr", primary, primary_text))
+                    candidates.append(("vietnamese_lines" if self._vietnamese_ocr else "rapidocr", primary, primary_text))
                 if not self._complete(primary):
                     self._progress(progress_callback, 75, "Đang đối chiếu chữ và số trên giấy chứng nhận")
                     fallback_text = self._extract_with_ocr(document, progress_callback, use_legacy=True)

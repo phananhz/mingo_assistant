@@ -127,7 +127,9 @@ class OrganizationDocumentService:
         except ImportError as exc:  # pragma: no cover - protected by packaging configuration
             raise RuntimeError("Thiếu bộ OCR nội bộ. Hãy dùng bản ứng dụng đã đóng gói đầy đủ.") from exc
 
-        engine = RapidOCR()
+        if not hasattr(self, "_legacy_engine"):
+            self._legacy_engine = RapidOCR()
+        engine = self._legacy_engine
         pages: list[str] = []
         page_count = max(document.page_count, 1)
         for index, page in enumerate(document):
