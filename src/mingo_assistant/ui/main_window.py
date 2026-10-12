@@ -65,6 +65,10 @@ from mingo_assistant.ui.styles import (
 )
 from mingo_assistant.ui.views.business_registration_documents import BusinessRegistrationDocumentsView
 from mingo_assistant.ui.views.business_registration_workspace import BusinessRegistrationWorkspace
+from mingo_assistant.ui.views.business_amendment_workspace import (
+    BUSINESS_AMENDMENT_CASE_TYPE,
+    BusinessAmendmentWorkspace,
+)
 from mingo_assistant.ui.views.location_business_workspace import LOCATION_CASE_TYPE, LocationBusinessWorkspace
 from mingo_assistant.ui.views.location_business_update_workspace import (
     LOCATION_UPDATE_CASE_TYPE,
@@ -293,6 +297,9 @@ class MainWindow(QMainWindow):
         self.dependent_cases_layout: QGridLayout | None = None
         self.current_dependent_card_columns = 0
         self.dependent_cases_count_label: QLabel | None = None
+        self.amendment_cases_scroll: QScrollArea | None = None
+        self.amendment_cases_layout: QGridLayout | None = None
+        self.current_amendment_card_columns = 0
         self.authorized_person_scroll: QScrollArea | None = None
         self.trash_scroll: QScrollArea | None = None
         self.trash_container = QWidget()
@@ -1534,11 +1541,14 @@ class MainWindow(QMainWindow):
             self.filters_layout.setColumnStretch(column, 1 if column < columns else 0)
 
     def _refresh_cases(self) -> None:
-        scroll_positions = self._capture_scroll_positions(self.cards_scroll, self.dependent_cases_scroll)
+        scroll_positions = self._capture_scroll_positions(
+            self.cards_scroll, self.dependent_cases_scroll, self.amendment_cases_scroll,
+        )
         filtered_cases = self._filtered_cases()
         self.result_text.setText(f"{len(filtered_cases)} hồ sơ được tìm thấy")
         self._clear_cards()
         self._refresh_dependent_cases()
+        self._refresh_amendment_cases()
 
         columns = self._card_column_count()
         self.current_card_columns = columns
@@ -1573,6 +1583,13 @@ class MainWindow(QMainWindow):
             columns = self._card_column_count()
             if columns != self.current_dependent_card_columns:
                 self._refresh_dependent_cases()
+        elif (
+            hasattr(self, "business_amendment_page")
+            and self.stack.currentWidget() == self.business_amendment_page
+            and self.amendment_cases_layout is not None
+        ):
+            if self._card_column_count() != self.current_amendment_card_columns:
+                self._refresh_amendment_cases()
     def _card_column_count(self) -> int:
         available_width = max(1, self._content_width())
         max_cols = 5 if getattr(self, "current_layout", "default") in ("top_nav", "slim_sidebar") else 4
@@ -1655,7 +1672,7 @@ class MainWindow(QMainWindow):
 
         result = []
         for case in self.cases:
-            if self._is_dependent_case(case):
+            if self._is_dependent_case(case) or case.case_type == BUSINESS_AMENDMENT_CASE_TYPE:
                 continue
             haystack = f"{case.company_name} {self._authorized_person_name(case)} {case.case_type} {case.status}".lower()
             if search_text and search_text not in haystack:
@@ -2043,7 +2060,11 @@ class MainWindow(QMainWindow):
         c_title.setAlignment(Qt.AlignCenter)
         c_layout.addWidget(c_title)
 
-        c_desc = QLabel(f"Bấm để mở popup chọn thủ tục cho {title_text.lower()}.")
+        c_desc = QLabel(
+            "Bấm để mở màn hình tạo hồ sơ thay đổi đăng ký doanh nghiệp."
+            if nav_key == "business_amendment"
+            else f"Bấm để mở popup chọn thủ tục cho {title_text.lower()}."
+        )
         c_desc.setObjectName("CreateDescription")
         c_desc.setWordWrap(True)
         c_desc.setAlignment(Qt.AlignCenter)
@@ -2083,7 +2104,7 @@ class MainWindow(QMainWindow):
 
         i_layout.addStretch(1)
 
-        launch_btn = QPushButton("Khám phá thủ tục →")
+        launch_btn = QPushButton("Tạo hồ sơ →" if nav_key == "business_amendment" else "Khám phá thủ tục →")
         launch_btn.setObjectName("GhostButton")
         launch_btn.setCursor(Qt.PointingHandCursor)
         launch_btn.clicked.connect(on_create_clicked)
@@ -2093,7 +2114,54 @@ class MainWindow(QMainWindow):
         cards_layout.addStretch(1)
 
         layout.addWidget(cards_container, 1)
+        if nav_key == "business_amendment":
+            self.amendment_intro = cards_container
+            layout.addWidget(self._build_amendment_cases_section(), 1)
         return page
+
+    def _build_amendment_cases_section(self) -> QWidget:
+        group = QGroupBox("Hồ sơ thay đổi đăng ký doanh nghiệp đã lưu")
+        layout = QVBoxLayout(group)
+        self.amendment_cases_group = group
+        self.amendment_cases_count_label = QLabel()
+        self.amendment_cases_count_label.setObjectName("StatusBadge")
+        layout.addWidget(self.amendment_cases_count_label)
+        self.amendment_cases_scroll = QScrollArea()
+        self.amendment_cases_scroll.setWidgetResizable(True)
+        self.amendment_cases_scroll.setFrameShape(QFrame.NoFrame)
+        self.amendment_cases_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        container = QWidget()
+        self.amendment_cases_layout = QGridLayout(container)
+        self.amendment_cases_layout.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        self.amendment_cases_layout.setHorizontalSpacing(16)
+        self.amendment_cases_layout.setVerticalSpacing(16)
+        self.amendment_cases_scroll.setWidget(container)
+        layout.addWidget(self.amendment_cases_scroll, 1)
+        self._refresh_amendment_cases()
+        return group
+
+    def _refresh_amendment_cases(self) -> None:
+        layout = self.amendment_cases_layout
+        if layout is None:
+            return
+        positions = self._capture_scroll_positions(self.amendment_cases_scroll)
+        while layout.count():
+            widget = layout.takeAt(0).widget()
+            if widget is not None:
+                widget.hide()
+                widget.setParent(None)
+                widget.deleteLater()
+        cases = [case for case in self.cases if case.case_type == BUSINESS_AMENDMENT_CASE_TYPE]
+        self.amendment_cases_count_label.setText(f"{len(cases)} hồ sơ")
+        self.amendment_cases_group.setVisible(bool(cases))
+        self.amendment_intro.setVisible(not cases)
+        columns = self._card_column_count()
+        self.current_amendment_card_columns = columns
+        for index, case in enumerate(cases):
+            layout.addWidget(self._build_case_card(case), index // columns, index % columns)
+        for column in range(5):
+            layout.setColumnStretch(column, 1 if column < columns else 0)
+        self._restore_scroll_positions_later(positions)
 
 
     def _build_dependent_cases_section(self) -> QWidget:
@@ -2233,32 +2301,8 @@ class MainWindow(QMainWindow):
                 self._show_coming_soon(str(chosen["case_type"]), "business_registration")
 
     def _open_business_amendment_modal(self) -> None:
-        from mingo_assistant.ui.dialogs.business_amendment_modal import BusinessAmendmentModal
-
-        modal = BusinessAmendmentModal(self, layout_mode=getattr(self, "current_layout", "default"))
-        chosen: dict[str, object] = {"id": None, "name": "", "is_ready": False}
-
-        def on_chosen(proc_id: str, proc_name: str, is_ready: bool) -> None:
-            chosen["id"] = proc_id
-            chosen["name"] = proc_name
-            chosen["is_ready"] = is_ready
-
-        modal.procedure_chosen.connect(on_chosen)
-        was_visible = self.sidebar.isVisible() if hasattr(self, "sidebar") and self.sidebar else False
-        if hasattr(self, "sidebar") and self.sidebar:
-            self.sidebar.setVisible(False)
-        if hasattr(self, "slim_sidebar") and self.slim_sidebar:
-            self.slim_sidebar.setVisible(False)
-        try:
-            result = modal.exec()
-        finally:
-            if getattr(self, "current_workspace", None) is None and getattr(self, "current_documents_view", None) is None:
-                if hasattr(self, "sidebar") and self.sidebar:
-                    self.sidebar.setVisible(was_visible)
-                if hasattr(self, "_apply_layout_structure") and hasattr(self, "current_layout"):
-                    self._apply_layout_structure(self.current_layout)
-        if result == QDialog.DialogCode.Accepted and chosen["name"]:
-            self._show_coming_soon(str(chosen["name"]), "business_amendment")
+        # Retain this entry point for existing navigation actions.
+        self._open_business_amendment_workspace(None)
 
     def _open_dependent_unit_modal(self) -> None:
         from mingo_assistant.ui.dialogs.dependent_unit_modal import DependentUnitModal
@@ -2634,6 +2678,9 @@ class MainWindow(QMainWindow):
     def _open_case_workspace(self, case: CaseSummary | None, *, template_variant: str = "") -> None:
         if case is not None:
             case = self.case_use_cases.get(case.id) or case
+        if case is not None and case.case_type == BUSINESS_AMENDMENT_CASE_TYPE:
+            self._open_business_amendment_workspace(case)
+            return
         if case is not None and case.case_type == LOCATION_CASE_TYPE:
             self._open_location_business_workspace(case)
             return
@@ -2671,7 +2718,9 @@ class MainWindow(QMainWindow):
         if hasattr(self, "slim_sidebar") and self.slim_sidebar is not None:
             self.slim_sidebar.setVisible(False)
 
-    def _open_location_business_workspace(self, case: CaseSummary | None, *, workspace_class=LocationBusinessWorkspace) -> None:
+    def _open_location_business_workspace(
+        self, case: CaseSummary | None, *, workspace_class=LocationBusinessWorkspace, on_back=None,
+    ) -> None:
         if case is not None:
             case = self.case_use_cases.get(case.id) or case
         if self.current_workspace is not None:
@@ -2683,7 +2732,7 @@ class MainWindow(QMainWindow):
             self.current_documents_view.deleteLater()
             self.current_documents_view = None
         self.current_workspace = workspace_class(
-            on_back=self._return_to_dependent_units,
+            on_back=on_back or self._return_to_dependent_units,
             on_save=self._save_case_from_workspace,
             case=case,
             on_export=self._open_case_documents,
@@ -2705,6 +2754,12 @@ class MainWindow(QMainWindow):
     def _open_location_business_termination_workspace(self, case: CaseSummary | None) -> None:
         self._open_location_business_workspace(case, workspace_class=LocationBusinessTerminationWorkspace)
 
+    def _open_business_amendment_workspace(self, case: CaseSummary | None) -> None:
+        self._current_nav_key = "business_amendment"
+        self._open_location_business_workspace(
+            case, workspace_class=BusinessAmendmentWorkspace, on_back=self._return_to_amendment_list,
+        )
+
     def _open_case_documents(self, case: CaseSummary) -> None:
         case = self.case_use_cases.get(case.id) or case
         if self.current_workspace is not None:
@@ -2716,10 +2771,20 @@ class MainWindow(QMainWindow):
             self.current_documents_view.deleteLater()
             self.current_documents_view = None
 
+        on_back = self._return_to_business_list
+        if self._is_dependent_case(case):
+            on_back = self._return_to_dependent_units
+        elif case.case_type == BUSINESS_AMENDMENT_CASE_TYPE:
+            on_back = self._return_to_amendment_list
         self.current_documents_view = BusinessRegistrationDocumentsView(
             case=case,
-            on_back=self._return_to_dependent_units if self._is_dependent_case(case) else self._return_to_business_list,
+            on_back=on_back,
             on_edit=lambda selected_id=case.id: self._open_case_workspace(self.case_use_cases.get(selected_id) or case),
+            description=(
+                "File Word thay đổi ĐKDN được điền trong vùng vàng; các phần cố định của mẫu được giữ nguyên."
+                if case.case_type == BUSINESS_AMENDMENT_CASE_TYPE
+                else "Kiểm tra các file Word đã điền và mở nhanh phiên bản bạn cần."
+            ),
         )
         self.stack.addWidget(self.current_documents_view)
         self.stack.setCurrentWidget(self.current_documents_view)
@@ -2739,6 +2804,13 @@ class MainWindow(QMainWindow):
         self._refresh_cases()
         self.stack.setCurrentWidget(self.dependent_units_page)
         self._apply_layout_structure(self.current_layout)
+
+    def _return_to_amendment_list(self) -> None:
+        self.cases = self.case_use_cases.list_active()
+        self._refresh_cases()
+        self._select_nav("business_amendment")
+        self._apply_layout_structure(self.current_layout)
+
     def _save_case_from_workspace(self, case: CaseSummary) -> None:
         self.case_use_cases.save(case)
         self.cases = self.case_use_cases.list_active()

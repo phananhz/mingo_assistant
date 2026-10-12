@@ -23,11 +23,15 @@ from mingo_assistant.models.case import CaseSummary
 
 
 class BusinessRegistrationDocumentsView(QWidget):
-    def __init__(self, case: CaseSummary, on_back, on_edit) -> None:
+    def __init__(
+        self, case: CaseSummary, on_back, on_edit,
+        description: str = "Kiểm tra các file Word đã điền và mở nhanh phiên bản bạn cần.",
+    ) -> None:
         super().__init__()
         self.case = case
         self.on_back = on_back
         self.on_edit = on_edit
+        self.description = description
         self.version_contents: list[QWidget] = []
         self.version_button_group = QButtonGroup(self)
         self.version_button_group.setExclusive(True)
@@ -68,7 +72,7 @@ class BusinessRegistrationDocumentsView(QWidget):
         eyebrow.setObjectName("DocumentsEyebrow")
         title = QLabel("Xem hồ sơ đã tạo")
         title.setObjectName("PageTitle")
-        description = QLabel("Kiểm tra các file Word đã điền và mở nhanh phiên bản bạn cần.")
+        description = QLabel(self.description)
         description.setObjectName("PageDescription")
         description.setWordWrap(True)
         text.addWidget(eyebrow)

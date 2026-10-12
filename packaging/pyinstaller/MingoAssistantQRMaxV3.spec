@@ -5,6 +5,7 @@ Run this spec from the repository root. All paths derive from the spec location,
 so a fresh clone can build without the original developer's local directories.
 """
 from pathlib import Path
+import sys
 
 from PyInstaller.utils.hooks import collect_all
 
@@ -16,6 +17,21 @@ datas = [(str(PROJECT_ROOT / "assets"), "assets")]
 binaries = []
 hiddenimports = []
 
+# This Python installation exposes the _tkinter extension but cannot initialize
+# Tcl while PyInstaller analyzes it. Its automatic hook therefore registers the
+# runtime hook without collecting the script libraries, causing a one-file EXE
+# to fail during extraction with ``_tcl_data not found``. Bundle the three
+# standard library trees explicitly so the runtime hook always has its data.
+PYTHON_TCL_ROOT = Path(sys.base_prefix) / "tcl"
+for source_name, destination in (
+    ("tcl8.6", "_tcl_data"),
+    ("tk8.6", "_tk_data"),
+    ("tcl8", "tcl8"),
+):
+    source_path = PYTHON_TCL_ROOT / source_name
+    if source_path.is_dir():
+        datas.append((str(source_path), destination))
+
 # RapidOCR and its native dependencies load models/configuration dynamically.
 for package_name in (
     "numpy",
@@ -26,6 +42,8 @@ for package_name in (
     "fitz",
     "rapidocr_onnxruntime",
     "onnxruntime",
+    # VietOCR is imported lazily by the Vietnamese line-refinement pass.
+    "vietocr",
 ):
     package_datas, package_binaries, package_hiddenimports = collect_all(package_name)
     datas += package_datas

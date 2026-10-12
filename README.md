@@ -71,6 +71,51 @@ Quy tắc DOCX:
 - Tên ngành, mô tả ngành và mã ngành là các dữ liệu riêng.
 - Mapping CCCD phải đồng bộ giữa OCR, profile, workspace và DOCX, gồm `issue_date` và `issue_place`.
 
+## Thay đổi đăng ký doanh nghiệp
+
+Mục **2. Thủ tục thay đổi ĐKDN** mở thẳng `BusinessAmendmentWorkspace` với bốn
+tab riêng: cơ quan/thời gian ký, doanh nghiệp, người đại diện và nội dung thay đổi.
+PDF được nhận diện bằng `BusinessAmendmentDocumentService`, chỉ lấy tên doanh nghiệp
+và mã số doanh nghiệp/mã số thuế ở phần nhận diện tổ chức; người dùng đối chiếu,
+sửa và xác nhận trước khi áp dụng. Cơ quan tiếp nhận, nơi/ngày ký được nhập tại tab
+tương ứng. Dữ liệu doanh nghiệp hiện tại và dữ liệu sau
+thay đổi được lưu riêng trong mỗi hồ sơ.
+
+`BusinessAmendmentTemplateGenerator` điền các vị trí vàng đã kiểm tra trong
+`assets/templates/word/business_amendment/Thong bao thay doi.docx`, giữ nguyên
+định dạng, các phần cố định và toàn bộ nội dung ngoài vị trí nhập. Ngoại lệ theo
+yêu cầu: fax/website trong thay đổi địa chỉ được điền nếu có dữ liệu, giữ định dạng
+không bôi vàng; để trống sẽ giữ nguyên dấu chấm của mẫu. Bản đồ vị trí
+được ràng buộc với SHA-256 của mẫu; khi mẫu thay đổi cần cập nhật bản đồ trước
+khi xuất. Mục B/C và ô đánh dấu chưa vàng giữ nguyên. Ba bảng ngành nghề cho phép
+thêm/xóa dòng và lưu số dòng theo từng hồ sơ. Word nhân bản dòng dữ liệu của mẫu
+để giữ định dạng và màu vàng, đánh STT liên tục và ghi X cho ngành chính đã chọn. Danh sách
+thành viên/chủ sở hữu hưởng lợi gửi kèm chưa được tạo bởi chức năng này.
+
+Giao diện ngành nghề tái sử dụng panel tra cứu và bộ dựng dòng của hồ sơ đăng ký
+doanh nghiệp. Adapter riêng cho mỗi bảng bổ sung/bỏ/sửa chi tiết giữ các trường
+`amendment_line_*`; tên và chi tiết được ghép vào ô Word khi xuất. Các workspace
+đăng ký doanh nghiệp và thay đổi địa điểm kinh doanh giữ nguyên code và dữ liệu.
+Ba bảng được chia thành ba tab. Nút tra cứu ở mỗi tab mở cửa sổ chọn ngành riêng,
+ghi rõ bảng nhận dữ liệu; thêm thành công sẽ đóng cửa sổ và hiển thị dòng vừa thêm.
+Hồ sơ mới không tạo sẵn dòng nhập ở cả ba bảng. Người dùng thêm dòng bằng tra cứu
+hoặc nút thêm dòng trống, không giới hạn số ngành; xóa dòng cuối cùng trả bảng về rỗng.
+Danh sách dài hiển thị theo trang 50 dòng để không tạo hàng nghìn bộ ô nhập cùng lúc;
+việc lưu và xuất Word luôn dùng toàn bộ danh sách, kể cả các trang không đang mở.
+Mỗi bảng trong mẫu Word giữ một hàng tiêu đề và một hàng dữ liệu trống. Khi xuất,
+chỉ nhân bản hàng cho ngành đã nhập; bảng không có dữ liệu giữ một hàng trống.
+Hồ sơ amendment version 4 lưu được số dòng bằng 0; khi mở bản cũ, chỉ bỏ dòng
+template rỗng và giữ mọi dòng đã có dữ liệu, kể cả thông tin đang nhập dở.
+
+Hồ sơ và phiên bản xuất được phân biệt bằng mã hồ sơ; dữ liệu cũ bị ẩn vẫn được
+bảo toàn khi lưu lại. Nguồn trong `TemplatesBefore/` được giữ nguyên.
+
+Phần vốn tự định dạng dấu chấm và tạo dòng diễn giải VNĐ/bằng chữ chỉ đọc cho
+vốn đã đăng ký và vốn sau thay đổi. Hai bảng giống mẫu chỉ cho nhập Vốn tư nhân
+và Đồng Việt Nam, tỷ lệ cố định 100%, tổng tự tính; các hàng còn lại giữ số 0.
+Thời điểm/hình thức thay đổi vốn là văn bản tự nhập. Checkbox Có/Không hiển thị
+ngoại tệ chỉ lưu lựa chọn trên màn hình, chưa xử lý vào Word.
+
 ## Dữ liệu runtime
 
 ```text
