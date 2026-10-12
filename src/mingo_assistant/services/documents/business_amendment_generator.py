@@ -112,7 +112,7 @@ def compose_share_values(values: dict[str, str]) -> dict[str, str]:
 class BusinessAmendmentTemplateGenerator(DocxTemplateGenerator):
     TEMPLATE_NAME = "Thong bao thay doi.docx"
     # An unreviewed template revision must not reuse these paragraph offsets.
-    TEMPLATE_SHA256 = "041fbcfd3e1987aac6c027b9018ed28c539429d1c41375889eb60221074833fd"
+    TEMPLATE_SHA256 = "cc78d7bcc60e18b2799bc7ea3af1ebcea3aebdb5a1789b8d93da824147e1f0eb"
 
     def __init__(self, template_dir: Path, export_root: Path) -> None:
         self.template_dir = template_dir
