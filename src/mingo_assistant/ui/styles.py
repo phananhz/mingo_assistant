@@ -559,6 +559,16 @@ QTableWidget#IndustryTable::item:selected {
     background: #d9ebff;
     color: #0f172a;
 }
+
+QTableWidget#LegacyIndustryTable {
+    selection-background-color: #d9ebff;
+    selection-color: #0f172a;
+}
+
+QTableWidget#LegacyIndustryTable::item:selected {
+    background: #d9ebff;
+    color: #0f172a;
+}
 """
 
 

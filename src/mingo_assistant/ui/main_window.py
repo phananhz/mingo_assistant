@@ -49,6 +49,9 @@ from mingo_assistant.models.case import CaseSummary
 from mingo_assistant.repositories.authorized_person_repository import AuthorizedPersonProfileRepository
 from mingo_assistant.repositories.case_repository import CaseRepository
 from mingo_assistant.services.business_lines.industry_lookup import IndustryCatalog, IndustryRow
+from mingo_assistant.services.business_lines.legacy_industry_lookup import (
+    load_legacy_industry_catalog,
+)
 from mingo_assistant.services.documents.business_registration_variants import (
     TWO_MEMBER_INDIVIDUAL_VARIANT,
 )
@@ -88,6 +91,7 @@ NAV_ITEMS = [
     ("dissolution", "3. Thủ tục giải thể DN"),
     ("dependent_units", "4. Thủ tục của đơn vị phụ thuộc"),
     ("industry_lookup", "Tra cứu NNKD"),
+    ("legacy_industry_lookup", "Tra cứu NNKD Cũ"),
     ("trash", "Thùng rác"),
 ]
 
@@ -231,6 +235,7 @@ class MainWindow(QMainWindow):
         authorized_person_use_cases: AuthorizedPersonUseCases | None = None,
         registration_services: BusinessRegistrationServices | None = None,
         industry_catalog: IndustryCatalog | None = None,
+        legacy_industry_catalog: IndustryCatalog | None = None,
     ) -> None:
         super().__init__()
         self.app_paths = app_paths or get_app_paths()
@@ -255,6 +260,9 @@ class MainWindow(QMainWindow):
             self.app_paths.bundle_root
         )
         self.industry_catalog = industry_catalog or self.registration_services.industry_catalog
+        self.legacy_industry_catalog = legacy_industry_catalog or load_legacy_industry_catalog(
+            self.app_paths.bundle_root
+        )
         self.cases: list[CaseSummary] = self.case_use_cases.list_active()
         self.nav_buttons: dict[str, QPushButton] = {}
         self.top_nav_buttons: dict[str, QPushButton] = {}
@@ -309,6 +317,10 @@ class MainWindow(QMainWindow):
         self.industry_table = QTableWidget()
         self.industry_status_label = QLabel()
         self.industry_detail = QTextEdit()
+        self.legacy_industry_search_input = QLineEdit()
+        self.legacy_industry_table = QTableWidget()
+        self.legacy_industry_status_label = QLabel()
+        self.legacy_industry_detail = QTextEdit()
 
         self.sidebar = self._build_sidebar()
         self.slim_sidebar = self._build_slim_sidebar()
@@ -400,6 +412,7 @@ class MainWindow(QMainWindow):
             "dependent_units": "Đơn vị trực thuộc",
             "dissolution": "Giải thể DN",
             "industry_lookup": "Tra mã ngành",
+            "legacy_industry_lookup": "Tra mã ngành cũ",
             "templates": "Biểu mẫu",
             "people": "Cá nhân/Tổ chức",
             "trash": "Thùng rác",
@@ -456,6 +469,7 @@ class MainWindow(QMainWindow):
             "dependent_units": "🏛️",
             "dissolution": "⚠️",
             "industry_lookup": "🔍",
+            "legacy_industry_lookup": "⌛",
             "templates": "📄",
             "people": "👥",
             "trash": "🗑",
@@ -596,6 +610,7 @@ class MainWindow(QMainWindow):
         )
         self.authorized_person_page = self._build_authorized_person_page()
         self.industry_lookup_page = self._build_industry_lookup_page()
+        self.legacy_industry_lookup_page = self._build_legacy_industry_lookup_page()
         self.trash_page = self._build_trash_page()
         self.coming_soon_page = self._build_coming_soon_page()
         self.settings_page = self._build_settings_page()
@@ -606,6 +621,7 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.dissolution_page)
         self.stack.addWidget(self.authorized_person_page)
         self.stack.addWidget(self.industry_lookup_page)
+        self.stack.addWidget(self.legacy_industry_lookup_page)
         self.stack.addWidget(self.trash_page)
         self.stack.addWidget(self.coming_soon_page)
         self.stack.addWidget(self.settings_page)
@@ -698,6 +714,11 @@ class MainWindow(QMainWindow):
                 self.industry_lookup_page,
                 None,
                 self._refresh_industry_lookup,
+            ),
+            "legacy_industry_lookup": (
+                self.legacy_industry_lookup_page,
+                None,
+                self._refresh_legacy_industry_lookup,
             ),
             "trash": (
                 self.trash_page,
@@ -1508,6 +1529,173 @@ class MainWindow(QMainWindow):
         if row.excluded_detail:
             sections.append(f"Loại trừ:\n{row.excluded_detail}")
         self.industry_detail.setPlainText("\n\n".join(sections))
+
+    def _build_legacy_industry_lookup_page(self) -> QWidget:
+        """Build the isolated VSIC 2018 lookup page."""
+
+        page = QWidget()
+        page.setObjectName("LegacyIndustryLookupPage")
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(24, 22, 24, 22)
+        layout.setSpacing(18)
+
+        header = QVBoxLayout()
+        title = QLabel("Tra cứu NNKD Cũ")
+        title.setObjectName("IndustryLookupTitle")
+        description = QLabel(
+            "Tra cứu mã ngành cấp 4, tên ngành và nội dung ngành theo "
+            "Hệ thống ngành kinh tế Việt Nam 2018. Đây là dữ liệu cũ và "
+            "không được tự động dùng trong bất kỳ bộ hồ sơ hiện tại nào."
+        )
+        description.setObjectName("IndustryLookupDescription")
+        description.setWordWrap(True)
+        header.addWidget(title)
+        header.addWidget(description)
+        layout.addLayout(header)
+
+        panel = QFrame()
+        panel.setObjectName("IndustryLookupPanel")
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(18, 16, 18, 18)
+        panel_layout.setSpacing(12)
+
+        source = QLabel(
+            '<a href="https://vanban.chinhphu.vn/?docid=194154&pageid=27160">'
+            "Nguồn chính thức: Quyết định 27/2018/QĐ-TTg - "
+            "Cổng Thông tin điện tử Chính phủ</a>"
+        )
+        source.setObjectName("IndustryLookupSource")
+        source.setAlignment(Qt.AlignCenter)
+        source.setOpenExternalLinks(False)
+        source.linkActivated.connect(lambda url: QDesktopServices.openUrl(QUrl(url)))
+        panel_layout.addWidget(source)
+
+        notice = QLabel(
+            "Danh mục VSIC 2018 • Chỉ hiển thị mã ngành cấp 4 • "
+            "Chưa được cấp quyền cho bộ hồ sơ nào"
+        )
+        notice.setObjectName("IndustryLookupSubSource")
+        notice.setAlignment(Qt.AlignCenter)
+        notice.setWordWrap(True)
+        panel_layout.addWidget(notice)
+
+        self.legacy_industry_search_input.setObjectName("LegacyIndustrySearchInput")
+        self.legacy_industry_search_input.setPlaceholderText(
+            "Nhập mã ngành cấp 4 hoặc tên ngành cũ để tìm kiếm..."
+        )
+        self.legacy_industry_search_input.textChanged.connect(
+            self._refresh_legacy_industry_lookup
+        )
+        panel_layout.addWidget(self.legacy_industry_search_input)
+
+        self.legacy_industry_table.setObjectName("LegacyIndustryTable")
+        self.legacy_industry_table.setColumnCount(6)
+        self.legacy_industry_table.setHorizontalHeaderLabels(
+            ["Cấp 1", "Cấp 2", "Cấp 3", "Cấp 4", "Cấp 5", "Tên ngành"]
+        )
+        self.legacy_industry_table.setAlternatingRowColors(True)
+        self.legacy_industry_table.setEditTriggers(
+            QAbstractItemView.EditTrigger.NoEditTriggers
+        )
+        self.legacy_industry_table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows
+        )
+        self.legacy_industry_table.verticalHeader().setVisible(False)
+        self.legacy_industry_table.verticalHeader().setDefaultSectionSize(42)
+        self.legacy_industry_table.setMinimumHeight(460)
+        self.legacy_industry_table.setColumnWidth(0, 48)
+        self.legacy_industry_table.setColumnWidth(1, 48)
+        self.legacy_industry_table.setColumnWidth(2, 58)
+        self.legacy_industry_table.setColumnWidth(3, 58)
+        self.legacy_industry_table.setColumnWidth(4, 68)
+        self.legacy_industry_table.horizontalHeader().setStretchLastSection(True)
+        self.legacy_industry_table.itemSelectionChanged.connect(
+            self._show_selected_legacy_industry_detail
+        )
+        panel_layout.addWidget(self.legacy_industry_table, 1)
+
+        detail_group = QGroupBox("Chi tiết ngành nghề cũ")
+        detail_layout = QVBoxLayout(detail_group)
+        detail_layout.setContentsMargins(10, 10, 10, 10)
+        self.legacy_industry_detail.setReadOnly(True)
+        self.legacy_industry_detail.setMinimumHeight(150)
+        self.legacy_industry_detail.setPlaceholderText(
+            "Chọn một ngành trong bảng để xem nội dung hoạt động và "
+            "các trường hợp loại trừ theo VSIC 2018."
+        )
+        detail_layout.addWidget(self.legacy_industry_detail)
+        panel_layout.addWidget(detail_group)
+
+        self.legacy_industry_status_label.setObjectName("IndustryLookupStatus")
+        self.legacy_industry_status_label.setWordWrap(True)
+        panel_layout.addWidget(self.legacy_industry_status_label)
+
+        layout.addWidget(panel, 1)
+        self._refresh_legacy_industry_lookup()
+        return page
+
+    def _refresh_legacy_industry_lookup(self) -> None:
+        self.legacy_industry_table.clearContents()
+        self.legacy_industry_table.setRowCount(0)
+        if not self.legacy_industry_catalog.is_available:
+            self.legacy_industry_table.setRowCount(1)
+            item = QTableWidgetItem(
+                "Chưa có dữ liệu VSIC 2018 để tra cứu. Cần bổ sung file "
+                "assets/business_lines/vsic_2018.json từ nguồn chính thức."
+            )
+            self.legacy_industry_table.setItem(0, 0, item)
+            self.legacy_industry_table.setSpan(0, 0, 1, 6)
+            self.legacy_industry_status_label.setText(
+                "Không dùng thay thế dữ liệu VSIC 2025 và không tự động "
+                "kết nối dữ liệu cũ vào hồ sơ."
+            )
+            self.legacy_industry_detail.clear()
+            return
+
+        rows = self.legacy_industry_catalog.filter_rows(
+            self.legacy_industry_search_input.text()
+        )
+        self.legacy_industry_table.setRowCount(len(rows))
+        for row_index, row in enumerate(rows):
+            for column, value in enumerate([*row.levels, row.name]):
+                item = QTableWidgetItem(value)
+                item.setData(Qt.UserRole, row)
+                if column < 5:
+                    item.setTextAlignment(Qt.AlignCenter)
+                else:
+                    item.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+                if row.detail:
+                    item.setToolTip(row.detail)
+                self.legacy_industry_table.setItem(row_index, column, item)
+        if rows:
+            self.legacy_industry_table.selectRow(0)
+        else:
+            self.legacy_industry_detail.setPlainText(
+                "Không tìm thấy ngành cũ phù hợp."
+            )
+        code_count = self._industry_row_code_count(rows)
+        self.legacy_industry_status_label.setText(
+            f"Đang dùng dữ liệu từ: {self.legacy_industry_catalog.source_path}. "
+            f"Hiển thị {len(rows)} dòng từ {code_count} mã ngành cấp 4 phù hợp."
+        )
+
+    def _show_selected_legacy_industry_detail(self) -> None:
+        selected = self.legacy_industry_table.selectedItems()
+        if not selected:
+            return
+        row = selected[0].data(Qt.UserRole)
+        if not isinstance(row, IndustryRow):
+            return
+        code = next((level for level in reversed(row.levels) if level), "")
+        title = f"{code} - {row.name}" if code else row.name
+        sections = [title]
+        if row.included_detail:
+            sections.append(f"Nội dung hoạt động:\n{row.included_detail}")
+        if row.excluded_detail:
+            sections.append(f"Loại trừ:\n{row.excluded_detail}")
+        if not row.detail:
+            sections.append("Nguồn không có mô tả riêng cho mã cấp 4 này.")
+        self.legacy_industry_detail.setPlainText("\n\n".join(sections))
 
     def _build_filters(self) -> QWidget:
         layout = self.filters_layout

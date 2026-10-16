@@ -116,6 +116,7 @@ class TestAllModalsAndNavigation(unittest.TestCase):
                 "dissolution",
                 "dependent_units",
                 "industry_lookup",
+                "legacy_industry_lookup",
                 "trash",
             ],
         )
@@ -129,6 +130,7 @@ class TestAllModalsAndNavigation(unittest.TestCase):
             win._open_dissolution_modal = MagicMock()
             win._open_authorized_person_manager = MagicMock()
             win._refresh_industry_lookup = MagicMock()
+            win._refresh_legacy_industry_lookup = MagicMock()
             win._refresh_trash = MagicMock()
             win._show_coming_soon = MagicMock()
 
@@ -141,6 +143,7 @@ class TestAllModalsAndNavigation(unittest.TestCase):
             win.dependent_units_page = MagicMock()
             win.dissolution_page = MagicMock()
             win.industry_lookup_page = MagicMock()
+            win.legacy_industry_lookup_page = MagicMock()
             win.trash_page = MagicMock()
             win.coming_soon_page = MagicMock()
 
@@ -169,6 +172,12 @@ class TestAllModalsAndNavigation(unittest.TestCase):
             win.stack.currentWidget.return_value = win.dissolution_page
             win._select_nav("dissolution", is_user_action=True)
             win._open_dissolution_modal.assert_called_once()
+
+            # 6. Old-industry lookup is a separate page and refresh callback.
+            win.stack.currentWidget.return_value = None
+            win._select_nav("legacy_industry_lookup", is_user_action=True)
+            win._refresh_legacy_industry_lookup.assert_called_once()
+            win.stack.setCurrentWidget.assert_called_with(win.legacy_industry_lookup_page)
 
 
 if __name__ == "__main__":

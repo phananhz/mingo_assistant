@@ -157,6 +157,12 @@ QTableWidget#IndustryTable {{
 QTableWidget#IndustryTable::item:selected {{
  background: #ebe8f8; color: #243247; border: 1px solid #c9c1e8;
 }}
+QTableWidget#LegacyIndustryTable {{
+ selection-background-color: #ebe8f8; selection-color: #243247;
+}}
+QTableWidget#LegacyIndustryTable::item:selected {{
+ background: #ebe8f8; color: #243247; border: 1px solid #c9c1e8;
+}}
 QTableWidget#IndustryTable QScrollBar:vertical {{
  background: rgba(113, 84, 182, 35); width: 9px; margin: 4px 2px 4px 1px;
  border-radius: 4px;
