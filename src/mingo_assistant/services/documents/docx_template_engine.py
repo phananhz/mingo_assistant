@@ -22,6 +22,8 @@ class DocxTemplateEngine:
     rules, signing rules, and dossier-specific post-processing.
     """
 
+    BUSINESS_LINE_FONT_SIZE_HALF_POINTS = "25"
+
     UPPERCASE_BOLD_FIELDS = {
         "company_name",
         "company_short_name",
@@ -326,11 +328,14 @@ class DocxTemplateEngine:
             p_pr.remove(justification)
         for numbering in p_pr.findall(qn("w:numPr")):
             p_pr.remove(numbering)
-        if alignment != "left" or no_wrap:
-            for indentation in p_pr.findall(qn("w:ind")):
-                p_pr.remove(indentation)
-            for tab_stops in p_pr.findall(qn("w:tabs")):
-                p_pr.remove(tab_stops)
+        # The source row may carry indentation or tab stops that visually
+        # center its sample text even after ``w:jc`` is changed to ``left``.
+        # Every generated cell receives an explicit alignment below, so these
+        # inherited offsets must not survive the row rebuild.
+        for indentation in p_pr.findall(qn("w:ind")):
+            p_pr.remove(indentation)
+        for tab_stops in p_pr.findall(qn("w:tabs")):
+            p_pr.remove(tab_stops)
         justification = OxmlElement("w:jc")
         justification.set(qn("w:val"), alignment)
         p_pr.append(justification)
@@ -357,7 +362,7 @@ class DocxTemplateEngine:
                 for element in list(r_pr.findall(qn(tag))):
                     r_pr.remove(element)
                 size = OxmlElement(tag)
-                size.set(qn("w:val"), "25")
+                size.set(qn("w:val"), self.BUSINESS_LINE_FONT_SIZE_HALF_POINTS)
                 r_pr.append(size)
             for element in list(r_pr.findall(qn("w:color"))):
                 r_pr.remove(element)

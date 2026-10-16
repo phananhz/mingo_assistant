@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from mingo_assistant.application.form_migrations import REGISTRATION_CASE_TYPES
 from mingo_assistant.models.case import CaseSummary
 
 
@@ -72,7 +73,12 @@ class BusinessRegistrationDocumentsView(QWidget):
         eyebrow.setObjectName("DocumentsEyebrow")
         title = QLabel("Xem hồ sơ đã tạo")
         title.setObjectName("PageTitle")
-        description = QLabel(self.description)
+        description_text = (
+            "Kiểm tra các file Word của lần xuất gần nhất và mở nhanh file bạn cần."
+            if self._latest_only()
+            else self.description
+        )
+        description = QLabel(description_text)
         description.setObjectName("PageDescription")
         description.setWordWrap(True)
         text.addWidget(eyebrow)
@@ -155,6 +161,32 @@ class BusinessRegistrationDocumentsView(QWidget):
         layout.setSpacing(12)
 
         versions = self._versions()
+        if self._latest_only():
+            files = versions[-1]["files"] if versions else []
+            exported_at = str(versions[-1]["exported_at"]) if versions else ""
+            heading = QHBoxLayout()
+            title = QLabel("File Word mới nhất")
+            title.setObjectName("SectionTitle")
+            count = QLabel(f"{len(files)} file Word")
+            count.setObjectName("SectionCount")
+            heading.addWidget(title)
+            heading.addStretch(1)
+            heading.addWidget(count)
+            layout.addLayout(heading)
+
+            hint = QLabel("Danh sách file Word của lần xuất gần nhất.")
+            hint.setObjectName("SectionHint")
+            layout.addWidget(hint)
+            if not files:
+                empty = QLabel("Hồ sơ này chưa có file Word đã xuất. Hãy sửa dữ liệu và xuất Word trước.")
+                empty.setObjectName("EmptyDescription")
+                empty.setWordWrap(True)
+                layout.addWidget(empty)
+                return wrapper
+            for index, path in enumerate(files, start=1):
+                layout.addWidget(self._build_document_row_v2(index, path, exported_at))
+            return wrapper
+
         heading = QHBoxLayout()
         title = QLabel("Các phiên bản đã xuất")
         title.setObjectName("SectionTitle")
@@ -420,7 +452,10 @@ class BusinessRegistrationDocumentsView(QWidget):
                             "files": files,
                         }
                     )
-        return versions
+        return versions[-1:] if self._latest_only() else versions
+
+    def _latest_only(self) -> bool:
+        return self.case.case_type in REGISTRATION_CASE_TYPES
 
     def _scan_versions_from_case_dir(self) -> list[dict[str, object]]:
         case_dir = Path(self.case.export_dir) if self.case.export_dir else None
@@ -432,6 +467,9 @@ class BusinessRegistrationDocumentsView(QWidget):
             if child.is_dir() and child.name.lower().startswith("bản ")
         ]
         if version_dirs:
+            version_dirs = sorted(version_dirs, key=self._version_sort_key)
+            if self._latest_only():
+                version_dirs = version_dirs[-1:]
             return [
                 {
                     "name": version_dir.name,
@@ -439,7 +477,7 @@ class BusinessRegistrationDocumentsView(QWidget):
                     "exported_at": self.case.exported_at,
                     "documents": [],
                 }
-                for version_dir in sorted(version_dirs, key=self._version_sort_key)
+                for version_dir in version_dirs
             ]
         return []
 

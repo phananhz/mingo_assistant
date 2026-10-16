@@ -40,7 +40,7 @@ class RegistrationApplicationTests(unittest.TestCase):
         self.assertEqual(view_model.snapshot()["company_name"], "CÔNG TY TNHH TEST")
         self.assertEqual(view_model.domain_case().charter_capital_vnd, 1_000_000)
 
-    def test_export_planner_preserves_legacy_and_new_version_shape(self) -> None:
+    def test_export_planner_keeps_only_latest_version(self) -> None:
         planner = RegistrationExportPlanner()
         versions = planner.append_version(
             [],
@@ -54,9 +54,25 @@ class RegistrationApplicationTests(unittest.TestCase):
             version_name="bản 2",
         )
 
-        self.assertEqual(versions[0]["name"], "bản 1")
-        self.assertNotIn("case_export_dir", versions[0])
-        self.assertEqual(versions[1]["case_export_dir"], "D:/Exports/company")
+        self.assertEqual(len(versions), 1)
+        self.assertEqual(versions[0]["name"], "mới nhất")
+        self.assertEqual(versions[0]["case_export_dir"], "D:/Exports/company")
+        self.assertEqual(versions[0]["documents"], ["new.docx"])
+
+    def test_export_planner_selects_only_old_numbered_version_directories(self) -> None:
+        planner = RegistrationExportPlanner()
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            old_one = root / "bản 1"
+            old_three = root / "bản 3"
+            keep = root / "bản 4" / "company"
+            unrelated = root / "notes"
+            for path in (old_one, old_three, keep, unrelated):
+                path.mkdir(parents=True)
+
+            selected = planner.previous_version_directories(root, keep)
+
+            self.assertEqual(set(selected), {old_one, old_three})
 
     def test_export_planner_reads_existing_sparse_version_directories(self) -> None:
         planner = RegistrationExportPlanner()

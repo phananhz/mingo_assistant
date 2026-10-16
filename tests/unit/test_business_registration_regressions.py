@@ -3,6 +3,8 @@ from pathlib import Path
 
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 from docx.shared import Pt
 
 from mingo_assistant.services.documents.business_registration_generator import DocxTemplateGenerator
@@ -242,6 +244,60 @@ class BusinessRegistrationRegressionTest(unittest.TestCase):
         self.assertEqual(paragraph.alignment, WD_ALIGN_PARAGRAPH.CENTER)
         self.assertIsNone(paragraph.paragraph_format.left_indent)
         self.assertIn("w:noWrap", stt_cell._tc.xml)
+
+    def test_file1_business_line_name_is_left_aligned_without_template_offsets(self) -> None:
+        document = Document()
+        table = document.add_table(rows=2, cols=4)
+        table.rows[0].cells[0].text = "STT"
+        table.rows[0].cells[1].text = "Ten nganh"
+        table.rows[0].cells[2].text = "Ma nganh"
+        table.rows[0].cells[3].text = "Nganh chinh"
+        source_paragraph = table.rows[1].cells[1].paragraphs[0]
+        source_paragraph.paragraph_format.left_indent = Pt(36)
+        source_paragraph._p.get_or_add_pPr().append(OxmlElement("w:tabs"))
+        generator = DocxTemplateGenerator.__new__(DocxTemplateGenerator)
+
+        generator._replace_business_lines_tables_v2(
+            document,
+            {
+                "business_line_1_name": "Trong cay lay cu co chat bot",
+                "business_line_1_code": "0113",
+                "business_line_1_is_main": "X",
+            },
+            keep_file1_business_line_numbers_on_one_line=True,
+        )
+
+        name_paragraph = table.rows[1].cells[1].paragraphs[0]
+        paragraph_properties = name_paragraph._p.get_or_add_pPr()
+        self.assertEqual(name_paragraph.alignment, WD_ALIGN_PARAGRAPH.LEFT)
+        self.assertIsNone(name_paragraph.paragraph_format.left_indent)
+        self.assertIsNone(paragraph_properties.find(qn("w:tabs")))
+
+    def test_file1_business_line_values_use_times_new_roman_13_point(self) -> None:
+        document = Document()
+        table = document.add_table(rows=2, cols=4)
+        table.rows[0].cells[0].text = "STT"
+        table.rows[0].cells[1].text = "Ten nganh"
+        table.rows[0].cells[2].text = "Ma nganh"
+        table.rows[0].cells[3].text = "Nganh chinh"
+        generator = DocxTemplateGenerator.__new__(DocxTemplateGenerator)
+
+        generator._replace_business_lines_tables_v2(
+            document,
+            {
+                "business_line_1_name": "Trong cay lay cu co chat bot",
+                "business_line_1_code": "0113",
+                "business_line_1_is_main": "X",
+            },
+            keep_file1_business_line_numbers_on_one_line=True,
+        )
+
+        for cell in table.rows[1].cells:
+            text_runs = [run for paragraph in cell.paragraphs for run in paragraph.runs if run.text]
+            self.assertTrue(text_runs)
+            for run in text_runs:
+                self.assertEqual(run.font.name, "Times New Roman")
+                self.assertEqual(run.font.size, Pt(13))
 
     def test_legacy_province_address_is_converted_from_administrative_data(self) -> None:
         result = AddressParser().parse(

@@ -30,6 +30,7 @@ from mingo_assistant.services.normalization.administrative_place_matcher import 
 
 
 class DocxTemplateGenerator(DocxTemplateEngine):
+    BUSINESS_LINE_FONT_SIZE_HALF_POINTS = "26"
     PERSONAL_CHARTER_TEMPLATE = "2. Điều lệ.docx"
     ORGANIZATION_CHARTER_TEMPLATE = "2. Dieu le_CSH la to chuc.docx"
 

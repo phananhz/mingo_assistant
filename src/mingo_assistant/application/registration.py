@@ -297,7 +297,9 @@ class ExportVersion:
 
 
 class RegistrationExportPlanner:
-    """Names export folders and preserves the existing version-history shape."""
+    """Names export folders and keeps only the latest registration export."""
+
+    VERSION_FOLDER_PATTERN = re.compile("b\u1ea3n\\s+(\\d+)", flags=re.IGNORECASE)
 
     @staticmethod
     def safe_folder_name(value: str) -> str:
@@ -325,10 +327,40 @@ class RegistrationExportPlanner:
             for child in case_export_dir.iterdir():
                 if not child.is_dir():
                     continue
-                match = re.fullmatch(r"bản\s+(\d+)", child.name.strip(), flags=re.IGNORECASE)
+                match = RegistrationExportPlanner.VERSION_FOLDER_PATTERN.fullmatch(child.name.strip())
                 if match:
                     numbers.append(int(match.group(1)))
         return max(numbers) + 1
+
+    @classmethod
+    def previous_version_directories(
+        cls,
+        case_export_dir: Path,
+        keep_export_dir: Path,
+    ) -> list[Path]:
+        """Return safe, direct ``bản N`` folders older than the kept export."""
+        try:
+            root = case_export_dir.resolve()
+            relative_keep = keep_export_dir.resolve().relative_to(root)
+        except (OSError, ValueError):
+            return []
+        if not relative_keep.parts:
+            return []
+        keep_version_dir = (root / relative_keep.parts[0]).resolve()
+        if not case_export_dir.exists():
+            return []
+
+        previous: list[Path] = []
+        for child in case_export_dir.iterdir():
+            if not child.is_dir() or not cls.VERSION_FOLDER_PATTERN.fullmatch(child.name.strip()):
+                continue
+            try:
+                resolved = child.resolve()
+            except OSError:
+                continue
+            if resolved.parent == root and resolved != keep_version_dir:
+                previous.append(child)
+        return previous
 
     @staticmethod
     def append_version(
@@ -343,23 +375,12 @@ class RegistrationExportPlanner:
         documents: list[str],
         version_name: str,
     ) -> list[dict[str, object]]:
-        versions = list(existing_versions)
-        if not versions and legacy_export_dir:
-            versions.append(
-                {
-                    "name": "bản 1",
-                    "export_dir": legacy_export_dir,
-                    "exported_at": legacy_exported_at,
-                    "documents": list(legacy_documents),
-                }
-            )
-        versions.append(
+        return [
             ExportVersion(
-                name=version_name,
+                name="m\u1edbi nh\u1ea5t",
                 case_export_dir=case_export_dir,
                 export_dir=version_export_dir,
                 exported_at=exported_at,
                 documents=documents,
             ).as_dict()
-        )
-        return versions
+        ]

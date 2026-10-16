@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import unicodedata
 from datetime import datetime
 from pathlib import Path
@@ -3890,11 +3891,15 @@ class BusinessRegistrationWorkspace(QWidget):
         )
         self.on_save(saved_case)
         self.case = saved_case
+        cleanup_failures = self._remove_previous_export_versions(case_export_dir, result.output_dir)
         message = [
             f"Đã tạo {len(result.generated)} file DOCX.",
             f"Thư mục hồ sơ: {case_export_dir}",
-            f"Phiên bản: {version_name}",
+            "Danh sách hồ sơ chỉ giữ bộ file Word mới nhất.",
         ]
+        if cleanup_failures:
+            message.append("\nKhông thể xóa một số thư mục cũ (có thể file Word đang được mở):")
+            message.extend(f"- {path}" for path in cleanup_failures)
         if result.skipped:
             message.append("\nFile chưa xử lý:")
             message.extend(f"- {item}" for item in result.skipped)
@@ -3904,6 +3909,15 @@ class BusinessRegistrationWorkspace(QWidget):
         QMessageBox.information(self, "Xuất hồ sơ thành công", "\n".join(message))
         if self.on_export is not None:
             self.on_export(saved_case)
+
+    def _remove_previous_export_versions(self, case_export_dir: Path, keep_export_dir: Path) -> list[Path]:
+        failures: list[Path] = []
+        for version_dir in self.export_planner.previous_version_directories(case_export_dir, keep_export_dir):
+            try:
+                shutil.rmtree(version_dir)
+            except OSError:
+                failures.append(version_dir)
+        return failures
 
     def _check_templates(self) -> None:
         values = self.form_values()
