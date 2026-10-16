@@ -15,9 +15,7 @@ from lxml import etree
 from mingo_assistant.services.documents.business_amendment_fields import CHANGE_GROUPS, LINE_CAPACITIES, SHARE_FIELDS, SLOTS, YellowSlot, line_row_count
 from mingo_assistant.services.documents.package_editor import DocxPackageEditor
 from mingo_assistant.domains.business_registration.money import VietnameseMoneyFormatter
-from mingo_assistant.services.documents.docx_generator import (
-    DocxTemplateGenerator, GeneratedDocument, GenerationResult,
-)
+from mingo_assistant.services.documents.generation_result import GeneratedDocument, GenerationResult
 
 NS = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
 W = "{" + NS["w"] + "}"
@@ -109,7 +107,7 @@ def compose_share_values(values: dict[str, str]) -> dict[str, str]:
     return result
 
 
-class BusinessAmendmentTemplateGenerator(DocxTemplateGenerator):
+class BusinessAmendmentTemplateGenerator:
     TEMPLATE_NAME = "Thong bao thay doi.docx"
     # An unreviewed template revision must not reuse these paragraph offsets.
     TEMPLATE_SHA256 = "cc78d7bcc60e18b2799bc7ea3af1ebcea3aebdb5a1789b8d93da824147e1f0eb"

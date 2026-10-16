@@ -1025,6 +1025,7 @@ class BusinessAmendmentWorkflowTests(unittest.TestCase):
         self.assertEqual(original, case.to_dict())
         saved = workspace.build_case_summary()
         self.assertNotIn("change_shares_selected", saved.form_values)
+        self.assertEqual(4, saved.form_schema_version)
         self.assertEqual("4", saved.form_values["amendment_schema_version"])
         workspace.fields["change_capital_selected"].setChecked(False)
         self.window._open_case_workspace(workspace.build_case_summary())

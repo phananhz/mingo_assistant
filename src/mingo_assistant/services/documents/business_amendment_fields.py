@@ -4,6 +4,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 import re
 
+from mingo_assistant.domains.business_amendment.models import (
+    migrate_business_amendment_form_values,
+)
+
 
 @dataclass(frozen=True)
 class YellowSlot:
@@ -92,25 +96,9 @@ def line_row_count(values: dict[str, str], kind: str) -> int:
 
 
 def migrate_legacy_line_rows(values: dict[str, str]) -> dict[str, str]:
-    """Remove old pre-created empty rows while retaining every entered field."""
-    result = dict(values)
-    if values.get("amendment_schema_version") == "4":
-        return result
-    for kind in LINE_CAPACITIES:
-        prefix = f"amendment_line_{kind}_"
-        rows = {}
-        for key, value in values.items():
-            match = re.fullmatch(rf"{prefix}(\d+)_(name|detail|code|main|note)", key)
-            if match:
-                rows.setdefault(int(match.group(1)), {})[match.group(2)] = value
-        for key in list(result):
-            if key.startswith(prefix):
-                result.pop(key)
-        entered = [row for _, row in sorted(rows.items()) if any(str(value).strip() for value in row.values())]
-        for index, row in enumerate(entered, 1):
-            result.update({f"{prefix}{index}_{suffix}": value for suffix, value in row.items()})
-        result[prefix + "row_count"] = str(len(entered))
-    return result
+    """Compatibility facade for the domain-owned v4 migration."""
+
+    return migrate_business_amendment_form_values(values)
 
 
 LINE_LABELS = {"add": "Bổ sung", "remove": "Bỏ ngành nghề", "detail": "Sửa chi tiết"}

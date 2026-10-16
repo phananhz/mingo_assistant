@@ -15,11 +15,12 @@ from docx.enum.text import WD_COLOR_INDEX
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
-from mingo_assistant.services.documents.docx_generator import DocxTemplateGenerator, GeneratedDocument, GenerationResult
+from mingo_assistant.services.documents.docx_template_engine import DocxTemplateEngine
+from mingo_assistant.services.documents.generation_result import GeneratedDocument, GenerationResult
 from mingo_assistant.services.documents.template_manifest import TemplateManifest
 
 
-class DependentUnitTemplateGenerator(DocxTemplateGenerator):
+class DependentUnitTemplateGenerator(DocxTemplateEngine):
     """Change only highlighted runs explicitly declared in a procedure manifest."""
 
     FOREIGN_AUTHORIZATION_TEMPLATE = "2. Giay uy quyen dai dien phap luat nuoc ngoai.docx"
@@ -292,7 +293,7 @@ class DependentUnitTemplateGenerator(DocxTemplateGenerator):
         self._assert_notification_highlight_count(document, template_name)
         self._active_template_name = template_name
         try:
-            DocxTemplateGenerator._replace_highlighted_runs(self, document, template_name, highlighted_values)
+            DocxTemplateEngine._replace_highlighted_runs(self, document, template_name, highlighted_values)
         finally:
             self._active_template_name = ""
         if is_update_notification:
@@ -312,7 +313,7 @@ class DependentUnitTemplateGenerator(DocxTemplateGenerator):
                     break
         if not is_update_notification or self._business_lines(values):
             business_line_values = dict(values)
-            DocxTemplateGenerator._replace_business_lines_tables_v2(
+            DocxTemplateEngine._replace_business_lines_tables_v2(
                 self,
                 document,
                 business_line_values,

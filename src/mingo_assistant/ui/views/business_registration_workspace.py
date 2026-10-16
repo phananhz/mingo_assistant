@@ -43,8 +43,14 @@ from mingo_assistant.application.registration import RegistrationViewModel
 from mingo_assistant.application.people import PersonIdentityRules
 from mingo_assistant.domains.business_registration import VietnameseMoneyFormatter
 from mingo_assistant.models.case import CaseSummary
-from mingo_assistant.services.documents.docx_generator import DocxTemplateGenerator
-from mingo_assistant.services.documents.docx_generator import TwoMemberIndividualFile1DocxTemplateGenerator
+from mingo_assistant.models.form_values import (
+    REGISTRATION_DYNAMIC_KEY_PATTERNS,
+    merge_form_values,
+)
+from mingo_assistant.services.documents.business_registration_generator import DocxTemplateGenerator
+from mingo_assistant.services.documents.two_member_individual_generator import (
+    TwoMemberIndividualFile1DocxTemplateGenerator,
+)
 from mingo_assistant.services.documents.business_registration_variants import (
     TWO_MEMBER_INDIVIDUAL_CASE_TYPE,
     TWO_MEMBER_INDIVIDUAL_TEMPLATE_RELATIVE_DIR,
@@ -62,11 +68,9 @@ from mingo_assistant.ui.views.business_registration.components import (
 from mingo_assistant.ui.views.business_registration.export_worker import DocxExportWorker
 from mingo_assistant.ui.views.business_registration.schema import (
     ASSET_CONTRIBUTION_LABELS,
-    BUSINESS_LINE_FIELD_DEFINITIONS,
     CAPITAL_SOURCE_LABELS,
     FIELD_DEFINITIONS,
     FIELD_GROUPS,
-    HIDDEN_FIELD_DEFINITIONS,
     INDIVIDUAL_OWNER_FIELD_KEYS,
     MULTILINE_FIELDS,
     ORGANIZATION_OWNER_FIELD_KEYS,
@@ -97,6 +101,7 @@ def _is_organization_owner(value: object) -> bool:
 
 
 class BusinessRegistrationWorkspace(QWidget):
+    FORM_SCHEMA_VERSION = 1
     def __init__(
         self,
         on_back,
@@ -4074,6 +4079,11 @@ class BusinessRegistrationWorkspace(QWidget):
         )
         for key in inactive_owner_fields:
             values[key] = ""
+        values = merge_form_values(
+            self.case.form_values if self.case else {},
+            values,
+            replaced_key_patterns=REGISTRATION_DYNAMIC_KEY_PATTERNS,
+        )
         if apply_defaults:
             self._apply_value_defaults(values)
         self.registration_view_model.replace(values)
@@ -4173,6 +4183,7 @@ class BusinessRegistrationWorkspace(QWidget):
             exported_at=exported_at if exported_at is not None else (existing.exported_at if existing else ""),
             generated_documents=generated_documents if generated_documents is not None else (existing.generated_documents if existing else []),
             export_versions=export_versions if export_versions is not None else (existing.export_versions if existing else []),
+            form_schema_version=self.FORM_SCHEMA_VERSION,
             form_values=values,
         )
 

@@ -3,8 +3,9 @@ from __future__ import annotations
 import sys
 import unittest
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QCoreApplication, QEvent, Qt
 from PySide6.QtWidgets import QApplication, QLabel, QWidget
+import shiboken6
 
 from mingo_assistant.models.case import CaseSummary
 from mingo_assistant.ui.main_window import MainWindow
@@ -77,6 +78,35 @@ class NavigationVisibilityTest(unittest.TestCase):
 
             window.stack.setCurrentWidget(window.dependent_units_page)
             self.assertFalse(window.sidebar.isHidden())
+        finally:
+            window.close()
+            window.deleteLater()
+
+    def test_replacing_fullscreen_views_keeps_one_live_transient_widget(self) -> None:
+        window = MainWindow()
+        retired: list[QWidget] = []
+        try:
+            baseline = window.stack.count()
+            for _ in range(6):
+                workspace = QWidget()
+                current = window.current_workspace
+                if current is not None:
+                    retired.append(current)
+                window._show_transient_view("current_workspace", workspace)
+                self.assertEqual(baseline + 1, window.stack.count())
+                self.assertIs(workspace, window.current_workspace)
+                self.assertIsNone(window.current_documents_view)
+
+            retired.append(window.current_workspace)
+            documents = QWidget()
+            window._show_transient_view("current_documents_view", documents)
+            self.assertEqual(baseline + 1, window.stack.count())
+            self.assertIsNone(window.current_workspace)
+            self.assertIs(documents, window.current_documents_view)
+
+            self.app.processEvents()
+            QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+            self.assertTrue(all(not shiboken6.isValid(widget) for widget in retired))
         finally:
             window.close()
             window.deleteLater()

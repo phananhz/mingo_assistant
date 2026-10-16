@@ -9,12 +9,10 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QDialog,
-    QDialogButtonBox,
     QGroupBox,
     QFormLayout,
     QFrame,
     QGridLayout,
-    QHeaderView,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -54,9 +52,8 @@ from mingo_assistant.services.business_lines.industry_lookup import IndustryCata
 from mingo_assistant.services.documents.business_registration_variants import (
     TWO_MEMBER_INDIVIDUAL_VARIANT,
 )
-from mingo_assistant.ui.dialogs.settings_dialog import SettingsDialog, SettingsView
+from mingo_assistant.ui.dialogs.settings_dialog import SettingsView
 from mingo_assistant.ui.styles import (
-    EFFECT_SHADOW_OPTIONS,
     LAYOUT_OPTIONS,
     THEME_OPTIONS,
     apply_app_palette,
@@ -64,19 +61,23 @@ from mingo_assistant.ui.styles import (
     stylesheet_for_theme,
 )
 from mingo_assistant.ui.views.business_registration_documents import BusinessRegistrationDocumentsView
-from mingo_assistant.ui.views.business_registration_workspace import BusinessRegistrationWorkspace
 from mingo_assistant.ui.views.business_amendment_workspace import (
     BUSINESS_AMENDMENT_CASE_TYPE,
     BusinessAmendmentWorkspace,
 )
-from mingo_assistant.ui.views.location_business_workspace import LOCATION_CASE_TYPE, LocationBusinessWorkspace
+from mingo_assistant.ui.views.location_business_workspace import LocationBusinessWorkspace
 from mingo_assistant.ui.views.location_business_update_workspace import (
-    LOCATION_UPDATE_CASE_TYPE,
     LocationBusinessUpdateWorkspace,
 )
 from mingo_assistant.ui.views.location_business_termination_workspace import (
-    LOCATION_TERMINATION_CASE_TYPE,
     LocationBusinessTerminationWorkspace,
+)
+from mingo_assistant.ui.routing import (
+    DEFAULT_WORKSPACE_ROUTE,
+    WorkspaceRoute,
+    is_dependent_case_type,
+    route_for_case_type,
+    route_for_workspace_class,
 )
 from mingo_assistant.ui.widgets.combo_box import NoWheelComboBox
 
@@ -261,7 +262,7 @@ class MainWindow(QMainWindow):
         self._selected_case_for_detail: CaseSummary | None = None
         self._current_nav_key = "business_registration"
         self.stack = QStackedWidget()
-        self.current_workspace: BusinessRegistrationWorkspace | None = None
+        self.current_workspace: QWidget | None = None
         self.current_documents_view: BusinessRegistrationDocumentsView | None = None
         self.authorized_person_profiles: list[dict[str, str]] = []
         self.authorized_person_selected_id = ""
@@ -653,36 +654,57 @@ class MainWindow(QMainWindow):
                 button.style().unpolish(button)
                 button.style().polish(button)
 
-        if key == "business_registration":
-            if is_user_action and self.stack.currentWidget() == self.business_page:
-                self._open_business_creation_modal()
-            else:
-                self.stack.setCurrentWidget(self.business_page)
-        elif key == "business_amendment":
-            if is_user_action and self.stack.currentWidget() == self.business_amendment_page:
-                self._open_business_amendment_modal()
-            else:
-                self.stack.setCurrentWidget(self.business_amendment_page)
-        elif key == "dependent_units":
-            if is_user_action and self.stack.currentWidget() == self.dependent_units_page:
-                self._open_dependent_unit_modal()
-            else:
-                self.stack.setCurrentWidget(self.dependent_units_page)
-        elif key == "dissolution":
-            if is_user_action and self.stack.currentWidget() == self.dissolution_page:
-                self._open_dissolution_modal()
-            else:
-                self.stack.setCurrentWidget(self.dissolution_page)
-        elif key == "industry_lookup":
-            self._refresh_industry_lookup()
-            self.stack.setCurrentWidget(self.industry_lookup_page)
-        elif key == "trash":
-            self._refresh_trash()
-            self.stack.setCurrentWidget(self.trash_page)
-        elif key == "people":
+        if key == "people":
             self._open_authorized_person_manager()
-        else:
+            return
+
+        route = self._navigation_page_registry().get(key)
+        if route is None:
             self._show_coming_soon(key, "business_registration")
+            return
+        page, repeated_action, before_show = route
+        if is_user_action and self.stack.currentWidget() is page and repeated_action:
+            repeated_action()
+            return
+        if before_show:
+            before_show()
+        self.stack.setCurrentWidget(page)
+
+    def _navigation_page_registry(self):
+        """Map shell navigation keys without embedding workflow branches."""
+
+        return {
+            "business_registration": (
+                self.business_page,
+                self._open_business_creation_modal,
+                None,
+            ),
+            "business_amendment": (
+                self.business_amendment_page,
+                self._open_business_amendment_modal,
+                None,
+            ),
+            "dependent_units": (
+                self.dependent_units_page,
+                self._open_dependent_unit_modal,
+                None,
+            ),
+            "dissolution": (
+                self.dissolution_page,
+                self._open_dissolution_modal,
+                None,
+            ),
+            "industry_lookup": (
+                self.industry_lookup_page,
+                None,
+                self._refresh_industry_lookup,
+            ),
+            "trash": (
+                self.trash_page,
+                None,
+                self._refresh_trash,
+            ),
+        }
 
     def _build_business_registration_page(self) -> QWidget:
         page = QWidget()
@@ -2203,7 +2225,7 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _is_dependent_case(case: CaseSummary) -> bool:
-        return case.case_type in {LOCATION_CASE_TYPE, LOCATION_UPDATE_CASE_TYPE, LOCATION_TERMINATION_CASE_TYPE}
+        return is_dependent_case_type(case.case_type)
 
     def _refresh_dependent_cases(self) -> None:
         scroll_positions = self._capture_scroll_positions(self.dependent_cases_scroll)
@@ -2675,79 +2697,87 @@ class MainWindow(QMainWindow):
     def _open_new_business_case(self, *, template_variant: str = "") -> None:
         self._open_case_workspace(None, template_variant=template_variant)
 
-    def _open_case_workspace(self, case: CaseSummary | None, *, template_variant: str = "") -> None:
-        if case is not None:
-            case = self.case_use_cases.get(case.id) or case
-        if case is not None and case.case_type == BUSINESS_AMENDMENT_CASE_TYPE:
-            self._open_business_amendment_workspace(case)
-            return
-        if case is not None and case.case_type == LOCATION_CASE_TYPE:
-            self._open_location_business_workspace(case)
-            return
-        if case is not None and case.case_type == LOCATION_UPDATE_CASE_TYPE:
-            self._open_location_business_update_workspace(case)
-            return
-        if case is not None and case.case_type == LOCATION_TERMINATION_CASE_TYPE:
-            self._open_location_business_termination_workspace(case)
-            return
-        if self.current_workspace is not None:
-            self.stack.removeWidget(self.current_workspace)
-            self.current_workspace.deleteLater()
-            self.current_workspace = None
-        if self.current_documents_view is not None:
-            self.stack.removeWidget(self.current_documents_view)
-            self.current_documents_view.deleteLater()
-            self.current_documents_view = None
+    def _return_callback_for_route(self, route: WorkspaceRoute):
+        callbacks = {
+            "business_registration": self._return_to_business_list,
+            "business_amendment": self._return_to_amendment_list,
+            "dependent_units": self._return_to_dependent_units,
+        }
+        return callbacks[route.return_target]
 
-        self.current_workspace = BusinessRegistrationWorkspace(
-            on_back=self._return_to_business_list,
-            on_save=self._save_case_from_workspace,
-            case=case,
-            on_export=self._open_case_documents,
-            authorized_person_defaults=self._load_authorized_person(),
-            industry_catalog=self.industry_catalog,
-            bundle_root=self.app_paths.bundle_root,
-            default_export_root=self.app_paths.documents_root,
-            services=self.registration_services,
-            template_variant=template_variant,
-        )
-        self.stack.addWidget(self.current_workspace)
-        self.stack.setCurrentWidget(self.current_workspace)
+    def _clear_transient_views(self) -> None:
+        for attribute in ("current_workspace", "current_documents_view"):
+            widget = getattr(self, attribute, None)
+            if widget is None:
+                continue
+            self.stack.removeWidget(widget)
+            widget.deleteLater()
+            setattr(self, attribute, None)
+
+    def _show_transient_view(self, attribute: str, widget: QWidget) -> None:
+        self._clear_transient_views()
+        setattr(self, attribute, widget)
+        self.stack.addWidget(widget)
+        self.stack.setCurrentWidget(widget)
         if hasattr(self, "sidebar") and self.sidebar is not None:
             self.sidebar.setVisible(False)
         if hasattr(self, "slim_sidebar") and self.slim_sidebar is not None:
             self.slim_sidebar.setVisible(False)
+
+    def _open_registered_workspace(
+        self,
+        route: WorkspaceRoute,
+        case: CaseSummary | None,
+        *,
+        template_variant: str = "",
+        on_back=None,
+    ) -> None:
+        self._current_nav_key = route.nav_key
+        workspace_kwargs = {
+            "on_back": on_back or self._return_callback_for_route(route),
+            "on_save": self._save_case_from_workspace,
+            "case": case,
+            "on_export": self._open_case_documents,
+            "authorized_person_defaults": self._load_authorized_person(),
+            "industry_catalog": self.industry_catalog,
+            "bundle_root": self.app_paths.bundle_root,
+            "default_export_root": self.app_paths.documents_root,
+            "services": self.registration_services,
+        }
+        if route is DEFAULT_WORKSPACE_ROUTE:
+            workspace_kwargs["template_variant"] = template_variant
+        workspace = route.workspace_class(**workspace_kwargs)
+        self._show_transient_view("current_workspace", workspace)
+
+    def _open_case_workspace(self, case: CaseSummary | None, *, template_variant: str = "") -> None:
+        if case is not None:
+            case = self.case_use_cases.get(case.id) or case
+        route = (
+            route_for_case_type(case.case_type)
+            if case is not None
+            else DEFAULT_WORKSPACE_ROUTE
+        )
+        # Preserve the legacy behavior for case types not registered yet.
+        self._open_registered_workspace(
+            route or DEFAULT_WORKSPACE_ROUTE,
+            case,
+            template_variant=template_variant,
+        )
 
     def _open_location_business_workspace(
         self, case: CaseSummary | None, *, workspace_class=LocationBusinessWorkspace, on_back=None,
     ) -> None:
         if case is not None:
             case = self.case_use_cases.get(case.id) or case
-        if self.current_workspace is not None:
-            self.stack.removeWidget(self.current_workspace)
-            self.current_workspace.deleteLater()
-            self.current_workspace = None
-        if self.current_documents_view is not None:
-            self.stack.removeWidget(self.current_documents_view)
-            self.current_documents_view.deleteLater()
-            self.current_documents_view = None
-        self.current_workspace = workspace_class(
-            on_back=on_back or self._return_to_dependent_units,
-            on_save=self._save_case_from_workspace,
-            case=case,
-            on_export=self._open_case_documents,
-            authorized_person_defaults=self._load_authorized_person(),
-            industry_catalog=self.industry_catalog,
-            bundle_root=self.app_paths.bundle_root,
-            default_export_root=self.app_paths.documents_root,
-            services=self.registration_services,
+        route = route_for_workspace_class(workspace_class)
+        if route is None:
+            raise ValueError(f"Workspace chưa đăng ký route: {workspace_class.__name__}")
+        self._open_registered_workspace(
+            route,
+            case,
+            on_back=on_back,
         )
-        self.stack.addWidget(self.current_workspace)
-        self.stack.setCurrentWidget(self.current_workspace)
-        if hasattr(self, "sidebar") and self.sidebar is not None:
-            self.sidebar.setVisible(False)
-        if hasattr(self, "slim_sidebar") and self.slim_sidebar is not None:
-            self.slim_sidebar.setVisible(False)
+
     def _open_location_business_update_workspace(self, case: CaseSummary | None) -> None:
         self._open_location_business_workspace(case, workspace_class=LocationBusinessUpdateWorkspace)
 
@@ -2762,36 +2792,18 @@ class MainWindow(QMainWindow):
 
     def _open_case_documents(self, case: CaseSummary) -> None:
         case = self.case_use_cases.get(case.id) or case
-        if self.current_workspace is not None:
-            self.stack.removeWidget(self.current_workspace)
-            self.current_workspace.deleteLater()
-            self.current_workspace = None
-        if self.current_documents_view is not None:
-            self.stack.removeWidget(self.current_documents_view)
-            self.current_documents_view.deleteLater()
-            self.current_documents_view = None
-
-        on_back = self._return_to_business_list
-        if self._is_dependent_case(case):
-            on_back = self._return_to_dependent_units
-        elif case.case_type == BUSINESS_AMENDMENT_CASE_TYPE:
-            on_back = self._return_to_amendment_list
-        self.current_documents_view = BusinessRegistrationDocumentsView(
+        route = route_for_case_type(case.case_type) or DEFAULT_WORKSPACE_ROUTE
+        documents_view = BusinessRegistrationDocumentsView(
             case=case,
-            on_back=on_back,
+            on_back=self._return_callback_for_route(route),
             on_edit=lambda selected_id=case.id: self._open_case_workspace(self.case_use_cases.get(selected_id) or case),
             description=(
-                "File Word thay đổi ĐKDN được điền trong vùng vàng; các phần cố định của mẫu được giữ nguyên."
+                "File Word thay đổi ĐKDN được điền tại các vị trí mapping đã kiểm soát; các phần cố định của mẫu được giữ nguyên."
                 if case.case_type == BUSINESS_AMENDMENT_CASE_TYPE
                 else "Kiểm tra các file Word đã điền và mở nhanh phiên bản bạn cần."
             ),
         )
-        self.stack.addWidget(self.current_documents_view)
-        self.stack.setCurrentWidget(self.current_documents_view)
-        if hasattr(self, "sidebar") and self.sidebar is not None:
-            self.sidebar.setVisible(False)
-        if hasattr(self, "slim_sidebar") and self.slim_sidebar is not None:
-            self.slim_sidebar.setVisible(False)
+        self._show_transient_view("current_documents_view", documents_view)
 
     def _return_to_business_list(self) -> None:
         self.cases = self.case_use_cases.list_active()

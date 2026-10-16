@@ -56,6 +56,7 @@ class LocationBusinessWorkspaceTest(unittest.TestCase):
                 workspace.fields["parent_entity_name"].setText("Công ty TNHH Mingo")
                 case = workspace.build_case_summary()
                 self.assertEqual(LOCATION_CASE_TYPE, case.case_type)
+                self.assertEqual(1, case.form_schema_version)
                 self.assertEqual("Địa điểm kinh doanh A", case.company_name)
                 self.assertEqual("Không áp dụng", case.capital)
             finally:

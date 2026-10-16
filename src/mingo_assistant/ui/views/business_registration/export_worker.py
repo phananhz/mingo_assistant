@@ -6,7 +6,7 @@ from typing import Type
 
 from PySide6.QtCore import QObject, Signal
 
-from mingo_assistant.services.documents.docx_generator import DocxTemplateGenerator
+from mingo_assistant.services.documents.business_registration_generator import DocxTemplateGenerator
 
 
 class DocxExportWorker(QObject):

@@ -16,7 +16,7 @@ from mingo_assistant.services.documents.business_registration_variants import (
     TWO_MEMBER_INDIVIDUAL_FILE4,
     TWO_MEMBER_INDIVIDUAL_TEMPLATE_RELATIVE_DIR,
 )
-from mingo_assistant.services.documents.docx_generator import (
+from mingo_assistant.services.documents.two_member_individual_generator import (
     TwoMemberIndividualFile1DocxTemplateGenerator,
 )
 from mingo_assistant.ui.views.business_registration.schema import FIELD_GROUPS
@@ -174,6 +174,10 @@ class TwoMemberIndividualFile1Test(unittest.TestCase):
 
             member_list = Document(output_by_source[TWO_MEMBER_INDIVIDUAL_FILE3])
             self.assertEqual(5, len(member_list.tables[0].rows))
+            self.assertEqual(
+                [str(index) for index in range(1, 15)],
+                [cell.text.strip() for cell in member_list.tables[0].rows[2].cells],
+            )
             self.assertEqual("NGUY\u1ec4N V\u0102N M\u1eaaU", member_list.tables[0].rows[3].cells[1].text)
             self.assertEqual("TR\u1ea6N TH\u1eca B\u00ccNH", member_list.tables[0].rows[4].cells[1].text)
             self.assertEqual("", member_list.tables[0].rows[3].cells[5].text)

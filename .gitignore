@@ -29,9 +29,14 @@ _ui_test_*.png
 layout_baseline.png
 test_artifacts/
 tmp_docx_qa/
+tmp_*/
+mingo-signature-*/
 Templates04/
 *.docx~
 ~$*.docx
+~$*.doc
+release/
+assets/models/
 !data/app/.gitkeep
 !data/temp/.gitkeep
 !exports/.gitkeep

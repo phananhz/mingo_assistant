@@ -226,7 +226,7 @@ class ThemeSettingsTest(unittest.TestCase):
 
     def test_system_dark_with_app_light_mode(self) -> None:
         from PySide6.QtGui import QPalette
-        from mingo_assistant.ui.styles import apply_app_palette, get_app_palette
+        from mingo_assistant.ui.styles import get_app_palette
 
         # 1. Stylesheet when system is dark but app is set to light
         css = stylesheet_for_theme("rose", 100, "light", system_is_dark=True)

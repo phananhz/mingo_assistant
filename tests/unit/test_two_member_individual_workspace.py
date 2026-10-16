@@ -163,7 +163,10 @@ class TwoMemberIndividualWorkspaceTest(unittest.TestCase):
                     editing._set_field(f"asset_contribution_{index}_amount", "0")
                 editing._set_field("charter_capital_number", "2000000000")
                 editing._set_field("member_1_capital_amount", "280000000")
-                QTest.qWait(800)
+                for _ in range(30):
+                    if saved_cases:
+                        break
+                    QTest.qWait(100)
                 self.assertTrue(saved_cases)
                 saved_case = saved_cases[-1]
                 self.assertEqual("2.000.000.000", saved_case.form_values["charter_capital_number"])
@@ -211,6 +214,7 @@ class TwoMemberIndividualWorkspaceTest(unittest.TestCase):
                 "member_2_full_name": "BÙI VĂN THẮNG",
                 "member_2_capital_amount": "225.000.000",
                 "member_2_capital_ratio": "64,29%",
+                "custom_old_field": "KEEP OLD",
             },
         )
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -226,6 +230,9 @@ class TwoMemberIndividualWorkspaceTest(unittest.TestCase):
                 self.assertEqual("350.000.000", workspace._field_value("charter_capital_number"))
                 self.assertEqual("125.000.000", workspace._field_value("member_1_capital_amount"))
                 self.assertEqual("225.000.000", workspace._field_value("member_2_capital_amount"))
+                migrated = workspace.build_case_summary()
+                self.assertEqual(1, migrated.form_schema_version)
+                self.assertEqual("KEEP OLD", migrated.form_values["custom_old_field"])
             finally:
                 workspace.deleteLater()
     def test_legacy_workspace_has_no_member_list_tab(self) -> None:

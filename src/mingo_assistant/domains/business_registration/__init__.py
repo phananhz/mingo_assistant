@@ -7,6 +7,7 @@ from mingo_assistant.domains.business_registration.models import (
     OrganizationOwner,
     Person,
     RegistrationCase,
+    SigningContext,
 )
 from mingo_assistant.domains.business_registration.money import VietnameseMoneyFormatter
 from mingo_assistant.domains.business_registration.validation import (
@@ -23,6 +24,7 @@ __all__ = [
     "OrganizationOwner",
     "Person",
     "RegistrationCase",
+    "SigningContext",
     "RegistrationValidationResult",
     "RegistrationValidator",
     "VietnameseMoneyFormatter",

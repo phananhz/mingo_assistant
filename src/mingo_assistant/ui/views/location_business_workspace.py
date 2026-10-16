@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QTimer, Qt, QThread
+from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import (
     QComboBox,
     QGridLayout,
@@ -23,7 +23,6 @@ from PySide6.QtWidgets import (
 from mingo_assistant.models.case import CaseSummary
 from mingo_assistant.models.business_registration import OcrPerson
 from mingo_assistant.services.documents.dependent_unit_generator import DependentUnitTemplateGenerator
-from mingo_assistant.ui.views.business_registration.export_worker import DocxExportWorker
 from mingo_assistant.ui.views.business_registration_workspace import BusinessRegistrationWorkspace
 from mingo_assistant.ui.widgets.combo_box import NoWheelComboBox
 
@@ -796,5 +795,6 @@ class LocationBusinessWorkspace(BusinessRegistrationWorkspace):
             exported_at=exported_at if exported_at is not None else (existing.exported_at if existing else ""),
             generated_documents=generated_documents if generated_documents is not None else (existing.generated_documents if existing else []),
             export_versions=export_versions if export_versions is not None else (existing.export_versions if existing else []),
+            form_schema_version=self.FORM_SCHEMA_VERSION,
             form_values=values,
         )

@@ -5,7 +5,7 @@ from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.shared import Pt
 
-from mingo_assistant.services.documents.docx_generator import DocxTemplateGenerator
+from mingo_assistant.services.documents.business_registration_generator import DocxTemplateGenerator
 from mingo_assistant.services.normalization.address_parser import AddressParser
 from mingo_assistant.repositories.authorized_person_repository import AuthorizedPersonProfileRepository
 from mingo_assistant.ui.main_window import MainWindow

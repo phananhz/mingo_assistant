@@ -2,8 +2,7 @@ import sys
 import unittest
 from unittest.mock import MagicMock, patch
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QDialog
+from PySide6.QtWidgets import QApplication
 
 from mingo_assistant.ui.dialogs.business_amendment_modal import (
     AMENDMENT_PROCEDURES,

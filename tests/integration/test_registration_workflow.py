@@ -10,7 +10,7 @@ from mingo_assistant.application.registration import RegistrationViewModel
 from mingo_assistant.domains.business_registration import RegistrationValidator
 from mingo_assistant.models.case import CaseSummary
 from mingo_assistant.repositories.case_repository import CaseRepository
-from mingo_assistant.services.documents.docx_generator import DocxTemplateGenerator
+from mingo_assistant.services.documents.business_registration_generator import DocxTemplateGenerator
 from mingo_assistant.services.normalization.administrative_place_matcher import AdministrativePlaceMatcher
 from mingo_assistant.services.ocr.id_card_parser import IdCardParser
 

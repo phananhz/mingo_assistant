@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -135,6 +136,7 @@ class TerminationWorkspaceTests(unittest.TestCase):
                 workspace.deleteLater()
 
     def test_pdf_scan_populates_form_without_assigning_legal_representative(self) -> None:
+        expected_today = datetime.now()
         workspace = LocationBusinessTerminationWorkspace(on_back=lambda: None, on_save=lambda _: None)
         try:
             values = LocationCertificateService()._parse_certificate(RAPID_OCR_TEXT)
@@ -150,13 +152,14 @@ class TerminationWorkspaceTests(unittest.TestCase):
             self.assertEqual("00001", summary.form_values["location_business_code"])
             self.assertEqual("organization", workspace.ocr_people[0].recognition_type)
             self.assertEqual("", workspace._field_value("business_registration_office"))
-            self.assertEqual("27", workspace._field_value("document_day"))
-            self.assertEqual("09", workspace._field_value("document_month"))
-            self.assertEqual("2026", workspace._field_value("document_year"))
+            self.assertEqual(expected_today.strftime("%d"), workspace._field_value("document_day"))
+            self.assertEqual(expected_today.strftime("%m"), workspace._field_value("document_month"))
+            self.assertEqual(expected_today.strftime("%Y"), workspace._field_value("document_year"))
             workspace._set_field("business_registration_office", "Phòng Đăng ký kinh doanh Thành phố Hồ Chí Minh")
             self.assertEqual("Thành phố Hồ Chí Minh", workspace._field_value("document_place"))
             self.assertEqual(
-                "Thành phố Hồ Chí Minh, ngày 27 tháng 09 năm 2026",
+                "Thành phố Hồ Chí Minh, "
+                f"ngày {expected_today:%d} tháng {expected_today:%m} năm {expected_today:%Y}",
                 workspace._field_value("document_place_date"),
             )
             reopened = LocationBusinessTerminationWorkspace(

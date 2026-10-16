@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from PySide6.QtCore import QEasingCurve, QEvent, QObject, QPropertyAnimation
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QGraphicsDropShadowEffect, QPushButton, QWidget
+from PySide6.QtWidgets import QGraphicsDropShadowEffect, QWidget
 
 if TYPE_CHECKING:
     pass
