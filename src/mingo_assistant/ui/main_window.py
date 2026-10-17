@@ -2934,6 +2934,8 @@ class MainWindow(QMainWindow):
         }
         if route is DEFAULT_WORKSPACE_ROUTE:
             workspace_kwargs["template_variant"] = template_variant
+        if route.workspace_class is BusinessAmendmentWorkspace:
+            workspace_kwargs["legacy_industry_catalog"] = self.legacy_industry_catalog
         workspace = route.workspace_class(**workspace_kwargs)
         self._show_transient_view("current_workspace", workspace)
 

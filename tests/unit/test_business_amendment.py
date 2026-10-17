@@ -928,6 +928,25 @@ class BusinessAmendmentWorkflowTests(unittest.TestCase):
         self.assertEqual(selected.name.strip(), restored.fields["amendment_line_add_1_name"].text())
         self.assertEqual("Chi tiết: nội dung kiểm thử\nDòng tiếp theo", restored.fields["amendment_line_add_1_detail"].toPlainText())
 
+    def test_only_remove_industry_uses_legacy_catalog(self):
+        self.window._open_business_amendment_modal()
+        workspace = self.window.current_workspace
+
+        workspace._open_amendment_industry_lookup("add")
+        self.assertIs(workspace._industry_lookup_catalog(), self.window.industry_catalog)
+        self.assertIn("36/2025/QĐ-TTg", workspace.industry_lookup_source.text())
+
+        workspace._open_amendment_industry_lookup("remove")
+        self.assertIs(workspace._industry_lookup_catalog(), self.window.legacy_industry_catalog)
+        self.assertEqual(464, workspace.industry_results_table.rowCount())
+        self.assertIn("27/2018/QĐ-TTg", workspace.industry_lookup_source.text())
+        self.assertIn("ngành cũ", workspace.industry_search_input.placeholderText())
+
+        workspace._open_amendment_industry_lookup("detail")
+        self.assertIs(workspace._industry_lookup_catalog(), self.window.industry_catalog)
+        self.assertEqual(495, workspace.industry_results_table.rowCount())
+        self.assertIn("36/2025/QĐ-TTg", workspace.industry_lookup_source.text())
+
     def test_industry_picker_mouse_selection_adds_to_visible_tab(self):
         self.window._open_business_amendment_modal()
         workspace = self.window.current_workspace

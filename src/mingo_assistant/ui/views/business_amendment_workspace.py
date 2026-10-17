@@ -24,6 +24,7 @@ from mingo_assistant.services.documents.business_amendment_fields import (
 )
 from mingo_assistant.services.documents.business_amendment_generator import BusinessAmendmentTemplateGenerator
 from mingo_assistant.services.organization_documents.business_amendment_document_service import BusinessAmendmentDocumentService
+from mingo_assistant.services.business_lines.legacy_industry_lookup import load_legacy_industry_catalog
 from mingo_assistant.ui.views.location_business_update_workspace import LocationBusinessUpdateWorkspace
 from mingo_assistant.ui.views.amendment_industry_table import AmendmentIndustryTable
 from mingo_assistant.ui.views.business_amendment_capital_section import AmendmentCapitalSection
@@ -49,6 +50,7 @@ class BusinessAmendmentWorkspace(LocationBusinessUpdateWorkspace):
     FORM_SCHEMA_VERSION = int(AmendmentFormState.SCHEMA_VERSION)
 
     def __init__(self, *args, **kwargs):
+        legacy_industry_catalog = kwargs.pop("legacy_industry_catalog", None)
         case = kwargs.get("case") or (args[2] if len(args) > 2 else None)
         self._legacy_values = (
             migrate_business_amendment_form_values(
@@ -67,6 +69,7 @@ class BusinessAmendmentWorkspace(LocationBusinessUpdateWorkspace):
         self.organization_controller = AmendmentOrganizationController(self)
         self.tax_section = AmendmentTaxSection(self)
         super().__init__(*args, **kwargs)
+        self.legacy_industry_catalog = legacy_industry_catalog or load_legacy_industry_catalog(self.bundle_root)
         self.organization_document_service = BusinessAmendmentDocumentService(self.address_parser, self.bundle_root)
 
     def _build_header(self) -> QHBoxLayout:
@@ -477,11 +480,39 @@ class BusinessAmendmentWorkspace(LocationBusinessUpdateWorkspace):
     def _open_amendment_industry_lookup(self, kind):
         self.amendment_industry_target.setCurrentIndex(self.amendment_industry_target.findData(kind))
         destination = self.amendment_industry_target.currentText()
-        self.amendment_industry_dialog.setWindowTitle("Tra cứu ngành nghề — " + destination)
+        uses_legacy_catalog = kind == "remove"
+        self.amendment_industry_dialog.setWindowTitle(
+            ("Tra cứu ngành nghề kinh doanh cũ — " if uses_legacy_catalog else "Tra cứu ngành nghề — ")
+            + destination
+        )
+        self.industry_lookup_source.setText(
+            (
+                '<a href="https://vanban.chinhphu.vn/?docid=194154&pageid=27160">'
+                "Nguồn chính thức: Quyết định 27/2018/QĐ-TTg - Cổng Thông tin điện tử Chính phủ</a>"
+            )
+            if uses_legacy_catalog
+            else (
+                '<a href="https://vanban.chinhphu.vn/?classid=1&docid=215475&pageid=27160">'
+                "Nguồn chính thức: Quyết định 36/2025/QĐ-TTg - Cổng Thông tin điện tử Chính phủ</a>"
+            )
+        )
+        self.industry_search_input.setPlaceholderText(
+            "Nhập mã ngành cấp 4 hoặc tên ngành cũ để tìm kiếm..."
+            if uses_legacy_catalog
+            else "Nhập mã ngành, tên ngành hoặc từ khóa hoạt động"
+        )
+        self._refresh_industry_results()
         self.amendment_industry_destination.setText("Ngành đã chọn sẽ được thêm vào: " + destination)
         self.amendment_industry_add_button.setText("Thêm vào bảng: " + destination)
         self.amendment_industry_dialog.open()
         self.industry_search_input.setFocus()
+
+    def _industry_lookup_catalog(self):
+        """VSIC 2018 is permitted only for the remove-industry amendment table."""
+        target = getattr(self, "amendment_industry_target", None)
+        if target is not None and target.currentData() == "remove":
+            return self.legacy_industry_catalog
+        return self.industry_catalog
 
     def _selected_industry_row(self):
         # Keep the current row when focus moves from the results to the add button.

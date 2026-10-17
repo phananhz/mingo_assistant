@@ -2026,6 +2026,7 @@ class BusinessRegistrationWorkspace(QWidget):
         source.setObjectName("IndustryLookupSource")
         source.setOpenExternalLinks(False)
         source.linkActivated.connect(lambda url: QDesktopServices.openUrl(QUrl(url)))
+        self.industry_lookup_source = source
         layout.addWidget(source)
 
         search_row = QHBoxLayout()
@@ -2064,13 +2065,15 @@ class BusinessRegistrationWorkspace(QWidget):
         return panel
 
     def _refresh_industry_results(self) -> None:
-        if not self.industry_catalog.is_available:
+        catalog = self._industry_lookup_catalog()
+        if not catalog.is_available:
             self.industry_results_table.setRowCount(0)
-            self.industry_detail.setPlainText("Chưa có dữ liệu ngành nghề trong assets/business_lines/vsic_2025.json.")
+            source_name = catalog.source_path.name if catalog.source_path else "danh mục ngành nghề"
+            self.industry_detail.setPlainText(f"Chưa có dữ liệu ngành nghề trong {source_name}.")
             return
 
         query = self.industry_search_input.text().strip()
-        rows = self.industry_catalog.filter_rows(query)
+        rows = catalog.filter_rows(query)
         rows = self._rank_industry_rows(rows, query)
         self.industry_results_table.setRowCount(len(rows))
         for row_index, row in enumerate(rows):
@@ -2088,15 +2091,20 @@ class BusinessRegistrationWorkspace(QWidget):
         else:
             self.industry_detail.setPlainText("Không tìm thấy ngành phù hợp.")
 
+    def _industry_lookup_catalog(self) -> IndustryCatalog:
+        """Return the catalog used by the currently visible lookup workflow."""
+        return self.industry_catalog
+
     def _rank_industry_rows(self, rows: list[IndustryRow], query: str) -> list[IndustryRow]:
-        folded_query = self.industry_catalog._fold(query)
+        catalog = self._industry_lookup_catalog()
+        folded_query = catalog._fold(query)
         if not folded_query:
             return rows
 
         def score(row: IndustryRow) -> tuple[int, int, str]:
             code = self._industry_row_code(row)
-            folded_name = self.industry_catalog._fold(row.name)
-            folded_detail = self.industry_catalog._fold(row.detail)
+            folded_name = catalog._fold(row.name)
+            folded_detail = catalog._fold(row.detail)
             if code == query:
                 rank = 0
             elif code.startswith(query):
