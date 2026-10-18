@@ -9,6 +9,9 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QDialog,
+    QGraphicsBlurEffect,
+    QGraphicsPixmapItem,
+    QGraphicsScene,
     QGroupBox,
     QFormLayout,
     QFrame,
@@ -45,6 +48,7 @@ from mingo_assistant.app.paths import AppPaths, get_app_paths, load_settings, sa
 from mingo_assistant.application.business_registration import BusinessRegistrationServices
 from mingo_assistant.application.cases import CaseUseCases
 from mingo_assistant.application.profiles import AuthorizedPersonUseCases
+from mingo_assistant.core.text_normalization import uppercase_authorized_person_name
 from mingo_assistant.models.case import CaseSummary
 from mingo_assistant.repositories.authorized_person_repository import AuthorizedPersonProfileRepository
 from mingo_assistant.repositories.case_repository import CaseRepository
@@ -68,6 +72,9 @@ from mingo_assistant.ui.views.business_amendment_workspace import (
     BUSINESS_AMENDMENT_CASE_TYPE,
     BusinessAmendmentWorkspace,
 )
+from mingo_assistant.ui.views.household_business_workspace import (
+    HOUSEHOLD_BUSINESS_CASE_TYPE,
+)
 from mingo_assistant.ui.views.location_business_workspace import LocationBusinessWorkspace
 from mingo_assistant.ui.views.location_business_update_workspace import (
     LocationBusinessUpdateWorkspace,
@@ -90,6 +97,7 @@ NAV_ITEMS = [
     ("business_amendment", "2. Thủ tục thay đổi ĐKDN"),
     ("dissolution", "3. Thủ tục giải thể DN"),
     ("dependent_units", "4. Thủ tục của đơn vị phụ thuộc"),
+    ("household_business", "5. Thủ tục thành lập hộ kinh doanh"),
     ("industry_lookup", "Tra cứu NNKD"),
     ("legacy_industry_lookup", "Tra cứu NNKD Cũ"),
     ("trash", "Thùng rác"),
@@ -104,6 +112,8 @@ class TechImageSidebar(QFrame):
     In 'liquid_glass' layout mode, it uses the purple abstract wallpaper
     (image/1788859280719_...jpg).
     """
+
+    BACKGROUND_BLUR_RADIUS = 18.0
 
     def __init__(self, parent: QWidget | None = None, layout_mode: str = "liquid_glass") -> None:
         super().__init__(parent)
@@ -122,6 +132,28 @@ class TechImageSidebar(QFrame):
 
     def _update_styled_bg(self) -> None:
         self.setAttribute(Qt.WA_StyledBackground, self._layout_mode != "liquid_glass")
+
+    @classmethod
+    def _blur_background(cls, pixmap: QPixmap) -> QPixmap:
+        """Apply a real Qt blur while keeping the wallpaper at source resolution."""
+        scene = QGraphicsScene()
+        item = QGraphicsPixmapItem(pixmap)
+        effect = QGraphicsBlurEffect()
+        effect.setBlurRadius(cls.BACKGROUND_BLUR_RADIUS)
+        effect.setBlurHints(QGraphicsBlurEffect.QualityHint)
+        item.setGraphicsEffect(effect)
+        scene.addItem(item)
+
+        blurred = QPixmap(pixmap.size())
+        blurred.fill(Qt.transparent)
+        painter = QPainter(blurred)
+        scene.render(
+            painter,
+            QRectF(blurred.rect()),
+            QRectF(pixmap.rect()),
+        )
+        painter.end()
+        return blurred
 
     def _load_backgrounds(self) -> None:
         bundle = None
@@ -145,7 +177,7 @@ class TechImageSidebar(QFrame):
             if p.exists():
                 pix = QPixmap(str(p))
                 if not pix.isNull():
-                    self._liquid_glass_pixmap = pix
+                    self._liquid_glass_pixmap = self._blur_background(pix)
                     break
 
         # 2. Cyber tech circuit wallpaper
@@ -197,12 +229,13 @@ class TechImageSidebar(QFrame):
         # 2. Draw scaled background image
         if pix is not None and not pix.isNull():
             if self._layout_mode == "liquid_glass":
-                # Position the crystal sphere elegantly in the lower-middle region (near Thung rac)
-                # while preserving a clean, deep twilight gradient for the top navigation items.
-                scaled_h = int(self.height() * 0.88)
-                scaled = pix.scaledToHeight(scaled_h, Qt.SmoothTransformation)
-                x = (self.width() - scaled.width()) // 2 - int(scaled.width() * 0.08)
-                y = int(self.height() * 0.32)
+                scaled = pix.scaled(
+                    self.size(),
+                    Qt.KeepAspectRatioByExpanding,
+                    Qt.SmoothTransformation,
+                )
+                x = (self.width() - scaled.width()) // 2
+                y = (self.height() - scaled.height()) // 2
             else:
                 scaled = pix.scaled(
                     self.size(),
@@ -306,6 +339,11 @@ class MainWindow(QMainWindow):
         self.dependent_cases_layout: QGridLayout | None = None
         self.current_dependent_card_columns = 0
         self.dependent_cases_count_label: QLabel | None = None
+        self.household_cases_scroll: QScrollArea | None = None
+        self.household_cases_container: QWidget | None = None
+        self.household_cases_layout: QGridLayout | None = None
+        self.current_household_card_columns = 0
+        self.household_cases_count_label: QLabel | None = None
         self.amendment_cases_scroll: QScrollArea | None = None
         self.amendment_cases_layout: QGridLayout | None = None
         self.current_amendment_card_columns = 0
@@ -410,6 +448,7 @@ class MainWindow(QMainWindow):
             "business_registration": "Thành lập DN",
             "business_amendment": "Thay đổi ĐKDN",
             "dependent_units": "Đơn vị trực thuộc",
+            "household_business": "Hộ kinh doanh",
             "dissolution": "Giải thể DN",
             "industry_lookup": "Tra mã ngành",
             "legacy_industry_lookup": "Tra mã ngành cũ",
@@ -467,6 +506,7 @@ class MainWindow(QMainWindow):
             "business_registration": "🏢",
             "business_amendment": "📝",
             "dependent_units": "🏛️",
+            "household_business": "🏠",
             "dissolution": "⚠️",
             "industry_lookup": "🔍",
             "legacy_industry_lookup": "⌛",
@@ -564,11 +604,14 @@ class MainWindow(QMainWindow):
             button_text = label
             if key == "dependent_units":
                 button_text = "4. Thủ tục của\nđơn vị phụ thuộc"
+            elif key == "household_business":
+                button_text = "5. Thủ tục thành lập\nhộ kinh doanh"
             button = QPushButton(button_text)
             button.setToolTip(label)
-            if key == "dependent_units":
+            if key in {"dependent_units", "household_business"}:
                 button.setMinimumHeight(58)
             button.setObjectName("NavButton")
+            button.setStyleSheet("font-weight: 700;")
             button.setCursor(Qt.PointingHandCursor)
             button.clicked.connect(lambda checked=False, item_key=key: self._select_nav(item_key, is_user_action=True))
             self.nav_buttons[key] = button
@@ -578,7 +621,7 @@ class MainWindow(QMainWindow):
 
         footer = QLabel("Dữ liệu lưu cục bộ trên máy")
         footer.setObjectName("SidebarFooter")
-        footer.setStyleSheet("font-size: 12px;")
+        footer.setStyleSheet("font-size: 12px; font-weight: 700;")
         layout.addWidget(footer)
 
         return sidebar
@@ -602,6 +645,12 @@ class MainWindow(QMainWindow):
             desc_text="Quản lý và soạn thảo hồ sơ thành lập, thay đổi, chấm dứt hoạt động cho chi nhánh, văn phòng đại diện và địa điểm kinh doanh.",
             on_create_clicked=self._open_dependent_unit_modal,
         )
+        self.household_business_page = self._build_category_hub_page(
+            nav_key="household_business",
+            title_text="Thành lập hộ kinh doanh",
+            desc_text="Quản lý hồ sơ, quét QR CCCD và lưu dữ liệu đăng ký hộ kinh doanh. Chức năng xuất hồ sơ Word chưa được mở.",
+            on_create_clicked=self._open_household_business_workspace,
+        )
         self.dissolution_page = self._build_category_hub_page(
             nav_key="dissolution",
             title_text="Thủ tục giải thể DN",
@@ -618,6 +667,7 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.business_page)
         self.stack.addWidget(self.business_amendment_page)
         self.stack.addWidget(self.dependent_units_page)
+        self.stack.addWidget(self.household_business_page)
         self.stack.addWidget(self.dissolution_page)
         self.stack.addWidget(self.authorized_person_page)
         self.stack.addWidget(self.industry_lookup_page)
@@ -703,6 +753,11 @@ class MainWindow(QMainWindow):
             "dependent_units": (
                 self.dependent_units_page,
                 self._open_dependent_unit_modal,
+                None,
+            ),
+            "household_business": (
+                self.household_business_page,
+                self._open_household_business_workspace,
                 None,
             ),
             "dissolution": (
@@ -1752,12 +1807,16 @@ class MainWindow(QMainWindow):
 
     def _refresh_cases(self) -> None:
         scroll_positions = self._capture_scroll_positions(
-            self.cards_scroll, self.dependent_cases_scroll, self.amendment_cases_scroll,
+            self.cards_scroll,
+            self.dependent_cases_scroll,
+            self.household_cases_scroll,
+            self.amendment_cases_scroll,
         )
         filtered_cases = self._filtered_cases()
         self.result_text.setText(f"{len(filtered_cases)} hồ sơ được tìm thấy")
         self._clear_cards()
         self._refresh_dependent_cases()
+        self._refresh_household_cases()
         self._refresh_amendment_cases()
 
         columns = self._card_column_count()
@@ -1800,6 +1859,13 @@ class MainWindow(QMainWindow):
         ):
             if self._card_column_count() != self.current_amendment_card_columns:
                 self._refresh_amendment_cases()
+        elif (
+            hasattr(self, "household_business_page")
+            and self.stack.currentWidget() == self.household_business_page
+            and self.household_cases_layout is not None
+        ):
+            if self._card_column_count() != self.current_household_card_columns:
+                self._refresh_household_cases()
     def _card_column_count(self) -> int:
         available_width = max(1, self._content_width())
         max_cols = 5 if getattr(self, "current_layout", "default") in ("top_nav", "slim_sidebar") else 4
@@ -1821,7 +1887,7 @@ class MainWindow(QMainWindow):
 
     def _authorized_person_name(self, case: CaseSummary) -> str:
         name = str(case.form_values.get("authorized_person_full_name", "") or "").strip()
-        return name or case.owner or "Chưa chọn"
+        return uppercase_authorized_person_name(name or case.owner) or "Chưa chọn"
 
     def _display_company_name(self, company_name: str) -> str:
         text = " ".join(str(company_name or "").split())
@@ -1882,7 +1948,11 @@ class MainWindow(QMainWindow):
 
         result = []
         for case in self.cases:
-            if self._is_dependent_case(case) or case.case_type == BUSINESS_AMENDMENT_CASE_TYPE:
+            if (
+                self._is_dependent_case(case)
+                or case.case_type == BUSINESS_AMENDMENT_CASE_TYPE
+                or case.case_type == HOUSEHOLD_BUSINESS_CASE_TYPE
+            ):
                 continue
             haystack = f"{case.company_name} {self._authorized_person_name(case)} {case.case_type} {case.status}".lower()
             if search_text and search_text not in haystack:
@@ -2245,7 +2315,6 @@ class MainWindow(QMainWindow):
         if nav_key == "dependent_units":
             layout.addWidget(self._build_dependent_cases_section(), 1)
             return page
-
         cards_container = QWidget()
         cards_layout = QHBoxLayout(cards_container)
         cards_layout.setContentsMargins(0, 20, 0, 0)
@@ -2273,7 +2342,11 @@ class MainWindow(QMainWindow):
         c_desc = QLabel(
             "Bấm để mở màn hình tạo hồ sơ thay đổi đăng ký doanh nghiệp."
             if nav_key == "business_amendment"
-            else f"Bấm để mở popup chọn thủ tục cho {title_text.lower()}."
+            else (
+                "Bấm để mở màn hình nhập hồ sơ thành lập hộ kinh doanh."
+                if nav_key == "household_business"
+                else f"Bấm để mở popup chọn thủ tục cho {title_text.lower()}."
+            )
         )
         c_desc.setObjectName("CreateDescription")
         c_desc.setWordWrap(True)
@@ -2314,7 +2387,11 @@ class MainWindow(QMainWindow):
 
         i_layout.addStretch(1)
 
-        launch_btn = QPushButton("Tạo hồ sơ →" if nav_key == "business_amendment" else "Khám phá thủ tục →")
+        launch_btn = QPushButton(
+            "Tạo hồ sơ →"
+            if nav_key in {"business_amendment", "household_business"}
+            else "Khám phá thủ tục →"
+        )
         launch_btn.setObjectName("GhostButton")
         launch_btn.setCursor(Qt.PointingHandCursor)
         launch_btn.clicked.connect(on_create_clicked)
@@ -2327,6 +2404,9 @@ class MainWindow(QMainWindow):
         if nav_key == "business_amendment":
             self.amendment_intro = cards_container
             layout.addWidget(self._build_amendment_cases_section(), 1)
+        elif nav_key == "household_business":
+            self.household_intro = cards_container
+            layout.addWidget(self._build_household_cases_section(), 1)
         return page
 
     def _build_amendment_cases_section(self) -> QWidget:
@@ -2448,6 +2528,75 @@ class MainWindow(QMainWindow):
             layout.setColumnStretch(column, 1 if column < columns else 0)
         self._restore_scroll_positions_later(scroll_positions)
 
+    def _build_household_cases_section(self) -> QWidget:
+        group = QGroupBox("Hồ sơ thành lập hộ kinh doanh đã lưu")
+        self.household_cases_group = group
+        group.setObjectName("HouseholdCasesPanel")
+        group.setMinimumHeight(420)
+        group_layout = QVBoxLayout(group)
+        group_layout.setContentsMargins(18, 16, 18, 18)
+        group_layout.setSpacing(12)
+
+        section_header = QHBoxLayout()
+        section_header.setSpacing(12)
+        section_hint = QLabel(
+            "Các hồ sơ hộ kinh doanh đã lưu. Chọn Mở để xem hồ sơ hoặc Sửa để tiếp tục nhập dữ liệu."
+        )
+        section_hint.setObjectName("PageDescription")
+        section_hint.setWordWrap(True)
+        self.household_cases_count_label = QLabel()
+        self.household_cases_count_label.setObjectName("StatusBadge")
+        self.household_cases_count_label.setAlignment(Qt.AlignCenter)
+        section_header.addWidget(section_hint, 1)
+        section_header.addWidget(self.household_cases_count_label, 0, Qt.AlignRight)
+        group_layout.addLayout(section_header)
+
+        self.household_cases_scroll = QScrollArea()
+        self.household_cases_scroll.setObjectName("HouseholdCasesScroll")
+        self.household_cases_scroll.setWidgetResizable(True)
+        self.household_cases_scroll.setFrameShape(QFrame.NoFrame)
+        self.household_cases_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.household_cases_container = QWidget()
+        self.household_cases_layout = QGridLayout(self.household_cases_container)
+        self.household_cases_layout.setContentsMargins(0, 0, 0, 0)
+        self.household_cases_layout.setHorizontalSpacing(16)
+        self.household_cases_layout.setVerticalSpacing(16)
+        self.household_cases_scroll.setWidget(self.household_cases_container)
+        group_layout.addWidget(self.household_cases_scroll, 1)
+        self._refresh_household_cases()
+        return group
+
+    def _refresh_household_cases(self) -> None:
+        layout = self.household_cases_layout
+        if layout is None:
+            return
+        scroll_positions = self._capture_scroll_positions(self.household_cases_scroll)
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.hide()
+                widget.setParent(None)
+                widget.deleteLater()
+
+        cases = [case for case in self.cases if case.case_type == HOUSEHOLD_BUSINESS_CASE_TYPE]
+        if self.household_cases_count_label is not None:
+            self.household_cases_count_label.setText(f"{len(cases)} hồ sơ")
+        self.household_cases_group.setVisible(bool(cases))
+        self.household_intro.setVisible(not cases)
+        if not cases:
+            self.current_household_card_columns = 0
+            self._restore_scroll_positions_later(scroll_positions)
+            return
+
+        columns = self._card_column_count()
+        self.current_household_card_columns = columns
+        for index, case in enumerate(cases):
+            layout.addWidget(self._build_case_card(case), index // columns, index % columns)
+        for column in range(5):
+            layout.setColumnStretch(column, 1 if column < columns else 0)
+        self._restore_scroll_positions_later(scroll_positions)
+
     @staticmethod
     def _capture_scroll_positions(*scrolls: QScrollArea | None) -> dict[int, tuple[object, int, int]]:
         positions: dict[int, tuple[object, int, int]] = {}
@@ -2503,16 +2652,19 @@ class MainWindow(QMainWindow):
                 template_variant = ""
                 if str(chosen["case_type"]).startswith("TNHH hai") and "(C" in str(chosen["case_type"]):
                     template_variant = TWO_MEMBER_INDIVIDUAL_VARIANT
-                if not template_variant:
-                    self._open_new_business_case()
-                    return
-                self._open_new_business_case(template_variant=template_variant)
+                self._open_new_business_case(
+                    case_type=str(chosen["case_type"]),
+                    template_variant=template_variant,
+                )
             else:
                 self._show_coming_soon(str(chosen["case_type"]), "business_registration")
 
     def _open_business_amendment_modal(self) -> None:
         # Retain this entry point for existing navigation actions.
         self._open_business_amendment_workspace(None)
+
+    def _open_household_business_workspace(self) -> None:
+        self._open_new_business_case(case_type=HOUSEHOLD_BUSINESS_CASE_TYPE)
 
     def _open_dependent_unit_modal(self) -> None:
         from mingo_assistant.ui.dialogs.dependent_unit_modal import DependentUnitModal
@@ -2658,6 +2810,12 @@ class MainWindow(QMainWindow):
                 field.setFixedHeight(84)
             else:
                 field = QLineEdit()
+                if key == "authorized_person_full_name":
+                    field.textChanged.connect(
+                        lambda text, selected_field=field: self._uppercase_authorized_person_editor_field(
+                            selected_field, text
+                        )
+                    )
             self.authorized_person_fields[key] = field
             form.addRow(label_text, field)
         form_layout.addLayout(form)
@@ -2679,6 +2837,15 @@ class MainWindow(QMainWindow):
         scroll.setWidget(container)
         layout.addWidget(scroll, 1)
         return page
+
+    @staticmethod
+    def _uppercase_authorized_person_editor_field(field: QLineEdit, text: str) -> None:
+        uppercase = uppercase_authorized_person_name(text)
+        if text == uppercase:
+            return
+        cursor_position = field.cursorPosition()
+        field.setText(uppercase)
+        field.setCursorPosition(min(cursor_position, len(uppercase)))
 
     def _open_authorized_person_manager(self) -> None:
         self._reload_authorized_person_manager()
@@ -2709,6 +2876,9 @@ class MainWindow(QMainWindow):
         profile = {"id": self.authorized_person_selected_id or str(uuid4())}
         for key, field in self.authorized_person_fields.items():
             profile[key] = field.toPlainText().strip() if isinstance(field, QTextEdit) else field.text().strip()
+        profile["authorized_person_full_name"] = uppercase_authorized_person_name(
+            profile.get("authorized_person_full_name", "")
+        )
         return profile
 
     def _new_authorized_person_profile(self) -> None:
@@ -2882,7 +3052,12 @@ class MainWindow(QMainWindow):
         values.setdefault("id", str(uuid4()))
         self._save_authorized_person_profiles({"selected_profile_id": values["id"], "profiles": [values]})
 
-    def _open_new_business_case(self, *, template_variant: str = "") -> None:
+    def _open_new_business_case(self, *, case_type: str = "", template_variant: str = "") -> None:
+        if case_type:
+            route = route_for_case_type(case_type)
+            if route is not None:
+                self._open_registered_workspace(route, None, template_variant=template_variant)
+                return
         self._open_case_workspace(None, template_variant=template_variant)
 
     def _return_callback_for_route(self, route: WorkspaceRoute):
@@ -2890,6 +3065,7 @@ class MainWindow(QMainWindow):
             "business_registration": self._return_to_business_list,
             "business_amendment": self._return_to_amendment_list,
             "dependent_units": self._return_to_dependent_units,
+            "household_business": self._return_to_household_business,
         }
         return callbacks[route.return_target]
 
@@ -3005,6 +3181,12 @@ class MainWindow(QMainWindow):
         self.cases = self.case_use_cases.list_active()
         self._refresh_cases()
         self.stack.setCurrentWidget(self.dependent_units_page)
+        self._apply_layout_structure(self.current_layout)
+
+    def _return_to_household_business(self) -> None:
+        self.cases = self.case_use_cases.list_active()
+        self._refresh_cases()
+        self._select_nav("household_business")
         self._apply_layout_structure(self.current_layout)
 
     def _return_to_amendment_list(self) -> None:

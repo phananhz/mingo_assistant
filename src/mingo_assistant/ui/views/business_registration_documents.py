@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from mingo_assistant.application.form_migrations import REGISTRATION_CASE_TYPES
+from mingo_assistant.core.text_normalization import uppercase_authorized_person_name
 from mingo_assistant.models.case import CaseSummary
 
 
@@ -151,7 +152,7 @@ class BusinessRegistrationDocumentsView(QWidget):
 
     def _authorized_person_name(self) -> str:
         name = str(self.case.form_values.get("authorized_person_full_name", "") or "").strip()
-        return name or self.case.owner or "Chưa chọn"
+        return uppercase_authorized_person_name(name or self.case.owner) or "Chưa chọn"
 
     def _build_documents_v2(self) -> QWidget:
         wrapper = QFrame()

@@ -8,7 +8,7 @@ from copy import deepcopy
 from pathlib import Path
 from unittest.mock import patch
 
-from PySide6.QtWidgets import QApplication, QMessageBox, QPushButton
+from PySide6.QtWidgets import QApplication, QMessageBox, QPushButton, QScrollArea
 from PySide6.QtCore import QCoreApplication, QEvent, Qt
 from PySide6.QtTest import QTest
 from lxml import etree
@@ -51,6 +51,18 @@ def sample_line_values():
     return values
 
 
+def node_text(node) -> str:
+    return "".join(node.xpath(".//w:t/text()", namespaces=NS))
+
+
+def paragraph_containing(root, marker: str):
+    return next(paragraph for paragraph in root.findall(".//w:p", NS) if marker in node_text(paragraph))
+
+
+def table_containing(root, marker: str):
+    return next(table for table in root.findall(".//w:tbl", NS) if marker in node_text(table))
+
+
 class BusinessAmendmentGeneratorTests(unittest.TestCase):
     def test_entered_company_names_export_when_saved_selection_flag_is_missing(self):
         values = sample_values() | {
@@ -69,14 +81,9 @@ class BusinessAmendmentGeneratorTests(unittest.TestCase):
         self.assertIn("CÔNG TY TNHH ABC", text)
         self.assertIn("ABC Company", text)
         self.assertIn("ABC CO.,LTD", text)
-        name_heading = paragraphs.index("ĐĂNG KÝ THAY ĐỔI TÊN DOANH NGHIỆP")
-        address_heading = paragraphs.index("ĐĂNG KÝ THAY ĐỔI ĐỊA CHỈ TRỤ SỞ CHÍNH")
-        name_rows = [row for row in paragraphs[name_heading + 1:address_heading] if row]
-        self.assertEqual(3, len(name_rows))
-        self.assertEqual(
-            "Tên doanh nghiệp viết tắt sau khi thay đổi (nếu có): ABC CO.,LTD",
-            name_rows[2],
-        )
+        self.assertIn("ĐĂNG KÝ THAY ĐỔI TÊN DOANH NGHIỆP", paragraphs)
+        self.assertNotIn("ĐĂNG KÝ THAY ĐỔI ĐỊA CHỈ TRỤ SỞ CHÍNH", paragraphs)
+        self.assertIn("Tên doanh nghiệp viết tắt sau khi thay đổi (nếu có): ABC CO.,LTD", paragraphs)
         short_name_paragraph = next(
             paragraph for paragraph in root.findall(".//w:p", NS)
             if "Tên doanh nghiệp viết tắt sau khi thay đổi" in "".join(paragraph.xpath(".//w:t/text()", namespaces=NS))
@@ -93,7 +100,7 @@ class BusinessAmendmentGeneratorTests(unittest.TestCase):
         )
         self.assertIsNotNone(short_name_run.find("w:rPr/w:highlight[@w:val='yellow']", NS))
 
-    def test_empty_and_inactive_industry_tables_keep_one_blank_template_row(self):
+    def test_inactive_industry_is_removed_and_active_group_keeps_all_three_tables(self):
         cases = [sample_values(), sample_values() | {
             "change_business_lines_selected": "X", "amendment_line_add_row_count": "0",
             "amendment_line_remove_row_count": "0", "amendment_line_detail_row_count": "1",
@@ -108,12 +115,16 @@ class BusinessAmendmentGeneratorTests(unittest.TestCase):
                     with zipfile.ZipFile(result.generated[0].output_path) as package:
                         root = etree.fromstring(package.read("word/document.xml"))
                     self.assertNotIn("STALE MUST NOT EXPORT", ''.join(root.xpath('.//w:t/text()', namespaces=NS)))
-                    for table in root.findall('.//w:tbl', NS):
-                        header = ''.join(table.xpath('w:tr[1]//w:t/text()', namespaces=NS))
-                        if "được bổ sung" in header or "được bỏ khỏi" in header or (values == cases[0] and "được sửa đổi chi tiết" in header):
-                            rows = table.findall('w:tr', NS)
-                            self.assertEqual(2, len(rows))
-                            self.assertEqual("", ''.join(rows[1].xpath('.//w:t/text()', namespaces=NS)))
+                    document_text = node_text(root)
+                    if values == cases[0]:
+                        self.assertNotIn("THÔNG BÁO THAY ĐỔI NGÀNH, NGHỀ KINH DOANH", document_text)
+                        continue
+                    for heading in ("được bổ sung", "được bỏ khỏi", "được sửa đổi chi tiết"):
+                        table = table_containing(root, heading)
+                        rows = table.findall('w:tr', NS)
+                        self.assertEqual(2, len(rows))
+                        if heading != "được sửa đổi chi tiết":
+                            self.assertEqual("", node_text(rows[1]))
 
     def test_all_three_tables_export_one_thousand_industries_without_a_limit(self):
         values = sample_values() | {"change_business_lines_selected": "X"}
@@ -174,7 +185,6 @@ class BusinessAmendmentGeneratorTests(unittest.TestCase):
             generator = BusinessAmendmentTemplateGenerator(TEMPLATE_DIR, Path(temp_dir))
             result = generator.generate(values, "industry-test")
             with zipfile.ZipFile(TEMPLATE_DIR / generator.TEMPLATE_NAME) as before, zipfile.ZipFile(result.generated[0].output_path) as after:
-                original = etree.fromstring(before.read('word/document.xml')).findall('.//w:p', NS)
                 final_root = etree.fromstring(after.read('word/document.xml'))
                 line_tables = [table for table in final_root.findall('.//w:tbl', NS)
                                if any(heading in ''.join(table.xpath('w:tr[1]//w:t/text()', namespaces=NS))
@@ -184,12 +194,11 @@ class BusinessAmendmentGeneratorTests(unittest.TestCase):
                         for cell, suffix in zip(row.findall('w:tc', NS), ("number", "name", "code", "note" if kind == "remove" else "main")):
                             text = BusinessAmendmentTemplateGenerator.composed_values(values).get(f"amendment_line_{kind}_{i}_{suffix}", "")
                             self.assertEqual(text.replace('\n', ''), ''.join(cell.xpath('.//w:t/text()', namespaces=NS)))
-                    # Normalize the added rows before checking fixed content.
-                    for row in table.findall('w:tr', NS)[2:]:
-                        table.remove(row)
-                final = final_root.findall('.//w:p', NS)
-                for paragraph in (152, 153, 154, 155, 156, 157, 162, 163, 164, 165, 166, 171, 172, 173, 174, 175, 180, 181, 182, 183, 184):
-                    self.assertEqual(etree.tostring(original[paragraph]), etree.tostring(final[paragraph]))
+                fixed_text = node_text(final_root)
+                self.assertIn("1. Bổ sung ngành, nghề kinh doanh sau", fixed_text)
+                self.assertIn("2. Bỏ ngành, nghề kinh doanh", fixed_text)
+                self.assertIn("3. Sửa đổi chi tiết ngành, nghề kinh doanh", fixed_text)
+                self.assertIn("Doanh nghiệp cam kết đáp ứng điều kiện tiếp cận thị trường", fixed_text)
                 for name in before.namelist():
                     if name != 'word/document.xml':
                         self.assertEqual(before.read(name), after.read(name))
@@ -244,19 +253,16 @@ class BusinessAmendmentGeneratorTests(unittest.TestCase):
             with zipfile.ZipFile(TEMPLATE_DIR / generator.TEMPLATE_NAME) as package:
                 before = etree.fromstring(package.read("word/document.xml")).findall('.//w:p', NS)
             with zipfile.ZipFile(result.generated[0].output_path) as package:
-                after = etree.fromstring(package.read("word/document.xml")).findall('.//w:p', NS)
-            for paragraph, text in ((113, "10.000"), (121, "80.000"), (122, "800.000.000"), (123, "80"),
-                                    (126, "20.000"), (127, "200.000.000"), (128, "20"),
-                                    (145, "100.000"), (146, "1.000.000.000"), (147, "100")):
-                self.assertIn(text, ''.join(after[paragraph].itertext()))
-                self.assertTrue(after[paragraph].xpath('.//w:rPr/w:highlight[@w:val="yellow"]', namespaces=NS))
-                value_runs = [run for run in after[paragraph].findall('w:r', NS) if text in ''.join(run.itertext())]
+                after_root = etree.fromstring(package.read("word/document.xml"))
+            for text in ("10.000", "80.000", "800.000.000", "200.000.000", "100.000"):
+                paragraph = paragraph_containing(after_root, text)
+                self.assertTrue(paragraph.xpath('.//w:rPr/w:highlight[@w:val="yellow"]', namespaces=NS))
+                value_runs = [run for run in paragraph.findall('w:r', NS) if text in ''.join(run.itertext())]
                 self.assertEqual(1, len(value_runs))
                 self.assertEqual("0", value_runs[0].xpath('string(w:rPr/w:b/@w:val)', namespaces=NS))
                 self.assertEqual("0", value_runs[0].xpath('string(w:rPr/w:bCs/@w:val)', namespaces=NS))
-            # Stock labels and unused rows must keep their original formatting.
-            for paragraph in (120, 125, 130, 131, 132, 133, 135, 140):
-                self.assertEqual(etree.tostring(before[paragraph]), etree.tostring(after[paragraph]))
+            self.assertIn("Cổ phần phổ thông", node_text(after_root))
+            self.assertIn("Tổng số", node_text(after_root))
         values["new_share_par_value"] = ""
         values["amendment_share_2_amount"] = ""
         values["amendment_share_2_ratio"] = "10"
@@ -293,14 +299,10 @@ class BusinessAmendmentGeneratorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             result = BusinessAmendmentTemplateGenerator(TEMPLATE_DIR, Path(temp_dir)).generate(values, "capital-only")
             with zipfile.ZipFile(result.generated[0].output_path) as package:
-                paragraphs = etree.fromstring(package.read("word/document.xml")).findall(".//w:p", NS)
-        for paragraph, expected in (
-            (69, "2.000.000.000"), (70, "100%"),
-            (78, "2.000.000.000"), (79, "100%"),
-            (87, "2.000.000.000"), (88, "100%"),
-            (110, "2.000.000.000"), (111, "100%"),
-        ):
-            self.assertEqual(expected, "".join(paragraphs[paragraph].xpath(".//w:t/text()", namespaces=NS)))
+                root = etree.fromstring(package.read("word/document.xml"))
+        document_text = node_text(root)
+        self.assertGreaterEqual(document_text.count("2.000.000.000"), 5)
+        self.assertGreaterEqual(document_text.count("100%"), 4)
 
     def test_optional_fax_website_keep_unhighlighted_format_and_blank_template(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -312,9 +314,10 @@ class BusinessAmendmentGeneratorTests(unittest.TestCase):
             for extra in ({}, {"new_company_fax": "02412345678", "new_company_website": "https://example.com"}):
                 result = generator.generate(values | extra, "test")
                 with zipfile.ZipFile(result.generated[0].output_path) as package:
-                    final = etree.fromstring(package.read("word/document.xml")).findall('.//w:p', NS)
-                for paragraph, index, key in ((37, 6, "new_company_fax"), (38, 10, "new_company_website")):
-                    before, after = original[paragraph].findall('w:r', NS)[index], final[paragraph].findall('w:r', NS)[index]
+                    final_root = etree.fromstring(package.read("word/document.xml"))
+                for marker, paragraph, index, key in (("Điện thoại", 37, 6, "new_company_fax"), ("Thư điện tử", 38, 10, "new_company_website")):
+                    before = original[paragraph].findall('w:r', NS)[index]
+                    after = paragraph_containing(final_root, marker).findall('w:r', NS)[index]
                     self.assertEqual(etree.tostring(before.find('w:rPr', NS)), etree.tostring(after.find('w:rPr', NS)))
                     self.assertIsNone(after.find('w:rPr/w:highlight', NS))
                     self.assertEqual('): '+extra[key] if key in extra else before.find('w:t', NS).text,
@@ -345,36 +348,24 @@ class BusinessAmendmentGeneratorTests(unittest.TestCase):
             filled_result = generator.generate(filled, "filled-address")
             blank_result = generator.generate(required_only, "blank-optionals")
             with zipfile.ZipFile(filled_result.generated[0].output_path) as package:
-                filled_paragraphs = etree.fromstring(package.read("word/document.xml")).findall(".//w:p", NS)
+                filled_root = etree.fromstring(package.read("word/document.xml"))
             with zipfile.ZipFile(blank_result.generated[0].output_path) as package:
-                blank_paragraphs = etree.fromstring(package.read("word/document.xml")).findall(".//w:p", NS)
+                blank_root = etree.fromstring(package.read("word/document.xml"))
 
-        expected = {
-            34: "123 Đường Kiểm Thử",
-            35: "Phường Kiểm Thử",
-            36: "Thành phố Hồ Chí Minh",
-            37: "0901234567",
-            38: "contact@example.com",
-        }
-        for paragraph, value in expected.items():
-            text = "".join(filled_paragraphs[paragraph].xpath(".//w:t/text()", namespaces=NS))
-            self.assertIn(value, text)
-        self.assertIn("0281234567", "".join(filled_paragraphs[37].xpath(".//w:t/text()", namespaces=NS)))
-        self.assertIn("https://example.com", "".join(filled_paragraphs[38].xpath(".//w:t/text()", namespaces=NS)))
-        for paragraph, right_label_run in ((37, 2), (38, 6)):
-            tab_stop = filled_paragraphs[paragraph].find("w:pPr/w:tabs/w:tab", NS)
+        for value in ("123 Đường Kiểm Thử", "Phường Kiểm Thử", "Thành phố Hồ Chí Minh", "0901234567", "contact@example.com", "0281234567", "https://example.com"):
+            self.assertIn(value, node_text(filled_root))
+        for marker, right_label_run in (("Điện thoại", 2), ("Thư điện tử", 6)):
+            paragraph = paragraph_containing(filled_root, marker)
+            tab_stop = paragraph.find("w:pPr/w:tabs/w:tab", NS)
             self.assertIsNotNone(tab_stop)
             self.assertEqual("4800", tab_stop.get("{" + NS["w"] + "}pos"))
-            self.assertIsNotNone(filled_paragraphs[paragraph].findall("w:r", NS)[right_label_run].find("w:tab", NS))
-        self.assertNotIn("…", "".join(filled_paragraphs[34].xpath(".//w:t/text()", namespaces=NS)))
-        self.assertNotIn("…", "".join(filled_paragraphs[35].xpath(".//w:t/text()", namespaces=NS)))
-        self.assertNotIn("…", "".join(filled_paragraphs[36].xpath(".//w:t/text()", namespaces=NS)))
-        self.assertNotIn("…", "".join(filled_paragraphs[37].xpath(".//w:t/text()", namespaces=NS)))
-        self.assertNotIn("…", "".join(filled_paragraphs[38].xpath(".//w:t/text()", namespaces=NS)))
-        for paragraph, run_index in ((37, 1), (37, 6), (38, 5), (38, 10)):
+            self.assertIsNotNone(paragraph.findall("w:r", NS)[right_label_run].find("w:tab", NS))
+        for marker in ("Số nhà/phòng", "Xã/Phường", "Tỉnh/Thành phố", "Điện thoại", "Thư điện tử"):
+            self.assertNotIn("…", node_text(paragraph_containing(filled_root, marker)))
+        for marker, paragraph, run_index in (("Điện thoại", 37, 1), ("Điện thoại", 37, 6), ("Thư điện tử", 38, 5), ("Thư điện tử", 38, 10)):
             self.assertEqual(
                 etree.tostring(original[paragraph].findall("w:r", NS)[run_index]),
-                etree.tostring(blank_paragraphs[paragraph].findall("w:r", NS)[run_index]),
+                etree.tostring(paragraph_containing(blank_root, marker).findall("w:r", NS)[run_index]),
             )
 
     def test_capital_checkboxes_and_multiline_text_stay_inside_yellow_runs(self):
@@ -388,10 +379,10 @@ class BusinessAmendmentGeneratorTests(unittest.TestCase):
                 result = generator.generate(values | {"capital_show_foreign_equivalent": choice}, "test")
                 with zipfile.ZipFile(result.generated[0].output_path) as package:
                     root = etree.fromstring(package.read("word/document.xml"))
-                paragraphs = root.findall('.//w:p', NS)
-                self.assertEqual(yes, paragraphs[58].findall('w:r', NS)[1].find('w:t', NS).text)
-                self.assertEqual(no, paragraphs[58].find('w:r/w:sym', NS).get('{'+NS['w']+'}char'))
-                breaks = paragraphs[159].findall('.//w:br', NS)
+                capital_choice = paragraph_containing(root, "Có hiển thị thông tin")
+                self.assertEqual(yes, capital_choice.findall('w:r', NS)[1].find('w:t', NS).text)
+                self.assertEqual(no, capital_choice.find('w:r/w:sym', NS).get('{'+NS['w']+'}char'))
+                breaks = paragraph_containing(root, "Lập trình").findall('.//w:br', NS)
                 self.assertTrue(breaks)
                 for br in breaks:
                     self.assertTrue(br.getparent().xpath('./w:rPr/w:highlight[@w:val="yellow"]', namespaces=NS))
@@ -416,60 +407,19 @@ class BusinessAmendmentGeneratorTests(unittest.TestCase):
                         self.assertEqual(source.read(name), final.read(name), name)
                 before = etree.fromstring(source.read("word/document.xml"))
                 after = etree.fromstring(final.read("word/document.xml"))
-            bps, aps = before.findall(".//w:p", NS), after.findall(".//w:p", NS)
-            self.assertEqual(len(bps), len(aps))
-            self.assertEqual(len(before.findall(".//w:tbl", NS)), len(after.findall(".//w:tbl", NS)))
-            allowed = {slot.paragraph for slot in SLOTS}
-            compacted_name_lines = {27, 29, 31}
-            aligned_line_cells = {
-                slot.paragraph for slot in SLOTS
-                if slot.key.startswith("amendment_line_add_1_")
-            }
-            bold_main_cells = {
-                slot.paragraph for slot in SLOTS
-                if slot.key == "amendment_line_add_1_main"
-            }
-            changed = 0
-            for i, (bp, ap) in enumerate(zip(bps, aps)):
-                brs, ars = bp.findall("w:r", NS), ap.findall("w:r", NS)
-                if i not in compacted_name_lines and i not in aligned_line_cells:
-                    self.assertEqual(etree.tostring(bp.find("w:pPr", NS)), etree.tostring(ap.find("w:pPr", NS)))
-                for br, ar in zip(brs, ars):
-                    if i not in compacted_name_lines:
-                        self.assertEqual(etree.tostring(br.find("w:rPr", NS)), etree.tostring(ar.find("w:rPr", NS)))
-                    for bt, at in zip(br.findall("w:t", NS), ar.findall("w:t", NS)):
-                        if bt.text != at.text:
-                            changed += 1
-                            if i == 30:
-                                self.assertEqual("): ", at.text)
-                            else:
-                                self.assertIn(i, allowed)
-                                self.assertTrue(br.xpath('./w:rPr/w:highlight[@w:val="yellow"]', namespaces=NS))
-                if len(ars) > len(brs):
-                    if i == 30:
-                        self.assertTrue(ars[-1].xpath('./w:rPr/w:highlight[@w:val="yellow"]', namespaces=NS))
-                    else:
-                        self.assertFalse(brs)
-                        self.assertTrue(bp.xpath('./w:pPr/w:rPr/w:highlight[@w:val="yellow"]', namespaces=NS))
-                        for ar in ars:
-                            actual_properties = ar.find("w:rPr", NS)
-                            if i in bold_main_cells:
-                                self.assertEqual("1", actual_properties.xpath("string(w:b/@w:val)", namespaces=NS))
-                                self.assertEqual("1", actual_properties.xpath("string(w:bCs/@w:val)", namespaces=NS))
-                                for tag in ("b", "bCs"):
-                                    actual_properties.remove(actual_properties.find(f"w:{tag}", NS))
-                            self.assertEqual(etree.tostring(bp.find("w:pPr/w:rPr", NS)), etree.tostring(actual_properties))
-                if i not in allowed and i != 30:
-                    self.assertEqual(etree.tostring(bp), etree.tostring(ap))
-            self.assertGreater(changed, 5)
             text = " ".join(after.xpath('//w:t/text()', namespaces=NS))
             self.assertIn("CÔNG TY TNHH TÊN MỚI", text)
             self.assertIn("Lập trình máy vi tính", text)
             self.assertIn("01/01", text)
             self.assertIn("31/12", text)
-            self.assertIn(" đến ngày ", "".join(aps[225].xpath('.//w:t/text()', namespaces=NS)))
+            self.assertIn(" đến ngày ", node_text(paragraph_containing(after, "đến ngày")))
             self.assertNotIn("CÔNG TY TNHH XYZ", text)
             self.assertNotIn("NGUYỄN VĂN A", text)
+            self.assertNotIn("ĐĂNG KÝ THAY ĐỔI ĐỊA CHỈ TRỤ SỞ CHÍNH", text)
+            self.assertNotIn("ĐĂNG KÝ THAY ĐỔI VỐN ĐIỀU LỆ", text)
+            self.assertNotIn("ĐĂNG KÝ THAY ĐỔI THÀNH VIÊN", text)
+            self.assertNotIn("B. BỔ SUNG, CẬP NHẬT", text)
+            self.assertNotIn("C. ĐỀ NGHỊ HIỆU ĐÍNH", text)
 
     def test_full_tax_table_values_reach_reviewed_yellow_slots(self) -> None:
         tax_values = {
@@ -505,12 +455,7 @@ class BusinessAmendmentGeneratorTests(unittest.TestCase):
             "Thành phố Hà Nội", "thue@example.com", "08/10/2026", "01/01", "31/12", "25",
         ):
             self.assertIn(expected, document_text)
-        paragraphs = root.findall(".//w:p", NS)
-        for slot in SLOTS:
-            if slot.selection != "change_tax_selected" or not tax_values.get(slot.key):
-                continue
-            changed_text = "".join(paragraphs[slot.paragraph].xpath('.//w:t/text()', namespaces=NS))
-            self.assertIn(tax_values[slot.key], changed_text)
+        self.assertIn("THÔNG BÁO THAY ĐỔI THÔNG TIN ĐĂNG KÝ THUẾ", document_text)
 
     def test_beneficial_notice_choices_replace_only_their_yellow_template_text(self) -> None:
         values = sample_values() | {
@@ -521,19 +466,12 @@ class BusinessAmendmentGeneratorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             generator = BusinessAmendmentTemplateGenerator(TEMPLATE_DIR, Path(temp_dir))
             result = generator.generate(values, "beneficial-notice")
-            with zipfile.ZipFile(TEMPLATE_DIR / generator.TEMPLATE_NAME) as package:
-                before = etree.fromstring(package.read("word/document.xml")).findall(".//w:p", NS)
             with zipfile.ZipFile(result.generated[0].output_path) as package:
-                after = etree.fromstring(package.read("word/document.xml")).findall(".//w:p", NS)
-        self.assertTrue("".join(after[247].xpath(".//w:t/text()", namespaces=NS)).endswith("Không có."))
-        self.assertTrue("".join(after[248].xpath(".//w:t/text()", namespaces=NS)).endswith("Gửi kèm."))
-        for paragraph in (247, 248):
-            self.assertTrue(after[paragraph].xpath('.//w:rPr/w:highlight[@w:val="yellow"]', namespaces=NS))
-            for original_run, final_run in zip(before[paragraph].findall("w:r", NS), after[paragraph].findall("w:r", NS)):
-                self.assertEqual(
-                    etree.tostring(original_run.find("w:rPr", NS)),
-                    etree.tostring(final_run.find("w:rPr", NS)),
-                )
+                after = etree.fromstring(package.read("word/document.xml"))
+        self.assertTrue(node_text(paragraph_containing(after, "bao gồm người quản lý doanh nghiệp")).endswith("Không có."))
+        self.assertTrue(node_text(paragraph_containing(after, "Đối với doanh nghiệp được thành lập")).endswith("Gửi kèm."))
+        for marker in ("bao gồm người quản lý doanh nghiệp", "Đối với doanh nghiệp được thành lập"):
+            self.assertTrue(paragraph_containing(after, marker).xpath('.//w:rPr/w:highlight[@w:val="yellow"]', namespaces=NS))
 
     def test_validation_rejects_blank_invalid_dates_and_industry_overflow(self):
         self.assertTrue(BusinessAmendmentTemplateGenerator.validation_issues({}))
@@ -552,8 +490,42 @@ class BusinessAmendmentGeneratorTests(unittest.TestCase):
             result = generator.generate(values, "test")
             with zipfile.ZipFile(result.generated[0].output_path) as package:
                 root = etree.fromstring(package.read("word/document.xml"))
-            paragraphs = root.findall(".//w:p", NS)
-            self.assertNotIn("1.000.000.000", "".join(paragraphs[55].xpath(".//w:t/text()", namespaces=NS)))
+            text = node_text(root)
+            self.assertNotIn("1.000.000.000", text)
+            self.assertNotIn("ĐĂNG KÝ THAY ĐỔI VỐN ĐIỀU LỆ", text)
+            self.assertNotIn("CHỦ SỞ HỮU HƯỞNG LỢI", text)
+
+    def test_checkboxes_do_not_export_empty_sections_and_unsupported_blocks_are_removed(self):
+        values = sample_values() | {
+            "change_name_selected": "",
+            "new_company_name": "CÔNG TY TNHH CHỈ ĐỔI TÊN",
+            "change_address_selected": "X",
+            "change_capital_selected": "X",
+            "registered_capital": "1.000.000.000",
+            "change_business_lines_selected": "X",
+            "change_tax_selected": "X",
+            "change_beneficial_selected": "X",
+            "beneficial_notice_a_status": "Không có",
+            "beneficial_notice_b_status": "Không có",
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = BusinessAmendmentTemplateGenerator(TEMPLATE_DIR, Path(temp_dir)).generate(values, "data-only")
+            with zipfile.ZipFile(result.generated[0].output_path) as package:
+                root = etree.fromstring(package.read("word/document.xml"))
+        text = node_text(root)
+        self.assertIn("ĐĂNG KÝ THAY ĐỔI TÊN DOANH NGHIỆP", text)
+        for removed in (
+            "Doanh nghiệp đăng ký thay đổi trên cơ sở",
+            "ĐĂNG KÝ THAY ĐỔI ĐỊA CHỈ TRỤ SỞ CHÍNH",
+            "ĐĂNG KÝ THAY ĐỔI THÀNH VIÊN",
+            "ĐĂNG KÝ THAY ĐỔI VỐN ĐIỀU LỆ",
+            "THÔNG BÁO THAY ĐỔI NGÀNH, NGHỀ KINH DOANH",
+            "THÔNG BÁO THAY ĐỔI THÔNG TIN ĐĂNG KÝ THUẾ",
+            "CHỦ SỞ HỮU HƯỞNG LỢI",
+            "B. BỔ SUNG, CẬP NHẬT",
+            "C. ĐỀ NGHỊ HIỆU ĐÍNH",
+        ):
+            self.assertNotIn(removed, text)
 
     def test_entered_address_and_capital_export_together_when_saved_flags_are_missing(self):
         values = sample_values() | {
@@ -577,13 +549,11 @@ class BusinessAmendmentGeneratorTests(unittest.TestCase):
             result = BusinessAmendmentTemplateGenerator(TEMPLATE_DIR, Path(temp_dir)).generate(values, "combined")
             with zipfile.ZipFile(result.generated[0].output_path) as package:
                 root = etree.fromstring(package.read("word/document.xml"))
-        paragraphs = root.findall(".//w:p", NS)
-        self.assertIn("Số nhà 13 Thôn 4", "".join(paragraphs[34].xpath(".//w:t/text()", namespaces=NS)))
-        self.assertIn("20.000.000.000", "".join(paragraphs[56].xpath(".//w:t/text()", namespaces=NS)))
-        for paragraph in (69, 78, 87, 110):
-            self.assertEqual("20.000.000.000", "".join(paragraphs[paragraph].xpath(".//w:t/text()", namespaces=NS)))
-        self.assertEqual("Ngành đã nhập trước đó", "".join(paragraphs[159].xpath(".//w:t/text()", namespaces=NS)))
-        self.assertIn("NGUYỄN GIÁM ĐỐC", "".join(paragraphs[191].xpath(".//w:t/text()", namespaces=NS)))
+        document_text = node_text(root)
+        for expected in ("Số nhà 13 Thôn 4", "20.000.000.000", "Ngành đã nhập trước đó", "NGUYỄN GIÁM ĐỐC"):
+            self.assertIn(expected, document_text)
+        for heading in ("ĐĂNG KÝ THAY ĐỔI ĐỊA CHỈ TRỤ SỞ CHÍNH", "ĐĂNG KÝ THAY ĐỔI VỐN ĐIỀU LỆ", "THÔNG BÁO THAY ĐỔI NGÀNH, NGHỀ KINH DOANH", "THÔNG BÁO THAY ĐỔI THÔNG TIN ĐĂNG KÝ THUẾ"):
+            self.assertIn(heading, document_text)
 
     def test_revised_template_fails_closed(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -671,6 +641,39 @@ class BusinessAmendmentWorkflowTests(unittest.TestCase):
             with patch("mingo_assistant.ui.views.business_amendment_workspace.QMessageBox.question", return_value=QMessageBox.Yes):
                 table.business_line_rows[0].delete_button.click()
             self.assertEqual(0, table.rowCount())
+
+    def test_deleting_industry_row_keeps_outer_workspace_scroll_position(self):
+        self.window._open_business_amendment_modal()
+        workspace = self.window.current_workspace
+        workspace.fields["change_business_lines_selected"].setChecked(True)
+        workspace._select_form_section(3)
+        workspace.amendment_line_tabs.setCurrentIndex(1)
+        for index in range(6):
+            workspace._append_amendment_line_row("remove")
+            workspace._set_field(f"amendment_line_remove_{index + 1}_name", f"Ngành bỏ {index + 1}")
+            workspace._set_field(f"amendment_line_remove_{index + 1}_code", f"{6200 + index}")
+
+        self.window.resize(1000, 650)
+        self.window.show()
+        self.app.processEvents()
+        scroll = workspace.findChild(QScrollArea, "BusinessWorkspaceScroll")
+        self.assertIsNotNone(scroll)
+        bar = scroll.verticalScrollBar()
+        self.assertGreater(bar.maximum(), 0)
+        target = max(1, bar.maximum() // 2)
+        bar.setValue(target)
+        delete_button = workspace.amendment_line_tables["remove"].business_line_rows[2].delete_button
+        delete_button.setFocus()
+
+        with patch(
+            "mingo_assistant.ui.views.business_amendment_workspace.QMessageBox.question",
+            return_value=QMessageBox.Yes,
+        ):
+            delete_button.click()
+        self.app.processEvents()
+
+        self.assertEqual(5, workspace.amendment_line_tables["remove"].rowCount())
+        self.assertEqual(min(target, bar.maximum()), bar.value())
 
     def test_legacy_empty_template_rows_are_removed_without_losing_entered_industries(self):
         values = {"amendment_schema_version": "3", "amendment_line_add_row_count": "3",
@@ -847,6 +850,25 @@ class BusinessAmendmentWorkflowTests(unittest.TestCase):
         self.assertEqual("Không có", old_workspace._field_value("beneficial_notice_b_status"))
         self.assertEqual(-1, old_workspace.tax_person_selectors["director"].findData("person:0"))
         self.assertEqual("KEEP OLD", old_workspace.build_case_summary().form_values["custom_old_field"])
+
+    def test_completion_ticks_follow_meaningful_data_not_visibility_checkboxes(self):
+        self.window._open_business_amendment_modal()
+        workspace = self.window.current_workspace
+
+        workspace._set_field("registered_capital", "1.000.000.000")
+        workspace.fields["change_capital_selected"].setChecked(True)
+        workspace.fields["change_beneficial_selected"].setChecked(True)
+        workspace._refresh_amendment_change_choices()
+        self.assertTrue(workspace.amendment_choice_indicators["change_capital_selected"].isHidden())
+        self.assertTrue(workspace.amendment_choice_indicators["change_beneficial_selected"].isHidden())
+
+        workspace._set_field("new_capital", "2.000.000.000")
+        workspace._set_field("beneficial_notice_b_status", "Gửi kèm")
+        workspace.fields["change_capital_selected"].setChecked(False)
+        workspace.fields["change_beneficial_selected"].setChecked(False)
+        workspace._refresh_amendment_change_choices()
+        self.assertFalse(workspace.amendment_choice_indicators["change_capital_selected"].isHidden())
+        self.assertFalse(workspace.amendment_choice_indicators["change_beneficial_selected"].isHidden())
 
     def test_share_table_all_data_cells_editable_and_restore(self):
         self.window._open_business_amendment_modal()

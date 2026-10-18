@@ -115,6 +115,7 @@ class TestAllModalsAndNavigation(unittest.TestCase):
                 "business_amendment",
                 "dissolution",
                 "dependent_units",
+                "household_business",
                 "industry_lookup",
                 "legacy_industry_lookup",
                 "trash",
@@ -127,6 +128,7 @@ class TestAllModalsAndNavigation(unittest.TestCase):
             win._open_business_creation_modal = MagicMock()
             win._open_business_amendment_modal = MagicMock()
             win._open_dependent_unit_modal = MagicMock()
+            win._open_household_business_workspace = MagicMock()
             win._open_dissolution_modal = MagicMock()
             win._open_authorized_person_manager = MagicMock()
             win._refresh_industry_lookup = MagicMock()
@@ -141,6 +143,7 @@ class TestAllModalsAndNavigation(unittest.TestCase):
             win.business_page = MagicMock()
             win.business_amendment_page = MagicMock()
             win.dependent_units_page = MagicMock()
+            win.household_business_page = MagicMock()
             win.dissolution_page = MagicMock()
             win.industry_lookup_page = MagicMock()
             win.legacy_industry_lookup_page = MagicMock()
@@ -168,12 +171,17 @@ class TestAllModalsAndNavigation(unittest.TestCase):
             win._select_nav("dependent_units", is_user_action=True)
             win._open_dependent_unit_modal.assert_called_once()
 
-            # 5. Dissolution category
+            # 5. Household business is a separate navigation section.
+            win.stack.currentWidget.return_value = win.household_business_page
+            win._select_nav("household_business", is_user_action=True)
+            win._open_household_business_workspace.assert_called_once()
+
+            # 6. Dissolution category
             win.stack.currentWidget.return_value = win.dissolution_page
             win._select_nav("dissolution", is_user_action=True)
             win._open_dissolution_modal.assert_called_once()
 
-            # 6. Old-industry lookup is a separate page and refresh callback.
+            # 7. Old-industry lookup is a separate page and refresh callback.
             win.stack.currentWidget.return_value = None
             win._select_nav("legacy_industry_lookup", is_user_action=True)
             win._refresh_legacy_industry_lookup.assert_called_once()

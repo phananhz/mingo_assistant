@@ -42,6 +42,7 @@ from mingo_assistant.app.paths import get_app_paths, save_settings
 from mingo_assistant.application.business_registration import BusinessRegistrationServices
 from mingo_assistant.application.registration import RegistrationViewModel
 from mingo_assistant.application.people import PersonIdentityRules
+from mingo_assistant.core.text_normalization import uppercase_authorized_person_name
 from mingo_assistant.domains.business_registration import VietnameseMoneyFormatter
 from mingo_assistant.models.case import CaseSummary
 from mingo_assistant.models.form_values import (
@@ -605,7 +606,7 @@ class BusinessRegistrationWorkspace(QWidget):
         self.form_stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         layout.addWidget(self.form_stack, 0, Qt.AlignTop)
 
-        ordered_field_groups = list(FIELD_GROUPS)
+        ordered_field_groups = list(self._form_field_groups())
         if self.template_variant == TWO_MEMBER_INDIVIDUAL_VARIANT:
             # A multi-member LLC has members, not a single-owner record.  Keep
             # the legacy owner form available for its existing company flows.
@@ -617,17 +618,21 @@ class BusinessRegistrationWorkspace(QWidget):
             ordered_field_groups.insert(0, (MEMBER_SECTION_TITLE, []))
 
         legal_index = next(
-            index
-            for index, (_title, fields) in enumerate(ordered_field_groups)
-            if any(key == "legal_representative_full_name" for key, _label in fields)
+            (
+                index
+                for index, (_title, fields) in enumerate(ordered_field_groups)
+                if any(key == "legal_representative_full_name" for key, _label in fields)
+            ),
+            None,
         )
-        legal_group = ordered_field_groups.pop(legal_index)
-        legal_target_index = next(
-            index
-            for index, (_title, fields) in enumerate(ordered_field_groups)
-            if any(key in {"beneficial_owner_full_name", "charter_capital_number"} for key, _label in fields)
-        )
-        ordered_field_groups.insert(legal_target_index, legal_group)
+        if legal_index is not None:
+            legal_group = ordered_field_groups.pop(legal_index)
+            legal_target_index = next(
+                index
+                for index, (_title, fields) in enumerate(ordered_field_groups)
+                if any(key in {"beneficial_owner_full_name", "charter_capital_number"} for key, _label in fields)
+            )
+            ordered_field_groups.insert(legal_target_index, legal_group)
         if self.template_variant == TWO_MEMBER_INDIVIDUAL_VARIANT:
             capital_index = next(
                 index
@@ -670,6 +675,14 @@ class BusinessRegistrationWorkspace(QWidget):
         nav_widget.setMinimumWidth(self.form_nav_layout.sizeHint().width())
         self._select_form_section(0)
         return group
+
+    def _form_field_groups(self) -> list[tuple[str, list[tuple[str, str]]]]:
+        """Return the form schema for this workflow.
+
+        Specialized dossier workspaces can override this hook without changing
+        the shared business-registration form or any other workflow.
+        """
+        return FIELD_GROUPS
 
     def _select_form_section(self, index: int) -> None:
         self.form_stack.setCurrentIndex(index)
@@ -1585,6 +1598,12 @@ class BusinessRegistrationWorkspace(QWidget):
         else:
             field = QLineEdit()
             field.textChanged.connect(self._refresh_preview)
+            if key == "authorized_person_full_name":
+                field.textChanged.connect(
+                    lambda text, selected_field=field: self._uppercase_authorized_person_field(
+                        selected_field, text
+                    )
+                )
             if key == "charter_capital_number":
                 field.textChanged.connect(self._handle_capital_number_changed)
                 field.textChanged.connect(self._schedule_existing_case_financial_autosave)
@@ -1605,6 +1624,14 @@ class BusinessRegistrationWorkspace(QWidget):
                 field.textChanged.connect(self._schedule_director_sync)
         self.fields[key] = field
         return field
+
+    def _uppercase_authorized_person_field(self, field: QLineEdit, text: str) -> None:
+        uppercase = uppercase_authorized_person_name(text)
+        if text == uppercase:
+            return
+        cursor_position = field.cursorPosition()
+        field.setText(uppercase)
+        field.setCursorPosition(min(cursor_position, len(uppercase)))
     def _setup_registration_office_field(self, field: QLineEdit) -> None:
         field.setPlaceholderText("Nhập tỉnh/thành phố để chọn phòng đăng ký kinh doanh")
         if not self.registration_office_catalog.is_available:
@@ -4087,6 +4114,10 @@ class BusinessRegistrationWorkspace(QWidget):
         values["registration_template_variant"] = self.template_variant
         for key in self.fields:
             values[key] = self._field_value(key)
+        if "authorized_person_full_name" in values:
+            values["authorized_person_full_name"] = uppercase_authorized_person_name(
+                values["authorized_person_full_name"]
+            )
         for index, row in enumerate(self.business_line_rows, start=1):
             values[f"business_line_{index}_name"] = row.name_field.text().strip()
             values[f"business_line_{index}_detail"] = row.detail_field.toPlainText().strip()
@@ -4261,6 +4292,8 @@ class BusinessRegistrationWorkspace(QWidget):
         if field is None:
             return
         text_value = str(value or "")
+        if key == "authorized_person_full_name":
+            text_value = uppercase_authorized_person_name(text_value)
         if isinstance(field, QTextEdit):
             if field.toPlainText() != text_value:
                 field.setPlainText(text_value)

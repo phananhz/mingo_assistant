@@ -20,6 +20,10 @@ from mingo_assistant.ui.views.location_business_update_workspace import (
     LOCATION_UPDATE_CASE_TYPE,
 )
 from mingo_assistant.ui.views.location_business_workspace import LOCATION_CASE_TYPE
+from mingo_assistant.ui.views.household_business_workspace import (
+    HOUSEHOLD_BUSINESS_CASE_TYPE,
+    HouseholdBusinessWorkspace,
+)
 
 
 class WorkspaceRegistryTest(unittest.TestCase):
@@ -64,6 +68,14 @@ class WorkspaceRegistryTest(unittest.TestCase):
         )
         self.assertIsNone(route_for_case_type("Workflow tương lai"))
         self.assertFalse(is_dependent_case_type("Workflow tương lai"))
+
+    def test_household_business_has_an_independent_route(self) -> None:
+        route = route_for_case_type(HOUSEHOLD_BUSINESS_CASE_TYPE)
+        self.assertIsNotNone(route)
+        self.assertIs(HouseholdBusinessWorkspace, route.workspace_class)
+        self.assertEqual("household_business", route.return_target)
+        self.assertEqual("household_business", route.nav_key)
+        self.assertFalse(route.dependent)
 
 
 if __name__ == "__main__":

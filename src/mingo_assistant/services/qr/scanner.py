@@ -174,7 +174,12 @@ class IdentityQrScanner:
             ]
             if not all(path.exists() for path in model_files):
                 return None
-            self._wechat_detector = cv2.wechat_qrcode_WeChatQRCode(*(str(path) for path in model_files))
+            detector_class = getattr(cv2, "wechat_qrcode_WeChatQRCode", None)
+            if detector_class is None:
+                detector_class = getattr(getattr(cv2, "wechat_qrcode", None), "WeChatQRCode", None)
+            if detector_class is None:
+                return None
+            self._wechat_detector = detector_class(*(str(path) for path in model_files))
         except Exception:
             self._wechat_detector = None
         return self._wechat_detector

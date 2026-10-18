@@ -3,7 +3,7 @@
   "profiles": [
     {
       "id": "builtin-duong-hong-ngoc",
-      "authorized_person_full_name": "Dương Hồng Ngọc",
+      "authorized_person_full_name": "DƯƠNG HỒNG NGỌC",
       "authorized_person_gender": "Nữ",
       "authorized_person_id_number": "068303008330",
       "authorized_person_issue_date": "12/06/2021",
@@ -14,7 +14,7 @@
     },
     {
       "id": "builtin-mai-xuan-luong",
-      "authorized_person_full_name": "Mai Xuân Lương",
+      "authorized_person_full_name": "MAI XUÂN LƯƠNG",
       "authorized_person_gender": "Nam",
       "authorized_person_id_number": "040095033863",
       "authorized_person_issue_date": "25/09/2022",
@@ -25,7 +25,7 @@
     },
     {
       "id": "builtin-nguyen-thi-minh-ngoc",
-      "authorized_person_full_name": "Nguyễn Thị Minh Ngọc",
+      "authorized_person_full_name": "NGUYỄN THỊ MINH NGỌC",
       "authorized_person_gender": "Nữ",
       "authorized_person_id_number": "031199001726",
       "authorized_person_issue_date": "09/12/2024",

@@ -2,7 +2,68 @@
 from pathlib import Path
 import re
 import unicodedata
+from collections import defaultdict
 from difflib import SequenceMatcher
+
+
+class _OfflineVietOcrPredictor:
+    """VietOCR predictor that never imports its optional download helpers."""
+
+    def __init__(self, config):
+        import torch
+        from vietocr.tool.translate import build_model
+
+        self.config = config
+        self.model, self.vocab = build_model(config)
+        self.model.load_state_dict(torch.load(config["weights"], map_location=torch.device(config["device"])))
+        self.device = config["device"]
+
+    def predict(self, image, return_prob=False):
+        from vietocr.tool.translate import process_input, translate, translate_beam_search
+
+        dataset = self.config["dataset"]
+        image = process_input(
+            image,
+            dataset["image_height"],
+            dataset["image_min_width"],
+            dataset["image_max_width"],
+        ).to(self.device)
+        if self.config["predictor"]["beamsearch"]:
+            sentence = translate_beam_search(image, self.model)
+            probability = None
+        else:
+            sentence, probability = translate(image, self.model)
+            sentence = sentence[0].tolist()
+            probability = probability[0]
+        text = self.vocab.decode(sentence)
+        return (text, probability) if return_prob else text
+
+    def predict_batch(self, images, return_prob=False):
+        import torch
+        from vietocr.tool.translate import process_input, translate
+
+        dataset = self.config["dataset"]
+        buckets = defaultdict(list)
+        bucket_indices = defaultdict(list)
+        for index, image in enumerate(images):
+            tensor = process_input(
+                image,
+                dataset["image_height"],
+                dataset["image_min_width"],
+                dataset["image_max_width"],
+            )
+            buckets[tensor.shape[-1]].append(tensor)
+            bucket_indices[tensor.shape[-1]].append(index)
+
+        texts = [""] * len(images)
+        probabilities = [0.0] * len(images)
+        for width, batch_images in buckets.items():
+            sentences, scores = translate(torch.cat(batch_images, 0).to(self.device), self.model)
+            decoded = self.vocab.batch_decode(sentences.tolist())
+            for index, text, score in zip(bucket_indices[width], decoded, scores.tolist()):
+                texts[index] = text
+                probabilities[index] = score
+        return (texts, probabilities) if return_prob else texts
 
 
 class VietnameseLineRefiner:
@@ -26,7 +87,6 @@ class VietnameseLineRefiner:
     def _load(self):
         if self._predictor is None:
             import torch
-            from vietocr.tool.predictor import Predictor
             torch.set_num_threads(min(torch.get_num_threads(), 2))
             config = {
                 "vocab": 'aAàÀảẢãÃáÁạẠăĂằẰẳẲẵẴắẮặẶâÂầẦẩẨẫẪấẤậẬbBcCdDđĐeEèÈẻẺẽẼéÉẹẸêÊềỀểỂễỄếẾệỆfFgGhHiIìÌỉỈĩĨíÍịỊjJkKlLmMnNoOòÒỏỎõÕóÓọỌôÔồỒổỔỗỖốỐộỘơƠờỜởỞỡỠớỚợỢpPqQrRsStTuUùÙủỦũŨúÚụỤưƯừỪửỬữỮứỨựỰvVwWxXyYỳỲỷỶỹỸýÝỵỴzZ0123456789!"#$%&\'()*+,-./:;<=>?@[\\]^_`{|}~ ',
@@ -40,7 +100,7 @@ class VietnameseLineRefiner:
                 "dataset": {"image_height": 32, "image_min_width": 32, "image_max_width": 512},
                 "predictor": {"beamsearch": False},
             }
-            self._predictor = Predictor(config)
+            self._predictor = _OfflineVietOcrPredictor(config)
         return self._predictor
 
     @classmethod

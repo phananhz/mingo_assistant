@@ -5,6 +5,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from mingo_assistant.core.errors import CorruptDataError
+from mingo_assistant.core.text_normalization import normalize_authorized_person_values
 from mingo_assistant.infrastructure.storage import read_json, read_json_with_recovery, write_json_atomic
 
 
@@ -65,7 +66,10 @@ class AuthorizedPersonProfileRepository:
 
     def merge(self, selected_profile_id: str, profiles: list[dict[str, str]]) -> dict[str, object]:
         default_profiles = self.default_profiles()
-        saved_profiles = {str(profile.get("id", "")): dict(profile) for profile in profiles}
+        saved_profiles = {
+            str(profile.get("id", "")): normalize_authorized_person_values(profile)
+            for profile in profiles
+        }
         for profile in default_profiles:
             saved_profiles.pop(profile["id"], None)
         merged_profiles = default_profiles + list(saved_profiles.values())
@@ -82,7 +86,7 @@ class AuthorizedPersonProfileRepository:
         if not isinstance(values, list):
             return []
         return [
-            {str(key): str(value) for key, value in profile.items()}
+            normalize_authorized_person_values(profile)
             for profile in values
             if isinstance(profile, dict)
         ]

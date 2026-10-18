@@ -11,11 +11,38 @@ from PyInstaller.utils.hooks import collect_all
 
 PROJECT_ROOT = Path(SPECPATH).resolve().parents[1]
 
+REQUIRED_PORTABLE_ASSETS = (
+    "assets/models/ocr/ch_ppocr_mobile_v2.0_cls_mobile.onnx",
+    "assets/models/ocr/PP-OCRv6_det_small.onnx",
+    "assets/models/ocr/PP-OCRv6_rec_medium.onnx",
+    "assets/models/ocr/vietocr_vgg_transformer.pth",
+    "assets/qr_models/detect.prototxt",
+    "assets/qr_models/detect.caffemodel",
+    "assets/qr_models/sr.prototxt",
+    "assets/qr_models/sr.caffemodel",
+)
+missing_assets = [relative for relative in REQUIRED_PORTABLE_ASSETS if not (PROJECT_ROOT / relative).is_file()]
+if missing_assets:
+    raise FileNotFoundError("Missing portable OCR/QR assets: " + ", ".join(missing_assets))
+
 # Runtime data required by OCR, address normalization, business-line lookup,
 # and Word document generation.
 datas = [(str(PROJECT_ROOT / "assets"), "assets")]
 binaries = []
 hiddenimports = []
+hiddenimports += [
+    # These modules are imported lazily by the OCR/QR pipelines. Listing them
+    # explicitly prevents an analyzer optimization from producing an EXE that
+    # starts successfully but loses OCR on another computer.
+    "PIL.Image",
+    "onnxruntime.capi._pybind_state",
+    "rapidocr_onnxruntime",
+    "torch",
+    "torchvision",
+    "vietocr.tool.translate",
+    "zxingcpp",
+    "pyzbar.pyzbar",
+]
 
 # This Python installation exposes the _tkinter extension but cannot initialize
 # Tcl while PyInstaller analyzes it. Its automatic hook therefore registers the
@@ -59,7 +86,7 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=[str(PROJECT_ROOT / "packaging" / "pyinstaller" / "runtime_hook_native_dlls.py")],
     excludes=[],
     noarchive=False,
     optimize=0,

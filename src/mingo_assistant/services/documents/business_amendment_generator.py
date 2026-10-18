@@ -29,6 +29,23 @@ SHARE_VALUE_KEYS = (
     | {f"amendment_share_total_{suffix}" for suffix in ("count", "amount", "ratio")}
 )
 
+BENEFICIAL_EMPTY_STATUS = "không có"
+
+# Direct-child ranges in the reviewed w:body. The strict template hash below
+# prevents these anchors from being reused against an unreviewed template.
+SECTION_RANGES = (
+    (None, "Doanh nghiệp đăng ký thay đổi trên cơ sở", "ĐĂNG KÝ THAY ĐỔI TÊN DOANH NGHIỆP"),
+    ("change_name_selected", "ĐĂNG KÝ THAY ĐỔI TÊN DOANH NGHIỆP", "ĐĂNG KÝ THAY ĐỔI ĐỊA CHỈ TRỤ SỞ CHÍNH"),
+    ("change_address_selected", "ĐĂNG KÝ THAY ĐỔI ĐỊA CHỈ TRỤ SỞ CHÍNH", "ĐĂNG KÝ THAY ĐỔI THÀNH VIÊN"),
+    (None, "ĐĂNG KÝ THAY ĐỔI THÀNH VIÊN", "ĐĂNG KÝ THAY ĐỔI VỐN ĐIỀU LỆ"),
+    ("change_capital_selected", "ĐĂNG KÝ THAY ĐỔI VỐN ĐIỀU LỆ", "THÔNG BÁO THAY ĐỔI NGÀNH, NGHỀ KINH DOANH"),
+    ("change_business_lines_selected", "THÔNG BÁO THAY ĐỔI NGÀNH, NGHỀ KINH DOANH", "THÔNG BÁO THAY ĐỔI THÔNG TIN ĐĂNG KÝ THUẾ"),
+    ("change_tax_selected", "THÔNG BÁO THAY ĐỔI THÔNG TIN ĐĂNG KÝ THUẾ", "THÔNG BÁO THAY ĐỔI THÔNG TIN VÊ"),
+    ("change_beneficial_selected", "THÔNG BÁO THAY ĐỔI THÔNG TIN VÊ", "B. BỔ SUNG, CẬP NHẬT THÔNG TIN ĐĂNG KÝ DOANH NGHIỆP"),
+    (None, "B. BỔ SUNG, CẬP NHẬT THÔNG TIN ĐĂNG KÝ DOANH NGHIỆP", "C. ĐỀ NGHỊ HIỆU ĐÍNH THÔNG TIN ĐĂNG KÝ DOANH NGHIỆP"),
+    (None, "C. ĐỀ NGHỊ HIỆU ĐÍNH THÔNG TIN ĐĂNG KÝ DOANH NGHIỆP", "Đề nghị Quý Cơ quan cấp Giấy xác nhận"),
+)
+
 
 def selected(value: str) -> bool:
     return str(value).strip().lower() in {"1", "x", "true", "yes", "có"}
@@ -38,36 +55,44 @@ def shares_entered(values: dict[str, str]) -> bool:
     return selected(values.get("change_capital_selected", "")) and any(values.get(key, "").strip() for key, _ in SHARE_FIELDS)
 
 
+def change_section_has_data(values: dict[str, str], selection: str) -> bool:
+    """Return whether a section has meaningful export data, ignoring its checkbox."""
+    fields = next((items for key, _title, items in CHANGE_GROUPS if key == selection), ())
+    if selection == "change_beneficial_selected":
+        return any(
+            str(values.get(key, "") or "").strip().casefold() not in {"", BENEFICIAL_EMPTY_STATUS}
+            for key, _label in fields
+        )
+    if selection == "change_business_lines_selected":
+        return any(
+            re.fullmatch(r"amendment_line_(?:add|remove|detail)_\d+_(?:name|detail|code|main|note)", key)
+            and str(value or "").strip()
+            for key, value in values.items()
+        )
+    ignored = (
+        {
+            "registered_capital",
+            "capital_foreign_yes_checked",
+            "capital_foreign_no_checked",
+            "amendment_source_2_amount",
+            "amendment_asset_1_amount",
+        }
+        if selection == "change_capital_selected"
+        else set()
+    )
+    return any(
+        key not in ignored and str(values.get(key, "") or "").strip()
+        for key, _label in fields
+    )
+
+
 def inferred_change_selections(values: dict[str, str]) -> set[str]:
-    """Return every change section explicitly selected or containing user data."""
-    active: set[str] = set()
-    for selection, _title, fields in CHANGE_GROUPS:
-        if selected(values.get(selection, "")):
-            active.add(selection)
-            continue
-        if selection == "change_beneficial_selected":
-            # Both dropdowns have a default value, so only the explicit choice
-            # can distinguish an intended beneficial-owner notification.
-            continue
-        if selection == "change_business_lines_selected":
-            entered = any(
-                re.fullmatch(r"amendment_line_(?:add|remove|detail)_\d+_(?:name|detail|code|main|note)", key)
-                and str(value or "").strip()
-                for key, value in values.items()
-            )
-        else:
-            ignored = (
-                {"registered_capital", "amendment_source_2_amount", "amendment_asset_1_amount"}
-                if selection == "change_capital_selected"
-                else set()
-            )
-            entered = any(
-                key not in ignored and str(values.get(key, "") or "").strip()
-                for key, _label in fields
-            )
-        if entered:
-            active.add(selection)
-    return active
+    """Return change sections containing meaningful user-entered data."""
+    return {
+        selection
+        for selection, _title, _fields in CHANGE_GROUPS
+        if change_section_has_data(values, selection)
+    }
 
 
 def money_number(value: str) -> int:
@@ -147,7 +172,7 @@ class BusinessAmendmentTemplateGenerator:
             required.update({"registered_capital": "Vốn đã đăng ký", "new_capital": "Vốn sau thay đổi"})
         issues = [f"Chưa có: {label}" for key, label in required.items() if not values.get(key, "").strip()]
         if not active_changes:
-            issues.append("Chọn ít nhất một nội dung thay đổi có vùng vàng để điền")
+            issues.append("Nhập dữ liệu cho ít nhất một nội dung thay đổi")
         code = values.get("parent_entity_registration_number", "").strip()
         if code and not re.fullmatch(r"\d{10}(?:\d{3})?", code):
             issues.append("Mã số doanh nghiệp phải có 10 hoặc 13 chữ số, giữ nguyên số 0 đầu")
@@ -212,10 +237,10 @@ class BusinessAmendmentTemplateGenerator:
     @staticmethod
     def composed_values(values: dict[str, str]) -> dict[str, str]:
         result = dict(values)
-        # Older drafts can contain reviewed values but miss their selection
-        # flags. Export every section that contains actual user-entered data.
-        for selection in inferred_change_selections(result):
-            result[selection] = "X"
+        # Export is data-driven. Checkboxes only show or hide input forms.
+        active_changes = inferred_change_selections(result)
+        for selection, _title, _fields in CHANGE_GROUPS:
+            result[selection] = "X" if selection in active_changes else ""
         formatter = VietnameseMoneyFormatter()
         for key in ("parent_entity_name", "new_company_name", "legal_representative_full_name"):
             result[key] = result.get(key, "").upper()
@@ -449,6 +474,37 @@ class BusinessAmendmentTemplateGenerator:
         label.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
         right_label_run.insert(right_label_run.index(label), etree.Element(W + "tab"))
 
+    @staticmethod
+    def _body_child_text(node) -> str:
+        return "".join(node.xpath(".//w:t/text()", namespaces=NS)).strip()
+
+    @classmethod
+    def _remove_inactive_sections(cls, root, values: dict[str, str]) -> None:
+        """Remove whole unused form blocks, including their tables and spacing."""
+        body = root.find("w:body", NS)
+        if body is None:
+            raise ValueError("Không tìm thấy phần nội dung chính của mẫu Word")
+        children = list(body)
+        texts = [cls._body_child_text(node) for node in children]
+
+        def anchor_index(prefix: str) -> int:
+            matches = [index for index, text in enumerate(texts) if text.startswith(prefix)]
+            if len(matches) != 1:
+                raise ValueError(f"Ranh giới nội dung mẫu Word không còn khớp: {prefix}")
+            return matches[0]
+
+        removable = set()
+        for selection, start_anchor, end_anchor in SECTION_RANGES:
+            if selection and selected(values.get(selection, "")):
+                continue
+            start, end = anchor_index(start_anchor), anchor_index(end_anchor)
+            if start >= end:
+                raise ValueError(f"Thứ tự nội dung mẫu Word không hợp lệ: {start_anchor}")
+            removable.update(children[start:end])
+        for node in children:
+            if node in removable:
+                body.remove(node)
+
     def fill_xml(self, data: bytes, values: dict[str, str]) -> bytes:
         root = etree.fromstring(data)
         paragraphs = root.findall(".//w:p", NS)
@@ -575,6 +631,7 @@ class BusinessAmendmentTemplateGenerator:
                 text.text = part
                 parent.insert(index + 1, text)
                 index += 2
+        self._remove_inactive_sections(root, values)
         return etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
 
     def generate(self, values: dict[str, str], case_name: str, output_dir: Path | None = None) -> GenerationResult:

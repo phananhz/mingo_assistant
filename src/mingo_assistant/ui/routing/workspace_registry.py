@@ -13,6 +13,10 @@ from mingo_assistant.ui.views.business_amendment_workspace import (
 from mingo_assistant.ui.views.business_registration_workspace import (
     BusinessRegistrationWorkspace,
 )
+from mingo_assistant.ui.views.household_business_workspace import (
+    HOUSEHOLD_BUSINESS_CASE_TYPE,
+    HouseholdBusinessWorkspace,
+)
 from mingo_assistant.ui.views.location_business_termination_workspace import (
     LOCATION_TERMINATION_CASE_TYPE,
     LocationBusinessTerminationWorkspace,
@@ -61,6 +65,13 @@ WORKSPACE_ROUTES = (
         workspace_class=BusinessAmendmentWorkspace,
         return_target="business_amendment",
         nav_key="business_amendment",
+    ),
+    WorkspaceRoute(
+        key="household_business",
+        case_types=frozenset({HOUSEHOLD_BUSINESS_CASE_TYPE}),
+        workspace_class=HouseholdBusinessWorkspace,
+        return_target="household_business",
+        nav_key="household_business",
     ),
     WorkspaceRoute(
         key="dependent_unit_create",

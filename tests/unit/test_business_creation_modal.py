@@ -22,6 +22,7 @@ class TestBusinessCreationModal(unittest.TestCase):
         self.assertIn("tnhh_1tv", spec_ids)
         self.assertIn("tnhh_2tv", spec_ids)
         self.assertIn("co_phan", spec_ids)
+        self.assertNotIn("household_business", spec_ids)
 
         tnhh_1tv = next(s for s in COMPANY_TYPE_SPECS if s["id"] == "tnhh_1tv")
         self.assertEqual(len(tnhh_1tv["dossiers"]), 1)
@@ -230,6 +231,8 @@ class TestBusinessCreationModal(unittest.TestCase):
         self.assertEqual(win.sidebar._layout_mode, "liquid_glass")
         self.assertIsNotNone(win.sidebar._liquid_glass_pixmap)
         self.assertFalse(win.sidebar._liquid_glass_pixmap.isNull())
+        self.assertEqual(18.0, win.sidebar.BACKGROUND_BLUR_RADIUS)
+        self.assertTrue(all(button.font().bold() for button in win.nav_buttons.values()))
 
         # Test that liquid glass stylesheet contains white text for sidebar
         css = stylesheet_for_theme("rose", layout="liquid_glass")

@@ -606,7 +606,7 @@ class BusinessCreationModal(QDialog):
 
         box_layout.addLayout(top_bar)
 
-        # Selection row: Exactly 3 cards
+        # Selection row for available establishment workflows.
         cards_row = QHBoxLayout()
         cards_row.setContentsMargins(0, 4, 0, 4)
         cards_row.setSpacing(14)

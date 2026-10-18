@@ -6,10 +6,10 @@ from copy import deepcopy
 import re
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import Qt, QSize, QTimer
 from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
-    QCheckBox, QFrame, QGridLayout, QGroupBox, QHBoxLayout, QLabel,
+    QApplication, QCheckBox, QFrame, QGridLayout, QGroupBox, QHBoxLayout, QLabel,
     QLineEdit, QMessageBox, QPushButton, QScrollArea, QTextEdit, QVBoxLayout, QWidget,
     QComboBox, QTabBar, QTabWidget, QDialog,
 )
@@ -22,7 +22,10 @@ from mingo_assistant.services.documents.business_amendment_fields import (
     AMENDMENT_FIELD_GROUPS, CHANGE_GROUPS, UNSUPPORTED_GROUPS,
     line_row_count,
 )
-from mingo_assistant.services.documents.business_amendment_generator import BusinessAmendmentTemplateGenerator
+from mingo_assistant.services.documents.business_amendment_generator import (
+    BusinessAmendmentTemplateGenerator,
+    change_section_has_data,
+)
 from mingo_assistant.services.organization_documents.business_amendment_document_service import BusinessAmendmentDocumentService
 from mingo_assistant.services.business_lines.legacy_industry_lookup import load_legacy_industry_catalog
 from mingo_assistant.ui.views.location_business_update_workspace import LocationBusinessUpdateWorkspace
@@ -560,6 +563,18 @@ class BusinessAmendmentWorkspace(LocationBusinessUpdateWorkspace):
 
     def _delete_amendment_line_row(self, kind, index):
         table = self.amendment_line_tables[kind]
+        workspace_scroll = self.findChild(QScrollArea, "BusinessWorkspaceScroll")
+        scroll_position = (
+            workspace_scroll.verticalScrollBar().value()
+            if workspace_scroll is not None
+            else None
+        )
+        focused_widget = QApplication.focusWidget()
+        if focused_widget is not None and table.isAncestorOf(focused_widget):
+            # The clicked delete button is about to be destroyed.  Leaving it
+            # focused makes QScrollArea reveal the next focus target, which is
+            # usually near the top of this long form.
+            focused_widget.clearFocus()
         page = table.page
         rows = [row for i, row in enumerate(table.snapshot_rows()) if i != index]
         initializing = self._initializing
@@ -580,6 +595,16 @@ class BusinessAmendmentWorkspace(LocationBusinessUpdateWorkspace):
         if not initializing:
             self._refresh_amendment_line_numbers()
             self._refresh_preview()
+        if workspace_scroll is not None and scroll_position is not None:
+            def restore_scroll_position():
+                bar = workspace_scroll.verticalScrollBar()
+                bar.setValue(min(scroll_position, bar.maximum()))
+
+            # Restore once after the synchronous layout update and once after
+            # Qt has processed deleteLater()/focus/layout events from rebuilt
+            # row widgets.
+            restore_scroll_position()
+            QTimer.singleShot(0, restore_scroll_position)
 
     def _confirm_delete_amendment_line_row(self, kind, index):
         """Require confirmation only when the clicked card contains input."""
@@ -649,16 +674,11 @@ class BusinessAmendmentWorkspace(LocationBusinessUpdateWorkspace):
 
     def _refresh_amendment_change_choices(self):
         groups = {key: fields for key, _, fields in CHANGE_GROUPS}
+        values = {field: self._field_value(field) for field in self.fields}
         for key, card in self.amendment_choice_cards.items():
             checkbox = self.fields.get(key)
             checked = isinstance(checkbox, QCheckBox) and checkbox.isChecked()
-            # Current registered capital is not newly entered change content.
-            entered = any(self._field_value(field).strip() for field, _ in groups.get(key, ())
-                          if field not in {"capital_foreign_yes_checked", "capital_foreign_no_checked"})
-            if key == "change_business_lines_selected":
-                entered = any(self._field_value(field).strip() for field in self.fields if field.startswith("amendment_line_"))
-            if key == "change_beneficial_selected" and not checked:
-                entered = False
+            entered = change_section_has_data(values, key) if key in groups else False
             self.amendment_choice_indicators[key].setVisible(entered)
             if isinstance(checkbox, QCheckBox):
                 checkbox.setIcon(self._change_option_checkbox_icon(checked))

@@ -5,6 +5,7 @@ from pathlib import Path
 
 from docx import Document
 
+from mingo_assistant.core.text_normalization import uppercase_authorized_person_name
 from mingo_assistant.services.documents.dependent_unit_generator import DependentUnitTemplateGenerator
 
 
@@ -119,6 +120,8 @@ class LocationTerminationTemplateGenerator(DependentUnitTemplateGenerator):
             if len(runs) != 1:
                 raise ValueError(f"Không xác định được vùng tô sáng: {paragraph.text[:60]}")
             replacement = str(values.get(field, "") if value is None else value).strip()
+            if field == "authorized_person_full_name":
+                replacement = uppercase_authorized_person_name(replacement)
             if replacement:
                 runs[0].text = replacement
 

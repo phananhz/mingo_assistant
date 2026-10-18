@@ -69,6 +69,33 @@ class AuthorizedPersonProfileRepositoryTest(unittest.TestCase):
             self.assertEqual(stored["schema_version"], 1)
             self.assertEqual(stored["profiles"][0]["authorized_person_full_name"], "NGUYEN VAN TEST")
 
+    def test_names_are_uppercased_for_defaults_saved_profiles_and_persistence(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            defaults_file = root / "defaults.json"
+            data_file = root / "authorized_person.json"
+            defaults_file.write_text(
+                json.dumps({"profiles": [{"id": "fixed", "authorized_person_full_name": "Mai Xuân Lương"}]}),
+                encoding="utf-8",
+            )
+            repository = AuthorizedPersonProfileRepository(data_file, defaults_file)
+
+            payload = repository.merge(
+                "saved",
+                [{"id": "saved", "authorized_person_full_name": "Nguyễn Thị Minh Ngọc"}],
+            )
+            repository.save(payload)
+            stored = json.loads(data_file.read_text(encoding="utf-8"))
+
+            self.assertEqual(
+                [profile["authorized_person_full_name"] for profile in payload["profiles"]],
+                ["MAI XUÂN LƯƠNG", "NGUYỄN THỊ MINH NGỌC"],
+            )
+            self.assertEqual(
+                stored["profiles"][1]["authorized_person_full_name"],
+                "NGUYỄN THỊ MINH NGỌC",
+            )
+
     def test_corrupt_local_profiles_keep_fixed_profiles_and_recovery_copy(self) -> None:
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
