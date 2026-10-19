@@ -71,6 +71,69 @@ class TwoMemberIndividualWorkspaceTest(unittest.TestCase):
             finally:
                 workspace.deleteLater()
 
+    def test_member_contributions_accept_amount_or_ratio_and_calculate_only_last_member(self) -> None:
+        project_root = Path(__file__).resolve().parents[2]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = BusinessRegistrationWorkspace(
+                on_back=lambda: None,
+                on_save=lambda case: None,
+                bundle_root=project_root,
+                default_export_root=Path(temp_dir),
+                template_variant=TWO_MEMBER_INDIVIDUAL_VARIANT,
+            )
+            try:
+                workspace._set_field("charter_capital_number", "1.000.000")
+                first_amount = workspace.fields["member_1_capital_amount"]
+                first_ratio = workspace.fields["member_1_capital_ratio"]
+                second_amount = workspace.fields["member_2_capital_amount"]
+                second_ratio = workspace.fields["member_2_capital_ratio"]
+                self.assertFalse(first_amount.isReadOnly())
+                self.assertFalse(first_ratio.isReadOnly())
+                self.assertTrue(second_amount.isReadOnly())
+                self.assertTrue(second_ratio.isReadOnly())
+
+                workspace._set_field("member_1_capital_ratio", "40")
+                first_ratio.editingFinished.emit()
+                self.assertEqual("400.000", workspace._field_value("member_1_capital_amount"))
+                self.assertEqual("40%", workspace._field_value("member_1_capital_ratio"))
+                self.assertEqual("600.000", workspace._field_value("member_2_capital_amount"))
+                self.assertEqual("60%", workspace._field_value("member_2_capital_ratio"))
+                self.assertEqual(
+                    "ratio",
+                    workspace.form_values(apply_defaults=False)["member_1_capital_input_mode"],
+                )
+
+                workspace._set_field("member_1_capital_amount", "250.000")
+                self.assertEqual("25%", workspace._field_value("member_1_capital_ratio"))
+                self.assertEqual("750.000", workspace._field_value("member_2_capital_amount"))
+                self.assertEqual("75%", workspace._field_value("member_2_capital_ratio"))
+
+                workspace._show_next_company_member_row()
+                third_amount = workspace.fields["member_3_capital_amount"]
+                third_ratio = workspace.fields["member_3_capital_ratio"]
+                self.assertFalse(second_amount.isReadOnly())
+                self.assertFalse(second_ratio.isReadOnly())
+                self.assertTrue(third_amount.isReadOnly())
+                self.assertTrue(third_ratio.isReadOnly())
+                self.assertEqual("", workspace._field_value("member_2_capital_amount"))
+                self.assertEqual("", workspace._field_value("member_3_capital_amount"))
+
+                workspace._set_field("member_2_capital_ratio", "30%")
+                self.assertEqual("300.000", workspace._field_value("member_2_capital_amount"))
+                self.assertEqual("450.000", workspace._field_value("member_3_capital_amount"))
+                self.assertEqual("45%", workspace._field_value("member_3_capital_ratio"))
+
+                workspace._set_field("member_2_capital_ratio", "")
+                self.assertEqual("", workspace._field_value("member_2_capital_amount"))
+                self.assertEqual("", workspace._field_value("member_3_capital_amount"))
+                issues = workspace._validation_issues(workspace.form_values(apply_defaults=False))
+                self.assertIn(
+                    "Thành viên 2: chưa nhập số tiền hoặc tỷ lệ vốn góp",
+                    issues,
+                )
+            finally:
+                workspace.deleteLater()
+
     def test_two_member_capital_and_beneficial_owners_restore_from_saved_form_values(self) -> None:
         project_root = Path(__file__).resolve().parents[2]
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -88,7 +151,7 @@ class TwoMemberIndividualWorkspaceTest(unittest.TestCase):
 
                 workspace._set_field("legal_representative_position", "Ch\u1ee7 t\u1ecbch c\u00f4ng ty")
                 workspace._set_field("charter_capital_number", "1.000.000")
-                workspace._set_field("member_1_capital_amount", "400.000")
+                workspace._set_field("member_1_capital_ratio", "40%")
                 workspace._set_field("member_1_capital_asset_type", "Quy\u1ec1n s\u1eed d\u1ee5ng t\u00e0i s\u1ea3n")
                 workspace._set_field("member_1_capital_deadline", "Ho\u00e0n th\u00e0nh trong 30 ng\u00e0y")
                 workspace._set_field("member_1_full_name", "NGUY\u1ec4N V\u0102N M\u1eaaU")
@@ -124,12 +187,16 @@ class TwoMemberIndividualWorkspaceTest(unittest.TestCase):
                 self.assertEqual("1.000.000", reopened._field_value("charter_capital_number"))
                 self.assertEqual("400.000", reopened._field_value("member_1_capital_amount"))
                 self.assertEqual("600.000", reopened._field_value("member_2_capital_amount"))
+                self.assertEqual("ratio", reopened.member_contribution_input_modes[1])
                 self.assertEqual("Quy\u1ec1n s\u1eed d\u1ee5ng t\u00e0i s\u1ea3n", reopened._field_value("member_1_capital_asset_type"))
                 self.assertEqual("Ho\u00e0n th\u00e0nh trong 30 ng\u00e0y", reopened._field_value("member_1_capital_deadline"))
                 self.assertEqual("Ch\u1ee7 t\u1ecbch c\u00f4ng ty", reopened._field_value("legal_representative_position"))
                 self.assertEqual(2, len(reopened.two_member_beneficial_owner_rows))
                 self.assertEqual("member:2", reopened.two_member_beneficial_owner_rows[1].member_selector.currentData())
                 self.assertEqual("Nh\u00f3m li\u00ean quan", reopened._field_value("beneficial_owner_row_2_related_group"))
+                reopened._set_field("charter_capital_number", "2.000.000")
+                self.assertEqual("800.000", reopened._field_value("member_1_capital_amount"))
+                self.assertEqual("1.200.000", reopened._field_value("member_2_capital_amount"))
             finally:
                 reopened.deleteLater()
 

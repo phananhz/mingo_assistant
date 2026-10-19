@@ -5,6 +5,7 @@ import re
 import shutil
 import unicodedata
 from datetime import datetime
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from time import monotonic
 from uuid import uuid4
@@ -168,6 +169,8 @@ class BusinessRegistrationWorkspace(QWidget):
         self.company_member_table: QFrame | None = None
         self.member_contribution_table: QFrame | None = None
         self.member_contribution_rows: dict[int, tuple[QWidget, ...]] = {}
+        self.member_contribution_input_modes: dict[int, str] = {}
+        self._member_contribution_auto_index: int | None = None
         self.updating_member_contributions = False
         self.industry_search_input = QLineEdit()
         self.industry_results_table = QTableWidget()
@@ -1710,7 +1713,7 @@ class BusinessRegistrationWorkspace(QWidget):
             if key != "charter_capital_number":
                 field.setReadOnly(True)
             elif isinstance(field, QLineEdit):
-                field.textChanged.connect(self._recalculate_member_contributions)
+                field.textChanged.connect(lambda _text: self._recalculate_member_contributions())
             summary.addWidget(label, index // 2, (index % 2) * 2)
             summary.addWidget(field, index // 2, (index % 2) * 2 + 1)
         layout.addLayout(summary)
@@ -1796,7 +1799,10 @@ class BusinessRegistrationWorkspace(QWidget):
         layout = QVBoxLayout(section)
         layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(10)
-        hint = QLabel("Nh\u1eadp ph\u1ea7n v\u1ed1n g\u00f3p c\u1ee7a th\u00e0nh vi\u00ean 1. Ph\u1ea7n c\u00f2n l\u1ea1i v\u00e0 t\u1ef7 l\u1ec7 s\u1ebd t\u1ef1 t\u00ednh theo v\u1ed1n \u0111i\u1ec1u l\u1ec7.")
+        hint = QLabel(
+            "Nh\u1eadp s\u1ed1 ti\u1ec1n ho\u1eb7c t\u1ef7 l\u1ec7 g\u00f3p v\u1ed1n c\u1ee7a \u00edt nh\u1ea5t n-1 th\u00e0nh vi\u00ean. "
+            "S\u1ed1 ti\u1ec1n, t\u1ef7 l\u1ec7 v\u00e0 ph\u1ea7n c\u1ee7a th\u00e0nh vi\u00ean cu\u1ed1i s\u1ebd t\u1ef1 \u0111\u1ed9ng t\u00ednh theo v\u1ed1n \u0111i\u1ec1u l\u1ec7."
+        )
         hint.setObjectName("FilterLabel")
         hint.setWordWrap(True)
         layout.addWidget(hint)
@@ -1833,12 +1839,29 @@ class BusinessRegistrationWorkspace(QWidget):
         row_number = QLabel(str(index)); row_number.setAlignment(Qt.AlignCenter)
         member_name = QLabel(); member_name.setWordWrap(True)
         amount = QLineEdit(); amount.setAlignment(Qt.AlignRight)
-        ratio = QLineEdit(); ratio.setReadOnly(True); ratio.setAlignment(Qt.AlignCenter)
+        ratio = QLineEdit(); ratio.setAlignment(Qt.AlignCenter)
         asset_type = QLineEdit(); asset_type.setText(DEFAULT_MEMBER_CAPITAL_ASSET_TYPE)
         deadline = QTextEdit(); deadline.setFixedHeight(54); deadline.setPlainText(DEFAULT_MEMBER_CAPITAL_DEADLINE)
-        amount.setReadOnly(index != 1)
-        amount.textChanged.connect(self._recalculate_member_contributions)
+        self.member_contribution_input_modes.setdefault(index, "amount")
+        amount.textChanged.connect(
+            lambda _text, member_index=index: self._on_member_contribution_changed(
+                member_index, "amount"
+            )
+        )
+        ratio.textChanged.connect(
+            lambda _text, member_index=index: self._on_member_contribution_changed(
+                member_index, "ratio"
+            )
+        )
+        ratio.editingFinished.connect(
+            lambda member_index=index: self._recalculate_member_contributions(
+                changed_index=member_index,
+                changed_source="ratio",
+                finalize_ratio=True,
+            )
+        )
         amount.textChanged.connect(self._schedule_existing_case_financial_autosave)
+        ratio.textChanged.connect(self._schedule_existing_case_financial_autosave)
         asset_type.textChanged.connect(self._refresh_preview)
         asset_type.textChanged.connect(self._schedule_existing_case_financial_autosave)
         deadline.textChanged.connect(self._refresh_preview)
@@ -1863,7 +1886,57 @@ class BusinessRegistrationWorkspace(QWidget):
             if isinstance(name_label, QLabel):
                 name_label.setText(name)
 
-    def _recalculate_member_contributions(self) -> None:
+    def _on_member_contribution_changed(self, index: int, source: str) -> None:
+        if self.updating_member_contributions:
+            return
+        self.member_contribution_input_modes[index] = source
+        self._recalculate_member_contributions(
+            changed_index=index,
+            changed_source=source,
+        )
+
+    @staticmethod
+    def _parse_member_capital_ratio(value: str) -> Decimal | None:
+        normalized = str(value or "").strip().replace("%", "").replace(",", ".")
+        if not normalized:
+            return None
+        try:
+            return Decimal(normalized)
+        except InvalidOperation:
+            return None
+
+    @staticmethod
+    def _format_member_capital_ratio(value: Decimal) -> str:
+        rounded = value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        text = format(rounded, "f").rstrip("0").rstrip(".")
+        return f"{text or '0'}%"
+
+    def _sync_member_contribution_editability(self, visible_indexes: list[int]) -> int | None:
+        auto_index = visible_indexes[-1] if len(visible_indexes) >= 2 else None
+        previous_auto_index = self._member_contribution_auto_index
+        if previous_auto_index and previous_auto_index != auto_index and previous_auto_index in visible_indexes:
+            self._set_field(f"member_{previous_auto_index}_capital_amount", "")
+            self._set_field(f"member_{previous_auto_index}_capital_ratio", "")
+            self.member_contribution_input_modes[previous_auto_index] = "amount"
+        self._member_contribution_auto_index = auto_index
+        for index in visible_indexes:
+            self._ensure_member_contribution_row(index)
+            amount = self.fields.get(f"member_{index}_capital_amount")
+            ratio = self.fields.get(f"member_{index}_capital_ratio")
+            read_only = index == auto_index
+            if isinstance(amount, QLineEdit):
+                amount.setReadOnly(read_only)
+            if isinstance(ratio, QLineEdit):
+                ratio.setReadOnly(read_only)
+        return auto_index
+
+    def _recalculate_member_contributions(
+        self,
+        *,
+        changed_index: int | None = None,
+        changed_source: str | None = None,
+        finalize_ratio: bool = False,
+    ) -> None:
         if self.updating_member_contributions or self.template_variant != TWO_MEMBER_INDIVIDUAL_VARIANT:
             return
         visible_indexes = [index for index, row in enumerate(self.company_member_rows, start=1) if not row.card.isHidden()]
@@ -1871,28 +1944,78 @@ class BusinessRegistrationWorkspace(QWidget):
             return
         self.updating_member_contributions = True
         try:
+            auto_index = self._sync_member_contribution_editability(visible_indexes)
             total_digits = self.money_formatter.digits(self._field_value("charter_capital_number"))
             total = int(total_digits) if total_digits else 0
-            first_digits = self.money_formatter.digits(self._field_value("member_1_capital_amount"))
-            first_amount = int(first_digits) if first_digits else 0
-            if first_digits:
-                self._set_field("member_1_capital_amount", self._format_money(first_digits))
-            if total and first_amount > total:
-                first_amount = total
-                self._set_field("member_1_capital_amount", self._format_money(str(first_amount)))
-            amounts: dict[int, int] = {1: first_amount}
-            remaining_indexes = visible_indexes[1:]
-            if total and remaining_indexes:
-                each, remainder = divmod(max(0, total - first_amount), len(remaining_indexes))
-                for offset, index in enumerate(remaining_indexes):
-                    amounts[index] = each + (remainder if offset == len(remaining_indexes) - 1 else 0)
-            for index in visible_indexes:
-                self._ensure_member_contribution_row(index)
+            manual_indexes = [index for index in visible_indexes if index != auto_index]
+            amounts: dict[int, int] = {}
+            completed: dict[int, bool] = {}
+            for index in manual_indexes:
+                mode = self.member_contribution_input_modes.get(index, "amount")
+                if mode == "ratio":
+                    ratio_value = self._parse_member_capital_ratio(
+                        self._field_value(f"member_{index}_capital_ratio")
+                    )
+                    completed[index] = ratio_value is not None
+                    ratio_value = min(Decimal("100"), max(Decimal("0"), ratio_value or Decimal("0")))
+                    amount = int(
+                        (Decimal(total) * ratio_value / Decimal("100")).quantize(
+                            Decimal("1"), rounding=ROUND_HALF_UP
+                        )
+                    ) if total else 0
+                    amounts[index] = amount
+                    if finalize_ratio and index == changed_index and completed[index]:
+                        self._set_field(
+                            f"member_{index}_capital_ratio",
+                            self._format_member_capital_ratio(ratio_value),
+                        )
+                    self._set_field(
+                        f"member_{index}_capital_amount",
+                        self._format_money(str(amount)) if total and completed[index] else "",
+                    )
+                else:
+                    amount_digits = self.money_formatter.digits(
+                        self._field_value(f"member_{index}_capital_amount")
+                    )
+                    completed[index] = bool(amount_digits)
+                    amounts[index] = int(amount_digits) if amount_digits else 0
+
+            capped_index: int | None = None
+            if total and sum(amounts.values()) > total and manual_indexes:
+                capped_index = changed_index if changed_index in manual_indexes else manual_indexes[-1]
+                amounts[capped_index] = max(
+                    0,
+                    total - sum(amount for index, amount in amounts.items() if index != capped_index),
+                )
+
+            for index in manual_indexes:
                 amount = amounts.get(index, 0)
-                if index != 1:
-                    self._set_field(f"member_{index}_capital_amount", self._format_money(str(amount)) if total else "")
-                ratio = amount * 100 / total if total else 0
-                self._set_field(f"member_{index}_capital_ratio", f"{ratio:.2f}".rstrip("0").rstrip(".") + ("%" if total else ""))
+                mode = self.member_contribution_input_modes.get(index, "amount")
+                if completed.get(index):
+                    self._set_field(f"member_{index}_capital_amount", self._format_money(str(amount)))
+                if completed.get(index) and total:
+                    ratio_value = Decimal(amount) * Decimal("100") / Decimal(total)
+                    if mode == "amount" or index == capped_index or (index == changed_index and changed_source == "amount"):
+                        self._set_field(
+                            f"member_{index}_capital_ratio",
+                            self._format_member_capital_ratio(ratio_value),
+                        )
+                elif mode == "amount":
+                    self._set_field(f"member_{index}_capital_ratio", "")
+
+            all_manual_complete = bool(manual_indexes) and all(completed.get(index) for index in manual_indexes)
+            if auto_index is not None:
+                auto_amount = max(0, total - sum(amounts.values())) if total and all_manual_complete else 0
+                self._set_field(
+                    f"member_{auto_index}_capital_amount",
+                    self._format_money(str(auto_amount)) if total and all_manual_complete else "",
+                )
+                auto_ratio = Decimal(auto_amount) * Decimal("100") / Decimal(total) if total else Decimal("0")
+                self._set_field(
+                    f"member_{auto_index}_capital_ratio",
+                    self._format_member_capital_ratio(auto_ratio) if total and all_manual_complete else "",
+                )
+            for index in visible_indexes:
                 self._set_field_if_empty(f"member_{index}_capital_asset_type", DEFAULT_MEMBER_CAPITAL_ASSET_TYPE)
                 self._set_field_if_empty(f"member_{index}_capital_deadline", DEFAULT_MEMBER_CAPITAL_DEADLINE)
         finally:
@@ -3055,9 +3178,16 @@ class BusinessRegistrationWorkspace(QWidget):
         suffixes = ("full_name", "date_of_birth", "gender", "id_number", "permanent_address", "nationality", "ethnicity", "signature", "note", "capital_amount", "capital_ratio", "capital_asset_type", "capital_deadline")
         indexes = {int(match.group(1)) for key in values if (match := re.match(r"^member_(\d+)_(?:full_name|date_of_birth|gender|id_number|permanent_address|nationality|ethnicity|signature|note|capital_amount|capital_ratio|capital_asset_type|capital_deadline)$", key))}
         while len(self.company_member_rows) < max(indexes, default=MIN_TWO_MEMBER_ROWS): self._append_company_member_row(visible=False)
-        for index, row in enumerate(self.company_member_rows, start=1):
-            row.card.setVisible(index <= MIN_TWO_MEMBER_ROWS or any(str(values.get(f"member_{index}_{suffix}", "") or "").strip() for suffix in suffixes))
-            for suffix in suffixes: self._set_field(f"member_{index}_{suffix}", str(values.get(f"member_{index}_{suffix}", "") or ""))
+        self.updating_member_contributions = True
+        try:
+            for index, row in enumerate(self.company_member_rows, start=1):
+                row.card.setVisible(index <= MIN_TWO_MEMBER_ROWS or any(str(values.get(f"member_{index}_{suffix}", "") or "").strip() for suffix in suffixes))
+                for suffix in suffixes: self._set_field(f"member_{index}_{suffix}", str(values.get(f"member_{index}_{suffix}", "") or ""))
+                saved_mode = str(values.get(f"member_{index}_capital_input_mode", "") or "").strip()
+                self.member_contribution_input_modes[index] = saved_mode if saved_mode in {"amount", "ratio"} else "amount"
+        finally:
+            self.updating_member_contributions = False
+        self._member_contribution_auto_index = None
         self._refresh_company_member_profile_selectors()
         self._refresh_two_member_beneficial_owner_selectors()
         self._refresh_member_contribution_names()
@@ -4309,13 +4439,8 @@ class BusinessRegistrationWorkspace(QWidget):
         count = self._company_member_count(); values["member_count"] = str(count); values["owner_type"] = "C\u00e1 nh\u00e2n"
         first = {suffix: str(values.get(f"member_1_{suffix}", "") or "").strip() for suffix in ("full_name", "date_of_birth", "gender", "id_number", "permanent_address")}
         values.update({"beneficial_owner_full_name": first["full_name"], "beneficial_owner_date_of_birth": first["date_of_birth"], "beneficial_owner_gender": first["gender"], "beneficial_owner_id_number": first["id_number"], "beneficial_owner_address": first["permanent_address"]})
-        digits = self.money_formatter.digits(values.get("charter_capital_number", "")); total = int(digits) if digits else 0
         for index in range(1, count + 1):
-            amount_key = f"member_{index}_capital_amount"; ratio_key = f"member_{index}_capital_ratio"
-            if total and not str(values.get(amount_key, "") or "").strip():
-                amount, remainder = divmod(total, count); values[amount_key] = self._format_money(str(amount + (remainder if index == count else 0)))
-            if not str(values.get(ratio_key, "") or "").strip():
-                ratio, remainder = divmod(10000, count); values[ratio_key] = f"{(ratio + (remainder if index == count else 0)) / 100:.2f}".rstrip("0").rstrip(".") + "%"
+            values[f"member_{index}_capital_input_mode"] = self.member_contribution_input_modes.get(index, "amount")
         self._synchronize_two_member_beneficial_owner_values(values)
 
     def _copy_person_to_member_values(self, values: dict[str, str], member_index: int, person: OcrPerson) -> None:
@@ -4405,9 +4530,15 @@ class BusinessRegistrationWorkspace(QWidget):
         self.registration_view_model.replace(values)
         issues = list(self.registration_view_model.validate(address_confirmation_required=address_confirmation_required).errors)
         if self.template_variant == TWO_MEMBER_INDIVIDUAL_VARIANT:
-            for index in range(1, MIN_TWO_MEMBER_ROWS + 1):
+            member_count = self._company_member_count()
+            for index in range(1, member_count + 1):
                 if not str(values.get(f"member_{index}_full_name", "") or "").strip(): issues.append(f"Thành viên {index}: chưa có họ và tên")
                 if not str(values.get(f"member_{index}_id_number", "") or "").strip(): issues.append(f"Thành viên {index}: chưa có số định danh cá nhân")
+            for index in range(1, member_count):
+                if not str(values.get(f"member_{index}_capital_amount", "") or "").strip():
+                    issues.append(
+                        f"Thành viên {index}: chưa nhập số tiền hoặc tỷ lệ vốn góp"
+                    )
         return issues
 
 
