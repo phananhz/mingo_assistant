@@ -2403,6 +2403,7 @@ class BusinessRegistrationWorkspace(QWidget):
                 "Bạn cần nhập thông tin người ủy quyền ở màn danh sách hồ sơ trước.",
             )
             return
+        self._clear_person_fill_target("authorized_person")
         for key, value in self.authorized_person_defaults.items():
             if key.startswith("authorized_person_") and value:
                 self._set_field(key, value)
@@ -2530,6 +2531,7 @@ class BusinessRegistrationWorkspace(QWidget):
         profile = profiles[profile_index]
         if not isinstance(profile, dict):
             return
+        self._clear_person_fill_target("authorized_person")
         for key, value in profile.items():
             if str(key).startswith("authorized_person_") and value:
                 self._set_field(str(key), str(value))
