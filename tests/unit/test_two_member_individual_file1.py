@@ -102,6 +102,7 @@ class TwoMemberIndividualFile1Test(unittest.TestCase):
             "member_2_permanent_address": "Số 2 phố Mẫu, Hà Nội",
             "member_2_capital_amount": "50.000.000",
             "member_2_capital_ratio": "50%",
+            "member_2_capital_asset_type": "Tiền mặt",
             "beneficial_owner_list_count": "2",
             "beneficial_owner_list_1_number": "1",
             "beneficial_owner_list_1_full_name": "MEMBER ONE",
@@ -182,7 +183,28 @@ class TwoMemberIndividualFile1Test(unittest.TestCase):
             self.assertEqual("TR\u1ea6N TH\u1eca B\u00ccNH", member_list.tables[0].rows[4].cells[1].text)
             self.assertEqual("", member_list.tables[0].rows[3].cells[5].text)
             self.assertEqual("", member_list.tables[0].rows[3].cells[12].text)
+            self.assertEqual(
+                "Số 1 phố Mẫu, Hà Nội",
+                member_list.tables[0].rows[3].cells[7].text,
+            )
+            self.assertNotIn(". ,", member_list.tables[0].rows[3].cells[7].text)
             self.assertIn("50.000.000", member_list.tables[0].rows[3].cells[8].text)
+            self.assertEqual("Đồng Việt Nam", member_list.tables[0].rows[4].cells[10].text.strip())
+            template_member_list = Document(self.template_dir / TWO_MEMBER_INDIVIDUAL_FILE3)
+            source_address_paragraph = template_member_list.tables[0].rows[3].cells[7].paragraphs[0]
+            generated_address_paragraph = member_list.tables[0].rows[3].cells[7].paragraphs[0]
+            source_address_run = next(
+                run
+                for run in source_address_paragraph.runs
+                if run.font.highlight_color == WD_COLOR_INDEX.YELLOW
+            )
+            generated_address_run = next(
+                run for run in generated_address_paragraph.runs if run.text.strip()
+            )
+            self.assertEqual(source_address_run.font.size, generated_address_run.font.size)
+            self.assertEqual(source_address_run.bold, generated_address_run.bold)
+            self.assertEqual(source_address_run.italic, generated_address_run.italic)
+            self.assertEqual(source_address_paragraph.alignment, generated_address_paragraph.alignment)
 
             charter = Document(output_by_source[TWO_MEMBER_INDIVIDUAL_FILE2])
             charter_text = "\n".join(paragraph.text for paragraph in TwoMemberIndividualFile1DocxTemplateGenerator(self.template_dir, Path(temp_dir))._iter_paragraphs(charter))
@@ -272,10 +294,66 @@ class TwoMemberIndividualFile1Test(unittest.TestCase):
             names = [r.text for p in generator._iter_paragraphs(guide)
                      for r in p.runs if r.text and r.font.highlight_color == WD_COLOR_INDEX.YELLOW]
             self.assertGreaterEqual(len(names), 5)
-            self.assertTrue(all(name == "Nguyễn Văn Mẫu" for name in names))
+            self.assertIn("Nguyễn Văn Mẫu", names)
+            self.assertIn("Nguyễn Văn Mẫu, Trần Thị Bình", names)
+            member_guide_row = next(
+                row
+                for row in guide.tables[0].rows
+                if "danh sách thành viên" in row.cells[1].text.casefold()
+            )
+            member_guide_names = [
+                run.text
+                for paragraph in member_guide_row.cells[3].paragraphs
+                for run in paragraph.runs
+                if run.text and run.font.highlight_color == WD_COLOR_INDEX.YELLOW
+            ]
+            self.assertEqual(
+                ["Nguyễn Văn Mẫu", "Nguyễn Văn Mẫu, Trần Thị Bình"],
+                member_guide_names,
+            )
+            self.assertIn(
+                "Nguyễn Văn Mẫu, Trần Thị Bình ký tên",
+                member_guide_row.cells[3].text,
+            )
+            self.assertNotIn(
+                "Trần Thị Bình, ký tên",
+                member_guide_row.cells[3].text,
+            )
+            template_guide = Document(self.template_dir / "6. Huong dan ky.docx")
+            template_member_guide_row = next(
+                row
+                for row in template_guide.tables[0].rows
+                if "danh sách thành viên" in row.cells[1].text.casefold()
+            )
+            source_member_instruction = next(
+                paragraph
+                for paragraph in template_member_guide_row.cells[3].paragraphs
+                if "thành viên là cá nhân" in paragraph.text.casefold()
+            )
+            generated_member_instruction = next(
+                paragraph
+                for paragraph in member_guide_row.cells[3].paragraphs
+                if "thành viên là cá nhân" in paragraph.text.casefold()
+            )
+            source_member_run = next(
+                run
+                for run in source_member_instruction.runs
+                if run.font.highlight_color == WD_COLOR_INDEX.YELLOW
+            )
+            generated_member_run = next(
+                run
+                for run in generated_member_instruction.runs
+                if run.font.highlight_color == WD_COLOR_INDEX.YELLOW
+            )
+            self.assertEqual(source_member_run._r.rPr.xml, generated_member_run._r.rPr.xml)
+            self.assertEqual(
+                source_member_instruction._p.pPr.xml,
+                generated_member_instruction._p.pPr.xml,
+            )
             self.assertEqual("50", charter.tables[2].rows[2].cells[3].text)
             self.assertEqual("50", charter.tables[2].rows[3].cells[3].text)
             self.assertEqual("Quy\u1ec1n s\u1eed d\u1ee5ng tài s\u1ea3n", charter.tables[2].rows[2].cells[4].text)
+            self.assertEqual("Đồng Việt Nam", charter.tables[2].rows[3].cells[4].text)
             self.assertEqual("Hoàn thành trong 30 ngày", charter.tables[2].rows[2].cells[5].text)
 
             template_file2 = Document(self.template_dir / TWO_MEMBER_INDIVIDUAL_FILE2)

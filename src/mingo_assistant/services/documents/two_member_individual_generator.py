@@ -94,6 +94,46 @@ class TwoMemberIndividualFile1DocxTemplateGenerator(DocxTemplateGenerator):
                         in_highlight = True
                     elif run.text:
                         in_highlight = False
+            member_names = [
+                member["full_name"].title()
+                for member in self._two_member_file2_members(values)
+                if member["full_name"]
+            ]
+            for table in self._iter_tables(document):
+                for row in table.rows:
+                    if len(row.cells) < 4 or "danh sach thanh vien" not in self._fold(row.cells[1].text):
+                        continue
+                    member_instruction = next(
+                        (
+                            paragraph
+                            for paragraph in row.cells[3].paragraphs
+                            if "thanh vien la ca nhan" in self._fold(paragraph.text)
+                        ),
+                        None,
+                    )
+                    if member_instruction is None:
+                        continue
+                    highlighted = [
+                        run
+                        for run in member_instruction.runs
+                        if run.font.highlight_color == WD_COLOR_INDEX.YELLOW
+                    ]
+                    if highlighted:
+                        highlighted[0].text = ", ".join(member_names)
+                        for run in highlighted[1:]:
+                            run.text = ""
+                        # The template keeps a literal comma immediately after
+                        # the highlighted sample name. Commas already separate
+                        # member names above, so remove only that trailing one.
+                        after_names = False
+                        for run in member_instruction.runs:
+                            if run._r is highlighted[0]._r:
+                                after_names = True
+                                continue
+                            if after_names and run.text:
+                                run.text = re.sub(r"^\s*,\s*", " ", run.text, count=1)
+                                break
+                    break
             document.save(docx_path)
             return
         super()._replace_placeholders(docx_path, values)
@@ -413,6 +453,24 @@ class TwoMemberIndividualFile1DocxTemplateGenerator(DocxTemplateGenerator):
                 )
                 for column, value in enumerate(row_values):
                     write_value(row.cells[column], value, prefer_highlight=column != 0)
+                    if column == 7:
+                        # The sample address is split across highlighted runs
+                        # with literal comma separators. Keep the first run's
+                        # formatting, but remove separators left by the sample.
+                        first_value_run = next(
+                            (
+                                run
+                                for paragraph in row.cells[column].paragraphs
+                                for run in paragraph.runs
+                                if run.text == value
+                            ),
+                            None,
+                        )
+                        if first_value_run is not None:
+                            for paragraph in row.cells[column].paragraphs:
+                                for run in paragraph.runs:
+                                    if run._r is not first_value_run._r:
+                                        run.text = ""
                     row.cells[column].vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
             break
 
@@ -506,6 +564,12 @@ class TwoMemberIndividualFile1DocxTemplateGenerator(DocxTemplateGenerator):
         digits = re.sub(r"\D", "", str(value or ""))
         return f"{int(digits):,}".replace(",", ".") if digits else ""
 
+    def _normalize_capital_asset_type(self, value: object) -> str:
+        asset_type = str(value or "").strip()
+        if not asset_type or self._fold(asset_type) == "tien mat":
+            return "Đồng Việt Nam"
+        return asset_type
+
     def _two_member_file2_members(self, values: dict[str, str]) -> list[dict[str, str]]:
         count = max(2, self._member_count(values))
         return [
@@ -519,7 +583,9 @@ class TwoMemberIndividualFile1DocxTemplateGenerator(DocxTemplateGenerator):
                     values.get(f"member_{index}_capital_amount", "")
                 ),
                 "capital_ratio": str(values.get(f"member_{index}_capital_ratio", "") or "").strip().rstrip("%"),
-                "capital_asset_type": str(values.get(f"member_{index}_capital_asset_type", "") or "Ti\u1ec1n m\u1eb7t").strip(),
+                "capital_asset_type": self._normalize_capital_asset_type(
+                    values.get(f"member_{index}_capital_asset_type", "")
+                ),
                 "capital_deadline": str(
                     values.get(f"member_{index}_capital_deadline", "")
                     or "Trong th\u1eddi h\u1ea1n 90 ng\u00e0y k\u1ec3 t\u1eeb ng\u00e0y \u0111\u01b0\u1ee3c c\u1ea5p Gi\u1ea5y ch\u1ee9ng nh\u1eadn \u0111\u0103ng k\u00fd doanh nghi\u1ec7p"
