@@ -5,13 +5,18 @@ from dataclasses import replace
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton,
+    QGridLayout, QGroupBox, QHBoxLayout, QLabel, QMessageBox, QPushButton,
     QScrollArea, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from mingo_assistant.models.case import CaseSummary
 from mingo_assistant.services.documents.location_termination_generator import LocationTerminationTemplateGenerator
 from mingo_assistant.services.organization_documents.location_certificate_service import LocationCertificateService
+from mingo_assistant.ui.widgets.combo_box import NoWheelComboBox
+from mingo_assistant.ui.views.location_certificate_recognition import (
+    LOCATION_CERTIFICATE_FIELDS,
+    build_location_certificate_result_section,
+)
 from mingo_assistant.ui.views.location_business_workspace import LocationBusinessWorkspace
 
 
@@ -57,17 +62,7 @@ TERMINATION_FIELD_GROUPS = (
     )),
 )
 
-CERTIFICATE_FIELDS = (
-    ("parent_entity_name", "Tên doanh nghiệp"),
-    ("parent_entity_registration_number", "Mã số thuế"),
-    ("location_business_name", "Tên địa điểm kinh doanh"),
-    ("location_business_code", "Mã số địa điểm kinh doanh"),
-    ("location_full_address", "Địa chỉ địa điểm kinh doanh"),
-    ("location_phone", "Điện thoại (nếu có)"),
-    ("location_fax", "Số fax (nếu có)"),
-    ("location_email", "Thư điện tử (nếu có)"),
-    ("location_website", "Website (nếu có)"),
-)
+CERTIFICATE_FIELDS = LOCATION_CERTIFICATE_FIELDS
 
 
 class LocationBusinessTerminationWorkspace(LocationBusinessWorkspace):
@@ -109,36 +104,7 @@ class LocationBusinessTerminationWorkspace(LocationBusinessWorkspace):
         return header
 
     def _build_organization_result_section(self) -> QWidget:
-        group = QGroupBox("Thông tin giấy chứng nhận địa điểm kinh doanh nhận diện")
-        group.setObjectName("CccdResultCard")
-        grid = QGridLayout(group)
-        grid.setHorizontalSpacing(14)
-        grid.setVerticalSpacing(8)
-        grid.setColumnStretch(1, 1)
-        grid.setColumnStretch(3, 1)
-        self.organization_document_label = QLabel("Chưa tải giấy chứng nhận địa điểm kinh doanh")
-        self.organization_document_label.setObjectName("FilterLabel")
-        self.organization_document_label.setWordWrap(True)
-        grid.addWidget(self.organization_document_label, 0, 0, 1, 4)
-        # A company name can be much longer than a tax code.  Give each of
-        # these identity values its own full-width row so the company name is
-        # never cramped against the tax-code field.
-        positions = ((1, 0, 3), (2, 0, 3), (3, 0, 3), (4, 0, 1),
-                     (5, 0, 3), (6, 0, 1), (6, 2, 1), (7, 0, 1), (7, 2, 1))
-        for (key, label_text), (row, column, span) in zip(CERTIFICATE_FIELDS, positions):
-            label = QLabel(label_text)
-            label.setObjectName("FilterLabel")
-            label.setWordWrap(True)
-            field = QLineEdit()
-            field.setPlaceholderText(label_text)
-            self.organization_card_fields[key] = field
-            grid.addWidget(label, row, column)
-            grid.addWidget(field, row, column + 1, 1, span)
-        save = QPushButton("Lưu dữ liệu giấy chứng nhận")
-        save.setObjectName("PrimaryButton")
-        save.clicked.connect(self._save_organization_profile)
-        grid.addWidget(save, 8, 0, 1, 4, Qt.AlignRight)
-        return group
+        return build_location_certificate_result_section(self)
 
     def _build_form_section(self) -> QWidget:
         group = QGroupBox("Thông tin dùng để điền vào hồ sơ")
@@ -174,7 +140,15 @@ class LocationBusinessTerminationWorkspace(LocationBusinessWorkspace):
             grid.setColumnStretch(3, 1)
             target = self._person_fill_target_for_section(title)
             offset = 0
-            if target and target != "company_address":
+            if title == "Thông tin doanh nghiệp":
+                self.brc_profile_selector = NoWheelComboBox()
+                self.brc_profile_selector.currentIndexChanged.connect(self._fill_brc_from_selector)
+                self.brc_profile_selector.activated.connect(self._fill_brc_from_selector)
+                grid.addWidget(QLabel("Chọn dữ liệu BRC đã lưu"), 0, 0)
+                grid.addWidget(self.brc_profile_selector, 0, 1, 1, 3)
+                self._refresh_brc_profile_selector()
+                offset = 1
+            elif target and target != "company_address":
                 grid.addWidget(self._build_person_fill_selector(target, title), 0, 0, 1, 4)
                 offset = 1
             for field_index, (key, label_text) in enumerate(fields):
@@ -197,6 +171,56 @@ class LocationBusinessTerminationWorkspace(LocationBusinessWorkspace):
         self._select_form_section(0)
         return group
 
+    def _brc_sources(self):
+        return [
+            (index, person)
+            for index, person in enumerate(self.ocr_people)
+            if person.recognition_saved
+            and (person.saved_organization_data or person.organization_data)
+            and (
+                person.document_type == "brc"
+                or (
+                    not person.document_type
+                    and (person.saved_organization_data or person.organization_data).get("location_business_code")
+                )
+            )
+        ]
+
+    def _refresh_brc_profile_selector(self) -> None:
+        selector = getattr(self, "brc_profile_selector", None)
+        if selector is None:
+            return
+        current = str(selector.currentData() or "")
+        selector.blockSignals(True)
+        selector.clear()
+        selector.addItem("Chọn BRC để tự động điền", "")
+        for person_index, person in self._brc_sources():
+            values = person.saved_organization_data or person.organization_data
+            name = values.get("location_business_name", "") or f"Địa điểm {person_index + 1}"
+            code = values.get("location_business_code", "")
+            selector.addItem(f"{name} - {code}" if code else name, f"brc:{person_index}")
+        match = selector.findData(current)
+        if match >= 0:
+            selector.setCurrentIndex(match)
+        selector.blockSignals(False)
+
+    def _fill_brc_from_selector(self) -> None:
+        selector = getattr(self, "brc_profile_selector", None)
+        if selector is None:
+            return
+        selected = str(selector.currentData() or "")
+        if not selected.startswith("brc:"):
+            return
+        try:
+            person_index = int(selected.split(":", 1)[1])
+        except ValueError:
+            return
+        if not 0 <= person_index < len(self.ocr_people):
+            return
+        person = self.ocr_people[person_index]
+        self._set_fields_from_mapping(person.saved_organization_data or person.organization_data)
+        self._refresh_preview()
+
     def _create_field(self, key: str):
         """Use a multi-line field for the reason stated in the notice."""
         if key != "termination_reason":
@@ -209,18 +233,24 @@ class LocationBusinessTerminationWorkspace(LocationBusinessWorkspace):
         return field
 
     def _apply_organization_values_to_current_person(
-        self, values: dict[str, str], raw_text: str, extraction_method: str
+        self,
+        values: dict[str, str],
+        raw_text: str,
+        extraction_method: str,
+        *,
+        document_type: str = "brc",
     ) -> None:
         # The certificate's location manager is never inferred to be the
         # legal representative or authorized person.
         super(LocationBusinessWorkspace, self)._apply_organization_values_to_current_person(
-            values, raw_text, extraction_method
+            values,
+            raw_text,
+            extraction_method,
+            document_type=document_type,
         )
         person = self.ocr_people[self.current_person_index]
         person.name = values.get("location_business_name") or values.get("parent_entity_name") or person.name
         self._refresh_people_buttons()
-        self._set_fields_from_mapping(values)
-        self._refresh_preview()
 
     def _organization_result_values(self) -> dict[str, str]:
         values = dict(self.ocr_people[self.current_person_index].organization_data)
@@ -244,11 +274,18 @@ class LocationBusinessTerminationWorkspace(LocationBusinessWorkspace):
             )
             return
 
-        self._set_fields_from_mapping(values)
         person = self.ocr_people[self.current_person_index]
-        self._apply_organization_values_to_current_person(
-            values, self.raw_ocr_text.toPlainText(), person.organization_extraction_method or "ocr"
-        )
+        person.organization_data = dict(values)
+        person.saved_organization_data = dict(values)
+        person.recognition_type = "organization"
+        person.document_type = "brc"
+        person.recognition_saved = True
+        person.data.clear()
+        person.saved_data.clear()
+        self._refresh_brc_profile_selector()
+        selector = getattr(self, "brc_profile_selector", None)
+        if selector is not None and selector.currentData() == f"brc:{self.current_person_index}":
+            self._fill_brc_from_selector()
         saved_case = self.build_case_summary()
         try:
             self.on_save(saved_case)

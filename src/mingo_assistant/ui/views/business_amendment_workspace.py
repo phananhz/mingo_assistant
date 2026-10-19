@@ -561,7 +561,6 @@ class BusinessAmendmentWorkspace(LocationBusinessUpdateWorkspace):
             self.fields[prefix + "main"].setChecked(True)
         self.fields["change_business_lines_selected"].setChecked(True)
         self.amendment_industry_dialog.accept()
-        self.fields[prefix + "name"].setFocus()
         self._refresh_preview()
 
     def _delete_amendment_line_row(self, kind, index):
@@ -724,7 +723,9 @@ class BusinessAmendmentWorkspace(LocationBusinessUpdateWorkspace):
     def _update_organization_result_fields(self, values):
         self.organization_controller.update_result_fields(values)
 
-    def _apply_organization_values_to_current_person(self, values, raw_text, extraction_method):
+    def _apply_organization_values_to_current_person(
+        self, values, raw_text, extraction_method, *, document_type="erc"
+    ):
         self.organization_controller.apply_values_to_current_person(values, raw_text, extraction_method)
 
     def _fill_update_organization_from_selector(self):

@@ -154,6 +154,44 @@ Nu"""
         self.assertEqual(card.gender, "Nữ")
         self.assertIn("79/J4", card.permanent_address)
         self.assertEqual(card.issue_date, "13/05/2023")
+        self.assertEqual(
+            card.issue_place,
+            "Cục Cảnh sát Quản lý Hành chính về Trật tự Xã hội",
+        )
+
+    def test_parser_selects_ministry_for_identity_card_issued_from_july_2024(self) -> None:
+        qr_text = "012345678901|000000000|NGUYEN VAN TEST|01011990|Nam|Khu 1, Lam Thao, Phu Tho|19032025"
+
+        card = IdCardParser().parse_qr(qr_text)
+
+        self.assertEqual(card.issue_date, "19/03/2025")
+        self.assertEqual(card.issue_place, "Bộ Công an")
+        self.assertEqual(
+            card.to_form_values()["legal_representative_issue_place"],
+            "Bộ Công an",
+        )
+
+    def test_parser_reads_new_identity_card_residence_from_combined_ocr(self) -> None:
+        text = """--- scan 1 ---
+CĂN CƯỚC
+Số định danh cá nhân / Personal identification number: 012345678901
+Họ, chữ đệm và tên khai sinh / Full name: NGUYEN VAN TEST
+Ngày sinh / Date of birth: 01/01/1990
+Giới tính / Sex: Nam Quốc tịch / Nationality: Việt Nam
+Có giá trị đến / Date of expiry: 01/01/2030
+--- scan 2 ---
+Nơi cư trú / Place of residence:
+Khu 1, Ban Nguyen, Lam Thao, Phu Tho
+Ngày, tháng, năm cấp / Date, month, year of issue: 13/03/2025"""
+
+        card = IdCardParser().parse(text)
+
+        self.assertEqual(card.id_number, "012345678901")
+        self.assertEqual(card.nationality, "Việt Nam")
+        self.assertEqual(card.issue_date, "13/03/2025")
+        self.assertEqual(card.issue_place, "Bộ Công an")
+        self.assertEqual(card.expiry_date, "01/01/2030")
+        self.assertEqual(card.permanent_address, "Khu 1, Xã Bản Nguyên, Phú Thọ")
     def test_address_parser_uses_normalized_administrative_places(self) -> None:
         result = AddressParser().parse("79/J4, Au Co, Phuong 14, Quan 11, TP Ho Chi Mlnh")
 

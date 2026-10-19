@@ -23,7 +23,9 @@ from PySide6.QtWidgets import (
 from mingo_assistant.models.case import CaseSummary
 from mingo_assistant.models.business_registration import OcrPerson
 from mingo_assistant.services.documents.dependent_unit_generator import DependentUnitTemplateGenerator
+from mingo_assistant.services.organization_documents.location_certificate_service import LocationCertificateService
 from mingo_assistant.ui.views.business_registration_workspace import BusinessRegistrationWorkspace
+from mingo_assistant.ui.views.location_certificate_recognition import build_location_certificate_result_section
 from mingo_assistant.ui.widgets.combo_box import NoWheelComboBox
 
 
@@ -112,6 +114,15 @@ LOCATION_FIELD_GROUPS = (
 
 class LocationBusinessWorkspace(BusinessRegistrationWorkspace):
     """Reuse CCCD/PDF scanning, profiles, drafts and versioned exports."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.organization_document_service = LocationCertificateService(
+            self.address_parser, self.bundle_root
+        )
+
+    def _build_organization_result_section(self) -> QWidget:
+        return build_location_certificate_result_section(self)
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
@@ -208,8 +219,79 @@ class LocationBusinessWorkspace(BusinessRegistrationWorkspace):
             self._sync_legal_person_type()
             return section
         if not any(key == "location_manager_person_type" for key, _label in fields):
-            return super()._build_regular_form_section(title, fields)
+            section = super()._build_regular_form_section(title, fields)
+            if title == "Thông tin doanh nghiệp/chi nhánh chủ quản":
+                selector = NoWheelComboBox()
+                selector.currentIndexChanged.connect(self._fill_parent_organization_from_selector)
+                selector.activated.connect(self._fill_parent_organization_from_selector)
+                self.parent_organization_selector = selector
+                wrapper = QWidget()
+                row = QHBoxLayout(wrapper)
+                row.setContentsMargins(0, 0, 0, 0)
+                label = QLabel("Chọn dữ liệu BRC đã lưu")
+                label.setObjectName("FilterLabel")
+                row.addWidget(label)
+                row.addWidget(selector, 1)
+                grid = section.layout()
+                if isinstance(grid, QGridLayout):
+                    grid.addWidget(wrapper, grid.rowCount(), 0, 1, 4)
+                self._refresh_parent_organization_selector()
+            return section
         return self._build_location_manager_form_section(title, fields)
+
+    def _refresh_parent_organization_selector(self) -> None:
+        selector = getattr(self, "parent_organization_selector", None)
+        if selector is None:
+            return
+        current = str(selector.currentData() or "")
+        selector.blockSignals(True)
+        selector.clear()
+        selector.addItem("Chọn BRC để tự động điền", "")
+        for index, profile in enumerate(self.organization_profiles):
+            name = (
+                profile.get("location_business_name", "")
+                or profile.get("parent_entity_name", "")
+                or f"Địa điểm kinh doanh {index + 1}"
+            )
+            code = (
+                profile.get("location_business_code", "")
+                or profile.get("parent_entity_registration_number", "")
+            )
+            selector.addItem(f"{name} - {code}" if code else name, f"organization:{index}")
+        match = selector.findData(current)
+        if match >= 0:
+            selector.setCurrentIndex(match)
+        selector.blockSignals(False)
+
+    def _fill_parent_organization_from_selector(self) -> None:
+        selector = getattr(self, "parent_organization_selector", None)
+        if selector is None:
+            return
+        selected = str(selector.currentData() or "")
+        if not selected.startswith("organization:"):
+            return
+        try:
+            profile_index = int(selected.split(":", 1)[1])
+        except ValueError:
+            return
+        if not 0 <= profile_index < len(self.organization_profiles):
+            return
+        values = self.organization_profiles[profile_index]
+        self._set_fields_from_mapping({
+            "parent_entity_name": (
+                values.get("parent_entity_name", "")
+                or values.get("organization_owner_name", "")
+            ),
+            "parent_entity_registration_number": (
+                values.get("parent_entity_registration_number", "")
+                or values.get("organization_owner_registration_number", "")
+            ),
+            "location_business_name": values.get("location_business_name", ""),
+            "location_full_address": values.get("location_full_address", ""),
+            "location_phone": values.get("location_phone", ""),
+            "location_email": values.get("location_email", ""),
+        })
+        self._refresh_preview()
 
     def _build_location_manager_form_section(self, title: str, fields: list[tuple[str, str]]) -> QWidget:
         section = QGroupBox(title)
@@ -355,7 +437,10 @@ class LocationBusinessWorkspace(BusinessRegistrationWorkspace):
                 return
         profile_person.name = values["legal_representative_full_name"]
         profile_person.data = dict(values)
+        profile_person.saved_data = dict(values)
         profile_person.recognition_type = "individual"
+        profile_person.document_type = "manual_person"
+        profile_person.recognition_saved = True
         self._refresh_people_buttons()
         self._refresh_person_fill_selectors()
 
@@ -454,22 +539,32 @@ class LocationBusinessWorkspace(BusinessRegistrationWorkspace):
         values: dict[str, str],
         raw_text: str,
         extraction_method: str,
+        *,
+        document_type: str = "brc",
     ) -> None:
-        """Reuse PDF recognition, then put its company data in the location form."""
-        super()._apply_organization_values_to_current_person(values, raw_text, extraction_method)
-        self._set_fields_from_mapping({
-            "parent_entity_name": values.get("organization_owner_name", ""),
-            "parent_entity_registration_number": values.get("organization_owner_registration_number", ""),
-        })
-        self._refresh_preview()
+        """Keep recognized company data separate until the user saves and selects it."""
+        super()._apply_organization_values_to_current_person(
+            values,
+            raw_text,
+            extraction_method,
+            document_type=document_type,
+        )
+        person = self.ocr_people[self.current_person_index]
+        person.name = values.get("location_business_name") or values.get("parent_entity_name") or person.name
+        self._refresh_people_buttons()
 
     def _apply_cccd_values_to_current_person(
         self,
         card_values: dict[str, str],
         apply_to_form: bool = True,
+        recognition_saved: bool | None = None,
     ) -> None:
         """Keep a scan as an explicit dropdown source for both legal roles."""
-        super()._apply_cccd_values_to_current_person(card_values, apply_to_form=False)
+        super()._apply_cccd_values_to_current_person(
+            card_values,
+            apply_to_form=False,
+            recognition_saved=recognition_saved,
+        )
 
     def _sync_personal_data_to_case(self, card_values: dict[str, str], previous_id_number: str) -> None:
         super()._sync_personal_data_to_case(card_values, previous_id_number)
@@ -489,39 +584,74 @@ class LocationBusinessWorkspace(BusinessRegistrationWorkspace):
         self._refresh_preview()
 
     def _save_organization_profile(self) -> None:
-        """Save recognized organization data for this location dossier."""
+        """Save BRC recognition without applying it until its dropdown is selected."""
         values = self._organization_result_values()
         required = {
-            "organization_owner_name": "Tên tổ chức",
-            "organization_owner_registration_number": "Mã số doanh nghiệp/Số quyết định thành lập",
-            "organization_owner_address_detail": "Địa chỉ trụ sở chính",
+            "parent_entity_name": "Tên doanh nghiệp",
+            "parent_entity_registration_number": "Mã số thuế",
+            "location_business_name": "Tên địa điểm kinh doanh",
+            "location_business_code": "Mã số địa điểm kinh doanh",
+            "location_full_address": "Địa chỉ địa điểm kinh doanh",
         }
-        if values.get('legal_representative_person_type') == 'Người nước ngoài':
-            required['legal_representative_id_number'] = 'Số hộ chiếu người đại diện pháp luật'
         missing = [label for key, label in required.items() if not values.get(key, "").strip()]
         if missing:
-            QMessageBox.warning(self, "Cần kiểm tra dữ liệu tổ chức", "Chưa có:\n- " + "\n- ".join(missing))
+            QMessageBox.warning(
+                self,
+                "Chưa thể lưu giấy chứng nhận",
+                "Vui lòng kiểm tra và bổ sung:\n- " + "\n- ".join(missing),
+            )
             return
 
-        registration_number = values["organization_owner_registration_number"].strip()
-        existing = next(
+        saved = {key: str(value or "").strip() for key, value in values.items()}
+        person = self.ocr_people[self.current_person_index]
+        previous_code = person.saved_organization_data.get("location_business_code", "")
+        location_code = saved.get("location_business_code", "")
+        profile_index = next(
             (
-                profile
-                for profile in self.organization_profiles
-                if profile.get("organization_owner_registration_number", "") == registration_number
+                index
+                for index, profile in enumerate(self.organization_profiles)
+                if previous_code and profile.get("location_business_code") == previous_code
             ),
-            None,
+            -1,
         )
-        if existing is None:
-            self.organization_profiles.append(dict(values))
+        if profile_index < 0:
+            profile_index = next(
+                (
+                    index
+                    for index, profile in enumerate(self.organization_profiles)
+                    if profile.get("location_business_code") == location_code
+                ),
+                -1,
+            )
+        if profile_index < 0:
+            self.organization_profiles.append(saved)
+            profile_index = len(self.organization_profiles) - 1
         else:
-            existing.update(values)
-        self._apply_organization_values_to_current_person(values, self.raw_ocr_text.toPlainText(), "saved")
+            self.organization_profiles[profile_index].update(saved)
+            saved = self.organization_profiles[profile_index]
+
+        person.organization_data = dict(saved)
+        person.saved_organization_data = dict(saved)
+        person.recognition_type = "organization"
+        person.document_type = "brc"
+        person.recognition_saved = True
+        person.data.clear()
+        person.saved_data.clear()
+        self._refresh_parent_organization_selector()
+        self._synchronize_selected_organization_targets(profile_index)
+        self._refresh_preview()
         QMessageBox.information(
             self,
-            "Đã lưu dữ liệu tổ chức",
-            "Đã lưu thông tin tổ chức và điền vào phần doanh nghiệp/chi nhánh chủ quản.",
+            "Đã lưu giấy chứng nhận",
+            "Đã lưu dữ liệu BRC. Chọn profile trong dropdown để điền vào hồ sơ.",
         )
+
+    def _synchronize_selected_organization_targets(self, profile_index: int) -> None:
+        super()._synchronize_selected_organization_targets(profile_index)
+        self._refresh_parent_organization_selector()
+        selector = getattr(self, "parent_organization_selector", None)
+        if selector is not None and selector.currentData() == f"organization:{profile_index}":
+            self._fill_parent_organization_from_selector()
 
     def _sync_address_parts(self, source_key: str) -> None:
         if source_key != "location_full_address":
@@ -610,16 +740,23 @@ class LocationBusinessWorkspace(BusinessRegistrationWorkspace):
                 office.setText(suggestion)
 
     def _organization_data_for_form(self) -> dict[str, str]:
-        for person in reversed(self.ocr_people):
-            if person.organization_data:
-                return dict(person.organization_data)
-        if self.organization_profiles:
-            return dict(self.organization_profiles[-1])
+        selector = getattr(self, "parent_organization_selector", None)
+        selected = str(selector.currentData() or "") if selector is not None else ""
+        if selected.startswith("organization:"):
+            try:
+                profile_index = int(selected.split(":", 1)[1])
+            except ValueError:
+                return {}
+            if 0 <= profile_index < len(self.organization_profiles):
+                return dict(self.organization_profiles[profile_index])
         return {}
     def form_values(self, apply_defaults: bool = True) -> dict[str, str]:
         values = super().form_values(apply_defaults=False)
         organization = self._organization_data_for_form()
-        organization_name = organization.get("organization_owner_name", "").strip()
+        organization_name = (
+            organization.get("parent_entity_name", "")
+            or organization.get("organization_owner_name", "")
+        ).strip()
         if organization_name:
             values["company_name"] = organization_name
         elif values.get("parent_entity_name", "").strip():

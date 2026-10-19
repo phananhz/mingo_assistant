@@ -59,6 +59,7 @@ from mingo_assistant.services.documents.business_registration_variants import (
     TWO_MEMBER_INDIVIDUAL_VARIANT,
 )
 from mingo_assistant.services.business_lines.industry_lookup import IndustryCatalog, IndustryRow
+from mingo_assistant.services.organization_documents import DocumentTypeMismatchError
 from mingo_assistant.services.registration_offices import update_saved_registration_values
 from mingo_assistant.models.business_registration import OcrPerson
 from mingo_assistant.ui.widgets.combo_box import NoWheelComboBox
@@ -105,6 +106,11 @@ def _is_organization_owner(value: object) -> bool:
 
 class BusinessRegistrationWorkspace(QWidget):
     FORM_SCHEMA_VERSION = 1
+    RECOGNITION_CARD_BY_DOCUMENT_TYPE = {
+        "cccd": 0,
+        "erc": 1,
+        "brc": 1,
+    }
     def __init__(
         self,
         on_back,
@@ -206,7 +212,9 @@ class BusinessRegistrationWorkspace(QWidget):
             if case and case.export_dir
             else self.default_export_root
         )
-        self.ocr_people: list[OcrPerson] = [OcrPerson("Chưa có tên", role="")]
+        self.ocr_people: list[OcrPerson] = [
+            OcrPerson("Chưa có tên", role="", recognition_saved=False)
+        ]
         self.current_person_index = 0
         self._initializing = True
         self._export_thread: QThread | None = None
@@ -1217,6 +1225,7 @@ class BusinessRegistrationWorkspace(QWidget):
         profile_label.setObjectName("FilterLabel")
         self.organization_owner_profile_selector = NoWheelComboBox()
         self.organization_owner_profile_selector.currentIndexChanged.connect(self._fill_organization_owner_from_selector)
+        self.organization_owner_profile_selector.activated.connect(self._fill_organization_owner_from_selector)
         profile_row.addWidget(profile_label)
         profile_row.addWidget(self.organization_owner_profile_selector, 1)
         layout.addLayout(profile_row)
@@ -1254,6 +1263,7 @@ class BusinessRegistrationWorkspace(QWidget):
         representative_fill_label.setObjectName("FilterLabel")
         self.organization_representative_selector = NoWheelComboBox()
         self.organization_representative_selector.currentIndexChanged.connect(self._fill_organization_representative_from_selector)
+        self.organization_representative_selector.activated.connect(self._fill_organization_representative_from_selector)
         representative_fill_row.addWidget(representative_fill_label)
         representative_fill_row.addWidget(self.organization_representative_selector, 1)
         layout.addLayout(representative_fill_row)
@@ -1556,6 +1566,7 @@ class BusinessRegistrationWorkspace(QWidget):
 
         selector = NoWheelComboBox()
         selector.currentIndexChanged.connect(lambda _index, selected=target: self._fill_section_from_selector(selected))
+        selector.activated.connect(lambda _index, selected=target: self._fill_section_from_selector(selected))
         self.person_fill_selectors[target] = selector
         self._refresh_person_fill_selector(target)
 
@@ -2434,7 +2445,10 @@ class BusinessRegistrationWorkspace(QWidget):
         selector.blockSignals(False)
 
     def _person_has_saved_data(self, person: OcrPerson) -> bool:
-        return bool(person.data)
+        # Objects created by older cases and focused tests have no document
+        # type marker; keep treating their existing data as an already-saved
+        # profile. New scans always set a type and explicitly start unsaved.
+        return bool(person.saved_data or person.data) and (person.recognition_saved or not person.document_type)
 
     def _person_identity(self, data: dict[str, str]) -> str:
         id_number = str(data.get("legal_representative_id_number", "") or "").strip()
@@ -2629,10 +2643,15 @@ class BusinessRegistrationWorkspace(QWidget):
         self._refresh_preview()
 
     def _person_data_for_fill(self, person: OcrPerson) -> dict[str, str]:
-        if person.data:
-            return self._normalize_person_fill_data(person.data)
+        person_data = getattr(person, "data", {})
+        saved_data = getattr(person, "saved_data", {})
+        recognition_saved = getattr(person, "recognition_saved", True)
+        document_type = getattr(person, "document_type", "")
+        saved = saved_data or (person_data if recognition_saved or not document_type else {})
+        if saved:
+            return self._normalize_person_fill_data(saved)
         values = self.form_values()
-        if person.role == "legal_representative":
+        if getattr(person, "role", "") == "legal_representative":
             return self._normalize_person_fill_data({
                 "legal_representative_full_name": values.get("legal_representative_full_name", ""),
                 "legal_representative_id_number": values.get("legal_representative_id_number", ""),
@@ -2929,6 +2948,8 @@ class BusinessRegistrationWorkspace(QWidget):
                 recognition_type=values.get(f"person_{index}_recognition_type", ""),
                 raw_text=values.get(f"person_{index}_raw_text", ""),
                 organization_extraction_method=values.get(f"person_{index}_organization_extraction_method", ""),
+                document_type=values.get(f"person_{index}_document_type", ""),
+                recognition_saved=values.get(f"person_{index}_recognition_saved", "1") != "0",
             )
             person.data = {
                 key: values.get(f"person_{index}_{key}", "")
@@ -2946,16 +2967,29 @@ class BusinessRegistrationWorkspace(QWidget):
                 for key in ORGANIZATION_OWNER_FIELD_KEYS
                 if values.get(f"person_{index}_organization_{key}", "")
             }
+            person.saved_data = {
+                key.removeprefix(f"person_{index}_saved_"): value
+                for key, value in values.items()
+                if key.startswith(f"person_{index}_saved_")
+                and not key.startswith(f"person_{index}_saved_organization_")
+                and value
+            }
+            person.saved_organization_data = {
+                key.removeprefix(f"person_{index}_saved_organization_"): value
+                for key, value in values.items()
+                if key.startswith(f"person_{index}_saved_organization_") and value
+            }
             prefix = f"person_{index}_"
             metadata_keys = {
                 "name", "role", "front_path", "back_path", "recognition_type",
-                "raw_text", "organization_extraction_method",
+                "raw_text", "organization_extraction_method", "document_type", "recognition_saved",
             }
             person.data.update({
                 key.removeprefix(prefix): value
                 for key, value in values.items()
                 if key.startswith(prefix)
                 and not key.startswith(f"{prefix}organization_")
+                and not key.startswith(f"{prefix}saved_")
                 and key.removeprefix(prefix) not in metadata_keys
                 and value
             })
@@ -2966,6 +3000,10 @@ class BusinessRegistrationWorkspace(QWidget):
             })
             if not person.recognition_type:
                 person.recognition_type = "organization" if person.organization_data else "individual" if person.data else ""
+            if person.recognition_saved and not person.saved_data and person.data:
+                person.saved_data = dict(person.data)
+            if person.recognition_saved and not person.saved_organization_data and person.organization_data:
+                person.saved_organization_data = dict(person.organization_data)
             people.append(person)
         self.ocr_people = people or self.ocr_people
         self._restore_case_organization_profiles()
@@ -2973,6 +3011,14 @@ class BusinessRegistrationWorkspace(QWidget):
         self._refresh_beneficial_owner_list_selector()
         self._refresh_organization_representative_selector()
         self._refresh_organization_owner_selector()
+        for hook_name in (
+            "_refresh_parent_organization_selector",
+            "_refresh_update_organization_selector",
+            "_refresh_brc_profile_selector",
+        ):
+            hook = getattr(self, hook_name, None)
+            if callable(hook):
+                hook()
         self.current_person_index = 0
         self._refresh_people_buttons()
         self._refresh_selected_person_images()
@@ -2982,7 +3028,11 @@ class BusinessRegistrationWorkspace(QWidget):
         self.organization_profiles = []
         known_identities: set[str] = set()
         for person in self.ocr_people:
-            profile = person.organization_data
+            if not person.recognition_saved:
+                continue
+            profile = person.saved_organization_data or (
+                person.organization_data if person.recognition_saved else {}
+            )
             registration_number = profile.get("organization_owner_registration_number", "").strip()
             name = profile.get("organization_owner_name", "").strip()
             identity = registration_number or name.casefold()
@@ -3123,12 +3173,12 @@ class BusinessRegistrationWorkspace(QWidget):
             method = "OCR" if person.organization_extraction_method == "ocr" else "văn bản PDF"
             document_name = Path(person.front_path).name if person.front_path else "Tài liệu tổ chức"
             self.organization_document_label.setText(f"Tài liệu: {document_name} - Nhận diện bằng {method}")
-            self.recognition_result_stack.setCurrentIndex(1)
+            self._show_recognition_result(person.document_type or "erc")
             self._update_ocr_progress(100, "Đã nhận diện thông tin tổ chức", "")
             return
 
         self._update_cccd_result_fields(person.data)
-        self.recognition_result_stack.setCurrentIndex(0)
+        self._show_recognition_result("cccd")
         if person.recognition_type == "individual" and person.data:
             self._update_ocr_progress(100, "Đã nhận diện thông tin CCCD", "")
         else:
@@ -3270,6 +3320,8 @@ class BusinessRegistrationWorkspace(QWidget):
             person.recognition_type = ""
             person.raw_text = ""
             person.organization_extraction_method = ""
+            person.document_type = ""
+            person.recognition_saved = False
         else:
             person.back_path = ""
         self._refresh_selected_person_images()
@@ -3304,14 +3356,18 @@ class BusinessRegistrationWorkspace(QWidget):
         self._run_document_scan()
 
     def _run_qr_scan(self, image_path: str) -> None:
-        self.recognition_result_stack.setCurrentIndex(0)
+        self._show_recognition_result("cccd")
         QApplication.setOverrideCursor(Qt.WaitCursor)
         start = monotonic()
         try:
-            self._update_ocr_progress(0, "Đang chuẩn bị quét QR", "0 giây")
+            self._update_ocr_progress(0, "Đang chuẩn bị quét CCCD", "0 giây")
             QApplication.processEvents()
-            qr_text = self.ocr_service.scan_qr(
-                image_path,
+            person = self.ocr_people[self.current_person_index]
+            image_paths = [image_path]
+            if person.back_path and person.back_path != image_path:
+                image_paths.append(person.back_path)
+            result = self.ocr_service.scan_identity(
+                image_paths,
                 progress_callback=lambda percent, status: self._update_ocr_progress(
                     percent, status, self._format_elapsed(start)
                 ),
@@ -3319,18 +3375,23 @@ class BusinessRegistrationWorkspace(QWidget):
         except Exception as exc:
             QMessageBox.critical(
                 self,
-                "Lỗi quét QR",
-                f"Không thể quét mã QR từ ảnh CCCD:\n{exc}",
+                "Lỗi quét CCCD",
+                f"Không thể nhận diện thông tin từ ảnh CCCD:\n{exc}",
             )
             return
         finally:
             QApplication.restoreOverrideCursor()
 
-        self._update_ocr_progress(100, "Hoàn thành quét QR", self._format_elapsed(start))
-        self.raw_ocr_text.setPlainText(qr_text)
-        self._parse_ocr_text()
+        method_label = "QR" if result.method == "qr" else "OCR"
+        self._update_ocr_progress(100, f"Hoàn thành quét CCCD bằng {method_label}", self._format_elapsed(start))
+        self.raw_ocr_text.setPlainText(result.raw_text)
+        self._parse_ocr_text(result.method)
 
     def _scan_organization_document(self, path: str) -> None:
+        expected_document_type = getattr(
+            self.organization_document_service, "DOCUMENT_TYPE", "erc"
+        )
+        self._show_recognition_result(expected_document_type)
         QApplication.setOverrideCursor(Qt.WaitCursor)
         start = monotonic()
         try:
@@ -3341,6 +3402,9 @@ class BusinessRegistrationWorkspace(QWidget):
                     percent, status, self._format_elapsed(start)
                 ),
             )
+        except DocumentTypeMismatchError as exc:
+            QMessageBox.warning(self, "Sai loại tài liệu", str(exc))
+            return
         except Exception as exc:
             QMessageBox.critical(
                 self,
@@ -3351,16 +3415,19 @@ class BusinessRegistrationWorkspace(QWidget):
         finally:
             QApplication.restoreOverrideCursor()
 
-        if not self._activate_organization_owner_for_document():
-            return
-        self._apply_organization_values_to_current_person(result.values, result.raw_text, result.extraction_method)
+        self._apply_organization_values_to_current_person(
+            result.values,
+            result.raw_text,
+            result.extraction_method,
+            document_type=result.document_type,
+        )
         self._update_organization_result_fields(result.values)
         self.organization_document_label.setText(
             f"Tài liệu: {Path(path).name} - Nhận diện bằng "
             f"{'OCR' if result.extraction_method == 'ocr' else 'văn bản PDF'}"
         )
         self.raw_ocr_text.setPlainText(result.raw_text)
-        self.recognition_result_stack.setCurrentIndex(1)
+        self._show_recognition_result(result.document_type)
         self._update_ocr_progress(100, "Đã nhận diện thông tin tổ chức", self._format_elapsed(start))
         if result.warnings:
             QMessageBox.warning(
@@ -3388,50 +3455,42 @@ class BusinessRegistrationWorkspace(QWidget):
                     percent, status, self._format_elapsed(start)
                 ),
             )
+        except DocumentTypeMismatchError as exc:
+            QMessageBox.warning(self, "Sai loại tài liệu", str(exc))
+            return
         except Exception as exc:
             QMessageBox.critical(self, "Không thể đọc tài liệu", f"Không thể nhận diện thông tin tổ chức:\n{exc}")
             return
         finally:
             QApplication.restoreOverrideCursor()
 
-        if not self._activate_organization_owner_for_document():
-            return
-        self._apply_organization_values_to_current_person(result.values, result.raw_text, result.extraction_method)
+        self._apply_organization_values_to_current_person(
+            result.values,
+            result.raw_text,
+            result.extraction_method,
+            document_type=result.document_type,
+        )
         self._update_organization_result_fields(result.values)
         self.organization_document_label.setText(
             f"Tài liệu: {Path(path).name} - Nhận diện bằng "
             f"{'OCR' if result.extraction_method == 'ocr' else 'văn bản PDF'}"
         )
         self.raw_ocr_text.setPlainText(result.raw_text)
-        self.recognition_result_stack.setCurrentIndex(1)
+        self._show_recognition_result(result.document_type)
         self._update_ocr_progress(100, "Đã nhận diện thông tin tổ chức", self._format_elapsed(start))
         if result.warnings:
             QMessageBox.warning(self, "Cần kiểm tra dữ liệu tổ chức", "\n".join(result.warnings))
 
     def _activate_organization_owner_for_document(self) -> bool:
-        if self.owner_type_selector.currentText() == "Tổ chức":
-            return True
-
-        has_individual_data = any(self._field_value(key) for key in INDIVIDUAL_OWNER_FIELD_KEYS)
-        if has_individual_data:
-            answer = QMessageBox.question(
-                self,
-                "Chuyển sang chủ sở hữu tổ chức",
-                "Tài liệu doanh nghiệp chỉ dùng cho chủ sở hữu tổ chức. Dữ liệu chủ sở hữu cá nhân hiện tại sẽ bị xóa. Bạn có muốn tiếp tục?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
-            )
-            if answer != QMessageBox.Yes:
-                return False
-
-        for key in INDIVIDUAL_OWNER_FIELD_KEYS:
-            self._set_field(key, "")
-        with QSignalBlocker(self.owner_type_selector):
-            self.owner_type_selector.setCurrentText("Tổ chức")
-        self._set_active_owner_type("Tổ chức")
-        self.owner_type_selector.setVisible(True)
-        self.owner_type_selector.setEnabled(True)
+        """Compatibility hook retained for callers; recognition no longer mutates the form."""
         return True
+
+    def _show_recognition_result(self, document_type: str) -> None:
+        """Select the result card declared for a recognized document type."""
+        index = self.RECOGNITION_CARD_BY_DOCUMENT_TYPE.get(document_type)
+        if index is None or index >= self.recognition_result_stack.count():
+            raise ValueError(f"Chưa có form nhận diện cho loại tài liệu: {document_type}")
+        self.recognition_result_stack.setCurrentIndex(index)
 
     def _update_organization_result_fields(self, values: dict[str, str]) -> None:
         for key, field in self.organization_card_fields.items():
@@ -3446,13 +3505,20 @@ class BusinessRegistrationWorkspace(QWidget):
             field.blockSignals(False)
 
     def _apply_organization_values_to_current_person(
-        self, values: dict[str, str], raw_text: str, extraction_method: str
+        self,
+        values: dict[str, str],
+        raw_text: str,
+        extraction_method: str,
+        *,
+        document_type: str = "erc",
     ) -> None:
         person = self.ocr_people[self.current_person_index]
         person.organization_data = {key: value for key, value in values.items() if value}
         person.recognition_type = "organization"
         person.raw_text = raw_text
         person.organization_extraction_method = extraction_method
+        person.document_type = document_type
+        person.recognition_saved = False
         person.data.clear()
         name = values.get("organization_owner_name", "")
         if name:
@@ -3465,14 +3531,6 @@ class BusinessRegistrationWorkspace(QWidget):
         return values
 
     def _save_organization_profile(self) -> None:
-        if self.owner_type_selector.currentText() != "Tổ chức":
-            QMessageBox.warning(
-                self,
-                "Không thể lưu dữ liệu tổ chức",
-                "Dữ liệu tổ chức chỉ được phép điền khi loại chủ sở hữu là Tổ chức.",
-            )
-            return
-
         values = self._organization_result_values()
         required = {
             "organization_owner_name": "Tên tổ chức",
@@ -3488,24 +3546,67 @@ class BusinessRegistrationWorkspace(QWidget):
         saved["organization_owner_issue_place"] = _normalize_organization_issue_place(
             saved.get("organization_owner_issue_place", "")
         )
-        self._set_field("organization_owner_issue_place", saved["organization_owner_issue_place"])
+        person = self.ocr_people[self.current_person_index]
         registration_number = saved.get("organization_owner_registration_number", "")
-        existing = next(
-            (
-                profile
-                for profile in self.organization_profiles
-                if profile.get("organization_owner_registration_number") == registration_number
-            ),
-            None,
+        previous_registration_number = person.saved_organization_data.get(
+            "organization_owner_registration_number", ""
         )
-        if existing is None:
+        profile_index = next(
+            (
+                index
+                for index, profile in enumerate(self.organization_profiles)
+                if previous_registration_number
+                and profile.get("organization_owner_registration_number") == previous_registration_number
+            ),
+            -1,
+        )
+        if profile_index < 0:
+            profile_index = next(
+                (
+                    index
+                    for index, profile in enumerate(self.organization_profiles)
+                    if profile.get("organization_owner_registration_number") == registration_number
+                ),
+                -1,
+            )
+        if profile_index < 0:
             self.organization_profiles.append(saved)
+            profile_index = len(self.organization_profiles) - 1
         else:
+            existing = self.organization_profiles[profile_index]
             existing.update(saved)
             saved = existing
+        person.organization_data = dict(saved)
+        person.saved_organization_data = dict(saved)
+        person.recognition_type = "organization"
+        person.document_type = person.document_type or "erc"
+        person.recognition_saved = True
+        person.data.clear()
+        person.saved_data.clear()
         self._refresh_organization_owner_selector()
+        self._synchronize_selected_organization_targets(profile_index)
         self._refresh_preview()
-        QMessageBox.information(self, "Đã lưu dữ liệu tổ chức", "Đã lưu và điền thông tin vào phần Chủ sở hữu tổ chức.")
+        QMessageBox.information(
+            self,
+            "Đã lưu dữ liệu tổ chức",
+            "Đã lưu dữ liệu tổ chức. Chọn profile trong dropdown để điền vào hồ sơ.",
+        )
+
+    def _synchronize_selected_organization_targets(self, profile_index: int) -> None:
+        """Overwrite form groups that are still linked to the saved organization."""
+        owner_selector = self.organization_owner_profile_selector
+        if owner_selector is not None and owner_selector.currentData() == f"organization:{profile_index}":
+            self._fill_organization_owner_from_selector()
+
+        update_selector = getattr(self, "update_organization_selector", None)
+        if update_selector is not None:
+            refresh = getattr(self, "_refresh_update_organization_selector", None)
+            if callable(refresh):
+                refresh()
+            if update_selector.currentData() == f"profile:{profile_index}":
+                fill = getattr(self, "_fill_update_organization_from_selector", None)
+                if callable(fill):
+                    fill()
     def _update_ocr_progress(self, percent: int, status: str, eta: str) -> None:
         value = max(0, min(100, percent))
         self.ocr_progress.setValue(value)
@@ -3575,10 +3676,7 @@ class BusinessRegistrationWorkspace(QWidget):
             "\u0110\u1ecba ch\u1ec9 \u0111\u00e3 \u0111\u01b0\u1ee3c ng\u01b0\u1eddi d\u00f9ng x\u00e1c nh\u1eadn.",
         )
         values = self._cccd_result_values()
-        current_person_data = self._person_data_for_fill(self.ocr_people[self.current_person_index])
-        previous_id_number = current_person_data.get("legal_representative_id_number", "").strip()
-        self._apply_cccd_values_to_current_person(values)
-        self._sync_personal_data_to_case(values, previous_id_number)
+        self._apply_cccd_values_to_current_person(values, apply_to_form=False)
 
     def _update_cccd_result_fields(self, values: dict[str, str]) -> None:
         for key, field in self.ocr_card_fields.items():
@@ -3661,12 +3759,26 @@ class BusinessRegistrationWorkspace(QWidget):
         values["personal_phone"] = self._field_value("legal_representative_phone") or self._field_value("applicant_phone")
         values["personal_email"] = self._field_value("legal_representative_email") or self._field_value("applicant_email")
         saved = dict(values)
-        self._refresh_person_fill_selectors()
-        self._refresh_beneficial_owner_list_selector()
-        self._refresh_organization_representative_selector()
-        self._apply_cccd_values_to_current_person(saved)
+        self._apply_cccd_values_to_current_person(
+            saved,
+            apply_to_form=False,
+            recognition_saved=True,
+        )
+        self.ocr_people[self.current_person_index].saved_data = dict(saved)
         self._sync_personal_data_to_case(saved, previous_id_number)
+        self._synchronize_selected_person_targets(self.ocr_people[self.current_person_index])
         QMessageBox.information(self, "\u0110\u00e3 l\u01b0u d\u1eef li\u1ec7u c\u00e1 nh\u00e2n", f"\u0110\u00e3 l\u01b0u profile {full_name} cho h\u1ed3 s\u01a1 hi\u1ec7n t\u1ea1i.")
+
+    def _synchronize_selected_person_targets(self, person: OcrPerson) -> None:
+        """Reapply a saved profile to every form group currently linked to it."""
+        try:
+            person_index = self.ocr_people.index(person)
+        except ValueError:
+            return
+        source = f"person:{person_index}"
+        for target, selector in list(self.person_fill_selectors.items()):
+            if selector.currentData() == source:
+                self._fill_section_from_person(target, person)
 
     @staticmethod
     def _same_person_identity(value: object, id_numbers: set[str]) -> bool:
@@ -3683,6 +3795,11 @@ class BusinessRegistrationWorkspace(QWidget):
             return
 
         self.person_profile_synchronizer.update_people(self.ocr_people, card_values, id_numbers)
+        for person in self.ocr_people:
+            person_id = person.data.get("legal_representative_id_number", "")
+            if self._same_person_identity(person_id, id_numbers):
+                person.saved_data = dict(person.data)
+                person.recognition_saved = True
         role_values = {
             id_field: self._field_value(id_field)
             for id_field in self.person_profile_synchronizer.ROLE_ID_FIELDS.values()
@@ -3711,12 +3828,18 @@ class BusinessRegistrationWorkspace(QWidget):
         self,
         card_values: dict[str, str],
         apply_to_form: bool = True,
+        recognition_saved: bool | None = None,
     ) -> None:
         """Apply a scan to the selected company-registration role."""
         person = self.ocr_people[self.current_person_index]
         person.data = {key: value for key, value in card_values.items() if value}
         person.recognition_type = "individual"
+        person.document_type = "cccd"
+        if recognition_saved is not None:
+            person.recognition_saved = recognition_saved
         person.organization_data.clear()
+        if recognition_saved:
+            person.saved_organization_data.clear()
         person.organization_extraction_method = ""
         full_name = card_values.get("legal_representative_full_name", "")
         if full_name:
@@ -3727,21 +3850,19 @@ class BusinessRegistrationWorkspace(QWidget):
             self._apply_person_data_to_role(card_values, person.role, self.current_person_index + 1, overwrite=True)
         self._refresh_preview()
 
-    def _parse_ocr_text(self) -> None:
+    def _parse_ocr_text(self, recognition_method: str = "qr") -> None:
         text = self.raw_ocr_text.toPlainText().strip()
         if not text:
             QMessageBox.warning(self, "Ch\u01b0a c\u00f3 d\u1eef li\u1ec7u QR", "B\u1ea1n c\u1ea7n qu\u00e9t QR CCCD tr\u01b0\u1edbc.")
             return
 
-        card = self.id_parser.parse_qr(text)
+        card = self.id_parser.parse_qr(text) if recognition_method == "qr" else self.id_parser.parse(text)
         card_values = card.to_form_values()
         self._update_cccd_result_fields(card_values)
         self._apply_cccd_values_to_current_person(
             self._cccd_result_values(),
-            apply_to_form=(
-                not self._cccd_address_requires_confirmation
-                and bool(self._cccd_result_values().get("legal_representative_issue_place", ""))
-            ),
+            apply_to_form=False,
+            recognition_saved=False,
         )
         self.ocr_people[self.current_person_index].raw_text = text
         self._parse_registration_office_from_text(text)
@@ -4161,10 +4282,16 @@ class BusinessRegistrationWorkspace(QWidget):
             values[f"person_{index}_recognition_type"] = person.recognition_type
             values[f"person_{index}_raw_text"] = person.raw_text
             values[f"person_{index}_organization_extraction_method"] = person.organization_extraction_method
+            values[f"person_{index}_document_type"] = person.document_type
+            values[f"person_{index}_recognition_saved"] = "1" if person.recognition_saved else "0"
             for key, value in person.organization_data.items():
                 values[f"person_{index}_organization_{key}"] = value
             for key, value in person.data.items():
                 values[f"person_{index}_{key}"] = value
+            for key, value in person.saved_organization_data.items():
+                values[f"person_{index}_saved_organization_{key}"] = value
+            for key, value in person.saved_data.items():
+                values[f"person_{index}_saved_{key}"] = value
 
         if self.template_variant == TWO_MEMBER_INDIVIDUAL_VARIANT:
             self._synchronize_two_member_list_values(values)

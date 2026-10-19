@@ -10,10 +10,16 @@ from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox, QFrame, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QPushButton,
-    QScrollArea, QTextEdit, QVBoxLayout, QWidget,
+    QMessageBox, QScrollArea, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from mingo_assistant.models.case import CaseSummary
+from mingo_assistant.services.organization_documents.location_certificate_service import (
+    LocationCertificateService,
+)
+from mingo_assistant.ui.views.location_certificate_recognition import (
+    build_location_certificate_result_section,
+)
 from mingo_assistant.ui.views.location_business_workspace import LocationBusinessWorkspace
 from mingo_assistant.ui.widgets.combo_box import NoWheelComboBox
 
@@ -33,6 +39,15 @@ UPDATE_FIELD_GROUPS = (
 class LocationBusinessUpdateWorkspace(LocationBusinessWorkspace):
     """A reduced form for changing business-location registration content."""
 
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.organization_document_service = LocationCertificateService(
+            self.address_parser, self.bundle_root
+        )
+
+    def _build_organization_result_section(self) -> QWidget:
+        return build_location_certificate_result_section(self)
+
     def _build_header(self) -> QHBoxLayout:
         header = QHBoxLayout()
         back = QPushButton("\u2190 Quay l\u1ea1i")
@@ -42,7 +57,8 @@ class LocationBusinessUpdateWorkspace(LocationBusinessWorkspace):
         title = QLabel("Thay \u0111\u1ed5i n\u1ed9i dung \u0111\u1ecba \u0111i\u1ec3m kinh doanh")
         title.setObjectName("PageTitle")
         description = QLabel(
-            "Qu\u00e9t PDF th\u00f4ng tin doanh nghi\u1ec7p, ch\u1ecdn ng\u01b0\u1eddi \u0111\u1ea1i di\u1ec7n ph\u00e1p lu\u1eadt v\u00e0 ng\u01b0\u1eddi \u0111\u01b0\u1ee3c \u1ee7y quy\u1ec1n \u0111\u1ec3 t\u1ea1o h\u1ed3 s\u01a1 thay \u0111\u1ed5i."
+            "Qu\u00e9t gi\u1ea5y ch\u1ee9ng nh\u1eadn \u0111\u1ecba \u0111i\u1ec3m kinh doanh, ch\u1ecdn ng\u01b0\u1eddi \u0111\u1ea1i di\u1ec7n ph\u00e1p lu\u1eadt "
+            "v\u00e0 ng\u01b0\u1eddi \u0111\u01b0\u1ee3c \u1ee7y quy\u1ec1n \u0111\u1ec3 t\u1ea1o h\u1ed3 s\u01a1 thay \u0111\u1ed5i."
         )
         description.setObjectName("PageDescription")
         description.setWordWrap(True)
@@ -118,6 +134,7 @@ class LocationBusinessUpdateWorkspace(LocationBusinessWorkspace):
         selector_label.setObjectName("FilterLabel")
         self.update_organization_selector = NoWheelComboBox()
         self.update_organization_selector.currentIndexChanged.connect(self._fill_update_organization_from_selector)
+        self.update_organization_selector.activated.connect(self._fill_update_organization_from_selector)
         selector_row.addWidget(selector_label)
         selector_row.addWidget(self.update_organization_selector, 1)
         layout.addLayout(selector_row)
@@ -138,16 +155,27 @@ class LocationBusinessUpdateWorkspace(LocationBusinessWorkspace):
         seen: set[str] = set()
         for index, profile in enumerate(self.organization_profiles):
             values = dict(profile)
-            identity = values.get("organization_owner_registration_number", "") or f"profile:{index}"
+            identity = (
+                values.get("organization_owner_registration_number", "")
+                or values.get("parent_entity_registration_number", "")
+                or f"profile:{index}"
+            )
             if identity in seen:
                 continue
             seen.add(identity)
             sources.append((f"profile:{index}", values))
         for index, person in enumerate(self.ocr_people):
-            if not person.organization_data:
+            saved = person.saved_organization_data or (
+                person.organization_data if person.recognition_saved else {}
+            )
+            if not saved:
                 continue
-            values = dict(person.organization_data)
-            identity = values.get("organization_owner_registration_number", "") or f"ocr:{index}"
+            values = dict(saved)
+            identity = (
+                values.get("organization_owner_registration_number", "")
+                or values.get("parent_entity_registration_number", "")
+                or f"ocr:{index}"
+            )
             if identity in seen:
                 continue
             seen.add(identity)
@@ -163,8 +191,17 @@ class LocationBusinessUpdateWorkspace(LocationBusinessWorkspace):
         selector.clear()
         selector.addItem("Ch\u1ecdn t\u1ed5 ch\u1ee9c \u0111\u1ec3 \u0111i\u1ec1n", "")
         for source, values in self._organization_sources():
-            name = values.get("organization_owner_name", "") or "T\u1ed5 ch\u1ee9c ch\u01b0a c\u00f3 t\u00ean"
-            code = values.get("organization_owner_registration_number", "")
+            name = (
+                values.get("location_business_name", "")
+                or values.get("organization_owner_name", "")
+                or values.get("parent_entity_name", "")
+                or "T\u1ed5 ch\u1ee9c ch\u01b0a c\u00f3 t\u00ean"
+            )
+            code = (
+                values.get("location_business_code", "")
+                or values.get("organization_owner_registration_number", "")
+                or values.get("parent_entity_registration_number", "")
+            )
             selector.addItem(f"{name} - {code}" if code else name, source)
         index = selector.findData(current)
         if index >= 0:
@@ -180,27 +217,102 @@ class LocationBusinessUpdateWorkspace(LocationBusinessWorkspace):
         self._selected_update_organization = dict(values)
         if values:
             self._set_fields_from_mapping({
-                "parent_entity_name": values.get("organization_owner_name", ""),
-                "parent_entity_registration_number": values.get("organization_owner_registration_number", ""),
+                "parent_entity_name": (
+                    values.get("parent_entity_name", "")
+                    or values.get("organization_owner_name", "")
+                ),
+                "parent_entity_registration_number": (
+                    values.get("parent_entity_registration_number", "")
+                    or values.get("organization_owner_registration_number", "")
+                ),
+                "location_business_name": values.get("location_business_name", ""),
+                "location_business_code": values.get("location_business_code", ""),
+                "location_full_address": values.get("location_full_address", ""),
+                "location_phone": values.get("location_phone", ""),
+                "location_fax": values.get("location_fax", ""),
+                "location_email": values.get("location_email", ""),
+                "location_website": values.get("location_website", ""),
             })
         self._refresh_preview()
 
-    def _apply_organization_values_to_current_person(self, values: dict[str, str], raw_text: str, extraction_method: str) -> None:
-        super()._apply_organization_values_to_current_person(values, raw_text, extraction_method)
-        self._selected_update_organization = dict(values)
+    def _apply_organization_values_to_current_person(
+        self,
+        values: dict[str, str],
+        raw_text: str,
+        extraction_method: str,
+        *,
+        document_type: str = "brc",
+    ) -> None:
+        super()._apply_organization_values_to_current_person(
+            values,
+            raw_text,
+            extraction_method,
+            document_type=document_type,
+        )
+        person = self.ocr_people[self.current_person_index]
+        person.name = values.get("location_business_name") or values.get("parent_entity_name") or person.name
+        self._refresh_people_buttons()
+
+    def _organization_result_values(self) -> dict[str, str]:
+        values = dict(self.ocr_people[self.current_person_index].organization_data)
+        values.update(super()._organization_result_values())
+        return values
+
+    def _save_organization_profile(self) -> None:
+        values = self._organization_result_values()
+        required = {
+            "parent_entity_name": "Tên doanh nghiệp",
+            "parent_entity_registration_number": "Mã số thuế",
+            "location_business_name": "Tên địa điểm kinh doanh",
+            "location_business_code": "Mã số địa điểm kinh doanh",
+            "location_full_address": "Địa chỉ địa điểm kinh doanh",
+        }
+        missing = [label for key, label in required.items() if not values.get(key, "").strip()]
+        if missing:
+            QMessageBox.warning(
+                self,
+                "Chưa thể lưu giấy chứng nhận",
+                "Vui lòng kiểm tra và bổ sung:\n- " + "\n- ".join(missing),
+            )
+            return
+
+        person = self.ocr_people[self.current_person_index]
+        person.organization_data = dict(values)
+        person.saved_organization_data = dict(values)
+        person.recognition_type = "organization"
+        person.document_type = "brc"
+        person.recognition_saved = True
+        person.data.clear()
+        person.saved_data.clear()
+
+        source = f"ocr:{self.current_person_index}"
         self._refresh_update_organization_selector()
+        if self.update_organization_selector.currentData() == source:
+            self._fill_update_organization_from_selector()
+        self._refresh_preview()
+        QMessageBox.information(
+            self,
+            "Đã lưu giấy chứng nhận",
+            "Đã lưu dữ liệu BRC. Chọn profile trong dropdown để điền vào hồ sơ.",
+        )
 
     def form_values(self, apply_defaults: bool = True) -> dict[str, str]:
         values = super().form_values(apply_defaults=apply_defaults)
         organization = getattr(self, "_selected_update_organization", {})
         if organization:
-            values["company_name"] = organization.get("organization_owner_name", values.get("company_name", ""))
-            values["company_address"] = ", ".join(part for part in (
+            values["company_name"] = (
+                organization.get("parent_entity_name", "")
+                or organization.get("organization_owner_name", "")
+                or values.get("company_name", "")
+            )
+            company_address = ", ".join(part for part in (
                 organization.get("organization_owner_address_detail", ""),
                 organization.get("organization_owner_ward", ""),
                 organization.get("organization_owner_province", ""),
                 organization.get("organization_owner_country", ""),
             ) if part)
+            if company_address:
+                values["company_address"] = company_address
         supplemental_field = self.fields.get("supplemental_registration_content")
         if isinstance(supplemental_field, QTextEdit):
             # Keep the complete plain-text editor content, including explicit

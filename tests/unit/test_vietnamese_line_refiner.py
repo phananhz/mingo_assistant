@@ -18,3 +18,8 @@ class VietnameseLineRefinerTests(unittest.TestCase):
 
     def test_accepts_accented_address_with_ocr_label_zero(self):
         self.assertTrue(VietnameseLineRefiner.accept("S0 273 Ly Tu Trong", "Số 273 Lý Tự Trọng", .95))
+
+    def test_fuzzy_address_heading_enables_refinement(self):
+        for label in ("2. Dja chi:", "2. Dachi:", "2. Dia chi:", "2. Địa chỉ:"):
+            with self.subTest(label=label):
+                self.assertTrue(VietnameseLineRefiner.looks_like_address_label(label))

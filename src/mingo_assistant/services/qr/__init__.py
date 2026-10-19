@@ -1,3 +1,3 @@
-from mingo_assistant.services.qr.scanner import IdentityQrScanner
+from mingo_assistant.services.qr.scanner import IdentityQrScanner, IdentityScanResult
 
-__all__ = ["IdentityQrScanner"]
+__all__ = ["IdentityQrScanner", "IdentityScanResult"]

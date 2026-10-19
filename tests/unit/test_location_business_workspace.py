@@ -9,6 +9,8 @@ from pathlib import Path
 from PySide6.QtWidgets import QApplication, QFrame, QGroupBox, QLabel
 
 from mingo_assistant.services.documents.dependent_unit_generator import DependentUnitTemplateGenerator
+from mingo_assistant.services.organization_documents import DocumentTypeMismatchError
+from mingo_assistant.services.organization_documents.location_certificate_service import LocationCertificateService
 from mingo_assistant.ui.dialogs.dependent_unit_modal import UNIT_TYPE_SPECS
 from mingo_assistant.ui.views.business_registration_workspace import BusinessRegistrationWorkspace
 from mingo_assistant.ui.views.location_business_workspace import (
@@ -59,6 +61,37 @@ class LocationBusinessWorkspaceTest(unittest.TestCase):
                 self.assertEqual(1, case.form_schema_version)
                 self.assertEqual("Địa điểm kinh doanh A", case.company_name)
                 self.assertEqual("Không áp dụng", case.capital)
+            finally:
+                workspace.deleteLater()
+
+    def test_wrong_pdf_type_is_reported_as_a_routing_error(self) -> None:
+        project_root = Path(__file__).resolve().parents[2]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = LocationBusinessWorkspace(
+                on_back=lambda: None,
+                on_save=lambda case: None,
+                bundle_root=project_root,
+                default_export_root=Path(temp_dir),
+            )
+            try:
+                with (
+                    patch.object(
+                        workspace.organization_document_service,
+                        "extract_pdf",
+                        side_effect=DocumentTypeMismatchError("Sai loại tài liệu: cần BRC."),
+                    ),
+                    patch(
+                        "mingo_assistant.ui.views.business_registration_workspace.QMessageBox.warning"
+                    ) as warning,
+                    patch(
+                        "mingo_assistant.ui.views.business_registration_workspace.QMessageBox.critical"
+                    ) as critical,
+                ):
+                    workspace._scan_organization_document("wrong.pdf")
+
+                warning.assert_called_once()
+                self.assertEqual("Sai loại tài liệu", warning.call_args.args[1])
+                critical.assert_not_called()
             finally:
                 workspace.deleteLater()
 
@@ -203,8 +236,9 @@ class LocationBusinessWorkspaceTest(unittest.TestCase):
                     "PDF text",
                     "text",
                 )
-                self.assertEqual("C\u00d4NG TY TNHH MIN", workspace.fields["parent_entity_name"].text())
-                self.assertEqual("0312345678", workspace.fields["parent_entity_registration_number"].text())
+                self.assertEqual("", workspace.fields["parent_entity_name"].text())
+                self.assertEqual("", workspace.fields["parent_entity_registration_number"].text())
+                self.assertFalse(workspace.ocr_people[workspace.current_person_index].recognition_saved)
 
                 workspace._apply_cccd_values_to_current_person(
                     {
@@ -216,6 +250,10 @@ class LocationBusinessWorkspaceTest(unittest.TestCase):
                         "legal_representative_permanent_address": "1 Duong A, Phuong B, Ha Noi",
                     },
                     apply_to_form=True,
+                    recognition_saved=True,
+                )
+                workspace.ocr_people[workspace.current_person_index].saved_data = dict(
+                    workspace.ocr_people[workspace.current_person_index].data
                 )
                 self.assertEqual("", workspace.fields["location_manager_full_name"].text())
                 self.assertEqual("", workspace.fields["legal_representative_full_name"].text())
@@ -247,6 +285,10 @@ class LocationBusinessWorkspaceTest(unittest.TestCase):
                         "legal_representative_permanent_address": "1 Duong A, Phuong B, Ha Noi",
                     },
                     apply_to_form=True,
+                    recognition_saved=True,
+                )
+                workspace.ocr_people[workspace.current_person_index].saved_data = dict(
+                    workspace.ocr_people[workspace.current_person_index].data
                 )
                 person = workspace.ocr_people[workspace.current_person_index]
                 self.assertEqual("", workspace.fields["location_manager_full_name"].text())
@@ -261,7 +303,7 @@ class LocationBusinessWorkspaceTest(unittest.TestCase):
                 self.assertEqual("NGUY\u1ec4N V\u0102N A", workspace.form_values()["signer_full_name"])
             finally:
                 workspace.deleteLater()
-    def test_saving_recognized_organization_confirms_and_updates_parent(self) -> None:
+    def test_saving_recognized_organization_requires_dropdown_before_updating_parent(self) -> None:
         project_root = Path(__file__).resolve().parents[2]
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = LocationBusinessWorkspace(
@@ -271,20 +313,45 @@ class LocationBusinessWorkspaceTest(unittest.TestCase):
                 default_export_root=Path(temp_dir),
             )
             try:
-                workspace.organization_card_fields["organization_owner_name"].setText("COMPANY A")
-                workspace.organization_card_fields["organization_owner_registration_number"].setText("0312345678")
-                workspace.organization_card_fields["organization_owner_address_detail"].setPlainText("1 STREET A")
+                self.assertIsInstance(
+                    workspace.organization_document_service, LocationCertificateService
+                )
+                self.assertIn("location_business_code", workspace.organization_card_fields)
+                workspace.organization_card_fields["parent_entity_name"].setText("COMPANY A")
+                workspace.organization_card_fields["parent_entity_registration_number"].setText("0312345678")
+                workspace.organization_card_fields["location_business_name"].setText("LOCATION A")
+                workspace.organization_card_fields["location_business_code"].setText("00001")
+                workspace.organization_card_fields["location_full_address"].setText("1 STREET A")
                 with patch(
                     "mingo_assistant.ui.views.location_business_workspace.QMessageBox.information"
                 ) as information:
                     workspace._save_organization_profile()
                 information.assert_called_once()
+                self.assertEqual("", workspace.fields["parent_entity_name"].text())
+                selector = workspace.parent_organization_selector
+                selector.setCurrentIndex(selector.findData("organization:0"))
                 self.assertEqual("COMPANY A", workspace.fields["parent_entity_name"].text())
                 self.assertEqual("0312345678", workspace.fields["parent_entity_registration_number"].text())
                 self.assertEqual(1, len(workspace.organization_profiles))
                 values = workspace.form_values()
                 self.assertEqual("COMPANY A", values["company_name"])
-                self.assertEqual("1 STREET A", values["company_address"])
+                self.assertEqual("LOCATION A", values["location_business_name"])
+                self.assertEqual("1 STREET A", values["location_full_address"])
+
+                workspace.fields["parent_entity_name"].setText("MANUAL VALUE")
+                workspace.organization_card_fields["parent_entity_name"].setText("COMPANY A UPDATED")
+                workspace.organization_card_fields["parent_entity_registration_number"].setText("0312345679")
+                workspace.organization_card_fields["location_business_name"].setText("LOCATION A UPDATED")
+                workspace.organization_card_fields["location_full_address"].setText("2 STREET B")
+                with patch(
+                    "mingo_assistant.ui.views.location_business_workspace.QMessageBox.information"
+                ):
+                    workspace._save_organization_profile()
+                self.assertEqual("COMPANY A UPDATED", workspace.fields["parent_entity_name"].text())
+                self.assertEqual("0312345679", workspace.fields["parent_entity_registration_number"].text())
+                self.assertEqual("LOCATION A UPDATED", workspace.fields["location_business_name"].text())
+                self.assertEqual("2 STREET B", workspace.form_values()["location_full_address"])
+                self.assertEqual(1, len(workspace.organization_profiles))
             finally:
                 workspace.deleteLater()
     def test_profiles_are_case_scoped_and_foreign_profile_survives_case_reload(self) -> None:

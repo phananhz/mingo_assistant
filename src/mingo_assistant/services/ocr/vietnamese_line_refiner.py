@@ -84,6 +84,21 @@ class VietnameseLineRefiner:
                 and re.findall(r"\d+", original) == re.findall(r"\d+", candidate)
                 and SequenceMatcher(None, cls._fold(original), cls._fold(candidate)).ratio() >= 0.92)
 
+    @classmethod
+    def looks_like_address_label(cls, text):
+        folded = re.sub(r"^2", "", cls._fold(text), count=1)
+        return (
+            any(marker in folded for marker in ("diachi", "djachi", "dachi", "dijachi"))
+            or SequenceMatcher(None, folded[:8], "diachi").ratio() >= 0.72
+        )
+
+    @classmethod
+    def looks_like_certificate_heading(cls, text):
+        folded = cls._fold(text)
+        return "giaychungnh" in folded and (
+            "doanhnghiep" in folded or "diadiemkinhdoanh" in folded or "diadimkinhdoanh" in folded
+        )
+
     def _load(self):
         if self._predictor is None:
             import torch
@@ -127,15 +142,28 @@ class VietnameseLineRefiner:
         from PIL import Image
         crops, indices = [], []
         in_address = False
+        in_certificate = False
         for index, (box, text, score) in enumerate(lines):
             folded = self._fold(text)
-            if folded.startswith("2diachi"):
+            if self.looks_like_certificate_heading(text):
+                in_certificate = True
+            if folded.startswith("2") and self.looks_like_address_label(text):
                 in_address = True
-            elif folded.startswith(("dienthoai", "sofax", "3thongtin")):
+            elif folded.startswith(("dienthoai", "sofax", "3thongtin", "4thongtin")):
                 in_address = False
-            if not in_address and not any(word in folded for word in ("congty", "thuongmai", "dichvu", "diadiemkinhdoanh")):
+            if folded.startswith("5"):
+                in_certificate = False
+            relevant_keyword = any(
+                word in folded
+                for word in ("congty", "thuongmai", "dichvu", "diadiemkinhdoanh", "diachi", "djachi")
+            )
+            low_confidence_certificate_text = in_certificate and float(score) < 0.88
+            if not (in_address or relevant_keyword or low_confidence_certificate_text):
                 continue
-            if len(text) < 8 or "@" in text or sum(c.isalpha() for c in text) < 6:
+            contact_or_numeric_label = folded.startswith(
+                ("maso", "mas", "dienthoai", "sofax", "fax", "thudientu", "email", "website")
+            )
+            if (contact_or_numeric_label and not in_address) or len(text) < 8 or "@" in text or sum(c.isalpha() for c in text) < 6:
                 continue
             xs, ys = zip(*box)
             crop = image[max(0, int(min(ys))-2):int(max(ys))+3,

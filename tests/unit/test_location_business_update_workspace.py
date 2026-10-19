@@ -4,9 +4,16 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from PySide6.QtWidgets import QApplication, QCheckBox, QLineEdit, QTextEdit
 
+from mingo_assistant.services.organization_documents.location_certificate_service import (
+    LocationCertificateService,
+)
+from mingo_assistant.services.organization_documents.organization_document_service import (
+    OrganizationDocumentResult,
+)
 from mingo_assistant.ui.dialogs.dependent_unit_modal import UNIT_TYPE_SPECS
 from mingo_assistant.ui.views.location_business_update_workspace import (
     LOCATION_UPDATE_CASE_TYPE,
@@ -137,6 +144,66 @@ class LocationBusinessUpdateWorkspaceTest(unittest.TestCase):
                 self.assertEqual("X", values["change_address_selected"])
                 self.assertEqual("", values["change_supplemental_selected"])
                 self.assertEqual(LOCATION_UPDATE_CASE_TYPE, workspace.build_case_summary().case_type)
+            finally:
+                workspace.deleteLater()
+
+    def test_brc_scan_uses_certificate_parser_and_saved_dropdown_source(self) -> None:
+        project_root = Path(__file__).resolve().parents[2]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = LocationBusinessUpdateWorkspace(
+                on_back=lambda: None,
+                on_save=lambda case: None,
+                bundle_root=project_root,
+                default_export_root=Path(temp_dir),
+            )
+            try:
+                self.assertIsInstance(
+                    workspace.organization_document_service, LocationCertificateService
+                )
+                self.assertIn("location_business_code", workspace.organization_card_fields)
+
+                values = {
+                    "parent_entity_name": "COMPANY BRC",
+                    "parent_entity_registration_number": "3703458938",
+                    "location_business_name": "LOCATION BRC",
+                    "location_business_code": "00001",
+                    "location_full_address": "1 SAMPLE STREET",
+                    "location_phone": "0902000000",
+                }
+
+                def extract_pdf(*_args, **_kwargs):
+                    self.assertEqual(1, workspace.recognition_result_stack.currentIndex())
+                    return OrganizationDocumentResult(
+                        values, "BRC OCR", "ocr", document_type="brc"
+                    )
+
+                workspace.organization_document_service.extract_pdf = extract_pdf
+                workspace._scan_organization_document("certificate.pdf")
+                self.assertEqual("00001", workspace.organization_card_fields["location_business_code"].text())
+                self.assertEqual("", workspace.fields["location_business_code"].text())
+                self.assertFalse(workspace.ocr_people[0].recognition_saved)
+
+                with patch(
+                    "mingo_assistant.ui.views.location_business_update_workspace.QMessageBox.information"
+                ):
+                    workspace._save_organization_profile()
+                self.assertEqual("", workspace.fields["location_business_code"].text())
+                selector = workspace.update_organization_selector
+                selector.setCurrentIndex(selector.findData("ocr:0"))
+                self.assertEqual("00001", workspace.fields["location_business_code"].text())
+                self.assertEqual("COMPANY BRC", workspace.fields["parent_entity_name"].text())
+
+                workspace.fields["location_business_name"].setText("MANUAL VALUE")
+                workspace.organization_card_fields["location_business_name"].setText(
+                    "LOCATION BRC UPDATED"
+                )
+                with patch(
+                    "mingo_assistant.ui.views.location_business_update_workspace.QMessageBox.information"
+                ):
+                    workspace._save_organization_profile()
+                self.assertEqual(
+                    "LOCATION BRC UPDATED", workspace.fields["location_business_name"].text()
+                )
             finally:
                 workspace.deleteLater()
 

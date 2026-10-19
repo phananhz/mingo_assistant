@@ -205,3 +205,23 @@ class VietnameseDocumentOcrTests(TestCase):
         self.assertIsNotNone(result)
         self.assertEqual("CÔNG TY TNHH TRANG TRÍ NỘI THẤT HP", result.values["organization_owner_name"])
         self.assertEqual("204/3 Trần Bá Giao", result.values["organization_owner_address_detail"])
+
+    def test_erc_quality_penalizes_missing_letters_and_glued_words(self) -> None:
+        service = OrganizationDocumentService()
+
+        correct = service._field_quality(
+            "organization_owner_address_detail",
+            "Số 757D, đường Nguyễn Thị Định, phường Bình Trưng",
+        )
+        missing_letters = service._field_quality(
+            "organization_owner_address_detail",
+            "Số 757D, đường Nguyn Th Đnh, phường Bình Trưng",
+        )
+        glued_words = service._field_quality(
+            "organization_owner_address_detail",
+            "Số 15 ThanhphoHaNoi",
+        )
+
+        self.assertGreater(correct, missing_letters)
+        self.assertLess(missing_letters, 0.80)
+        self.assertLess(glued_words, 0.80)

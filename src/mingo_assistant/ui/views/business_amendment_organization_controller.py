@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
+
+from mingo_assistant.services.organization_documents import DocumentTypeMismatchError
 from shiboken6 import isValid
 
 from mingo_assistant.services.documents.business_amendment_fields import ORGANIZATION_MAPPING, REPRESENTATIVE_FIELDS
@@ -49,9 +51,8 @@ class AmendmentOrganizationController:
     def apply_values_to_current_person(self, values, raw_text: str, extraction_method: str) -> None:
         owner = self.owner
         BusinessRegistrationWorkspace._apply_organization_values_to_current_person(
-            owner, dict(values), raw_text, extraction_method
+            owner, dict(values), raw_text, extraction_method, document_type="erc"
         )
-        owner._refresh_update_organization_selector()
 
     def fill_from_selector(self) -> None:
         owner = self.owner
@@ -80,25 +81,48 @@ class AmendmentOrganizationController:
         if values.get("amendment_recognition_confirmed") != "1":
             QMessageBox.warning(owner, "Cần đối chiếu PDF", "Kiểm tra, sửa dữ liệu và tích xác nhận đối chiếu trước khi áp dụng.")
             return
+        person = owner.ocr_people[owner.current_person_index]
         code = values["organization_owner_registration_number"]
-        owner.organization_profiles = [
-            dict(profile)
-            for profile in owner.organization_profiles
-            if profile.get("organization_owner_registration_number") != code
-        ]
-        owner.organization_profiles.append(dict(values))
-        self.apply_values_to_current_person(values, owner.raw_ocr_text.toPlainText(), "reviewed")
-        owner._selected_update_organization = dict(values)
-        owner._set_fields_from_mapping({
-            target: values.get(source, "")
-            for target, source in ORGANIZATION_MAPPING.items()
-            if source in BusinessAmendmentDocumentService.RECOGNIZED_FIELDS
-        })
+        previous_code = person.saved_organization_data.get(
+            "organization_owner_registration_number", ""
+        )
+        profile_index = next(
+            (
+                index
+                for index, profile in enumerate(owner.organization_profiles)
+                if previous_code
+                and profile.get("organization_owner_registration_number") == previous_code
+            ),
+            -1,
+        )
+        if profile_index < 0:
+            profile_index = next(
+                (
+                    index
+                    for index, profile in enumerate(owner.organization_profiles)
+                    if profile.get("organization_owner_registration_number") == code
+                ),
+                -1,
+            )
+        if profile_index < 0:
+            owner.organization_profiles.append(dict(values))
+            profile_index = len(owner.organization_profiles) - 1
+        else:
+            owner.organization_profiles[profile_index].update(values)
+        person.organization_data = dict(values)
+        person.saved_organization_data = dict(values)
+        person.recognition_type = "organization"
+        person.document_type = "erc"
+        person.recognition_saved = True
+        person.data.clear()
+        person.saved_data.clear()
+        owner._refresh_update_organization_selector()
+        owner._synchronize_selected_organization_targets(profile_index)
         owner._refresh_preview()
         QMessageBox.information(
             owner,
             "Đã lưu dữ liệu tổ chức",
-            "Đã lưu dữ liệu đã đối chiếu vào hồ sơ này và điền thông tin doanh nghiệp hiện tại.",
+            "Đã lưu dữ liệu đã đối chiếu. Chọn profile trong dropdown để điền vào hồ sơ.",
         )
 
     def fill_representative_from_pdf(self) -> None:
@@ -141,6 +165,10 @@ class AmendmentOrganizationController:
                     percent, status, owner._format_elapsed(start)
                 ) if isValid(owner) else None,
             )
+        except DocumentTypeMismatchError as exc:
+            if isValid(owner):
+                QMessageBox.warning(owner, "Sai loại tài liệu", str(exc))
+            return
         except Exception as exc:
             if isValid(owner):
                 QMessageBox.critical(owner, "Không thể đọc tài liệu", str(exc))
@@ -168,7 +196,7 @@ class AmendmentOrganizationController:
         self.update_result_fields(values)
         owner.raw_ocr_text.setPlainText(result.raw_text)
         owner.organization_document_label.setText(f"Tài liệu: {Path(path).name} — cần đối chiếu dữ liệu nhận diện")
-        owner.recognition_result_stack.setCurrentIndex(1)
+        owner._show_recognition_result(result.document_type)
         owner._update_ocr_progress(100, "Đã nhận diện — cần đối chiếu PDF", owner._format_elapsed(start))
 
     def choose_document(self) -> None:

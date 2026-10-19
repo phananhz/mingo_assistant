@@ -135,22 +135,24 @@ class TerminationWorkspaceTests(unittest.TestCase):
             finally:
                 workspace.deleteLater()
 
-    def test_pdf_scan_populates_form_without_assigning_legal_representative(self) -> None:
+    def test_pdf_scan_selects_brc_card_without_populating_the_dossier_form(self) -> None:
         expected_today = datetime.now()
         workspace = LocationBusinessTerminationWorkspace(on_back=lambda: None, on_save=lambda _: None)
         try:
             values = LocationCertificateService()._parse_certificate(RAPID_OCR_TEXT)
-            result = OrganizationDocumentResult(values, RAPID_OCR_TEXT, "ocr")
+            result = OrganizationDocumentResult(values, RAPID_OCR_TEXT, "ocr", document_type="brc")
             workspace.organization_document_service.extract_pdf = lambda *_args, **_kwargs: result
             with patch("mingo_assistant.ui.views.business_registration_workspace.QMessageBox.warning"):
                 workspace._scan_organization_document("certificate.pdf")
-            self.assertEqual("00001", workspace._field_value("location_business_code"))
-            self.assertEqual("3703192163", workspace._field_value("parent_entity_registration_number"))
+            self.assertEqual("", workspace._field_value("location_business_code"))
+            self.assertEqual("", workspace._field_value("parent_entity_registration_number"))
+            self.assertEqual(1, workspace.recognition_result_stack.currentIndex())
             self.assertEqual("", workspace._field_value("legal_representative_full_name"))
             self.assertEqual("", workspace._field_value("authorized_person_full_name"))
             summary = workspace.build_case_summary()
-            self.assertEqual("00001", summary.form_values["location_business_code"])
+            self.assertEqual("", summary.form_values["location_business_code"])
             self.assertEqual("organization", workspace.ocr_people[0].recognition_type)
+            self.assertFalse(workspace.ocr_people[0].recognition_saved)
             self.assertEqual("", workspace._field_value("business_registration_office"))
             self.assertEqual(expected_today.strftime("%d"), workspace._field_value("document_day"))
             self.assertEqual(expected_today.strftime("%m"), workspace._field_value("document_month"))
@@ -166,7 +168,7 @@ class TerminationWorkspaceTests(unittest.TestCase):
                 on_back=lambda: None, on_save=lambda _: None, case=summary
             )
             try:
-                self.assertEqual("00001", reopened._field_value("location_business_code"))
+                self.assertEqual("", reopened._field_value("location_business_code"))
                 self.assertEqual("136033164@qq.com", reopened.organization_card_fields["location_email"].text())
             finally:
                 reopened.deleteLater()
@@ -202,9 +204,19 @@ class TerminationWorkspaceTests(unittest.TestCase):
                 confirmation.assert_called_once()
                 self.assertEqual(1, len(saved_cases))
                 self.assertIs(workspace.case, saved_cases[0])
-                self.assertEqual("00001", saved_cases[0].form_values["location_business_code"])
+                self.assertEqual("", saved_cases[0].form_values["location_business_code"])
                 self.assertEqual("Kinh doanh không hiệu quả", saved_cases[0].form_values["termination_reason"])
                 self.assertEqual("Đã lưu dữ liệu giấy chứng nhận", workspace.ocr_status_label.text())
+                selector = workspace.brc_profile_selector
+                selector.setCurrentIndex(selector.findData("brc:0"))
+                self.assertEqual("00001", workspace._field_value("location_business_code"))
+                workspace._set_field("location_business_name", "MANUAL VALUE")
+                workspace.organization_card_fields["location_business_name"].setText("ĐỊA ĐIỂM ĐÃ CẬP NHẬT")
+                with patch(
+                    "mingo_assistant.ui.views.location_business_termination_workspace.QMessageBox.information"
+                ):
+                    button.click()
+                self.assertEqual("ĐỊA ĐIỂM ĐÃ CẬP NHẬT", workspace._field_value("location_business_name"))
 
                 stored_case = repository.get_case(saved_cases[0].id)
                 self.assertIsNotNone(stored_case)
@@ -212,6 +224,8 @@ class TerminationWorkspaceTests(unittest.TestCase):
                     on_back=lambda: None, on_save=lambda _: None, case=stored_case
                 )
                 try:
+                    selector = reopened.brc_profile_selector
+                    selector.setCurrentIndex(selector.findData("brc:0"))
                     self.assertEqual("00001", reopened._field_value("location_business_code"))
                     self.assertEqual("136033164@qq.com", reopened.organization_card_fields["location_email"].text())
                     self.assertEqual("Kinh doanh không hiệu quả", reopened._field_value("termination_reason"))

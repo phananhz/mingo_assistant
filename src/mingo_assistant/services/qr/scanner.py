@@ -1,17 +1,97 @@
 from __future__ import annotations
 
+import re
 import sys
+import unicodedata
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
+
+
+@dataclass(frozen=True)
+class IdentityScanResult:
+    """Text recognized from a CCCD image and the method that produced it."""
+
+    raw_text: str
+    method: str
+    source_path: str
 
 
 class IdentityQrScanner:
-    """Offline image-to-QR adapter with a local fallback chain."""
+    """Offline CCCD scanner: QR first, then local OCR as a fallback."""
 
     def __init__(self, bundle_root: Path | None = None) -> None:
         self._bundle_root = bundle_root
         self._wechat_detector: Any | None = None
         self._wechat_checked = False
+        self._identity_ocr_engine: Any | None = None
+
+    def scan_identity(
+        self,
+        image_paths: Iterable[str | Path],
+        progress_callback: Callable[[int, str], None] | None = None,
+    ) -> IdentityScanResult:
+        """Scan all supplied card sides, preferring the authoritative QR payload."""
+        paths: list[Path] = []
+        seen: set[str] = set()
+        for raw_path in image_paths:
+            path = Path(raw_path)
+            key = str(path.resolve()) if path.exists() else str(path)
+            if key not in seen:
+                paths.append(path)
+                seen.add(key)
+        if not paths:
+            raise FileNotFoundError("Chưa có ảnh CCCD để quét.")
+        missing = [path for path in paths if not path.exists()]
+        if len(missing) == len(paths):
+            raise FileNotFoundError(f"Không tìm thấy ảnh: {missing[0]}")
+
+        valid_paths = [path for path in paths if path.exists()]
+        qr_errors: list[str] = []
+        for index, path in enumerate(valid_paths):
+            if progress_callback:
+                progress_callback(5 + index * 25, f"Đang tìm QR trên ảnh {index + 1}/{len(valid_paths)}")
+            try:
+                value = self.scan_qr(path)
+            except Exception as exc:
+                qr_errors.append(str(exc))
+                continue
+            if progress_callback:
+                progress_callback(72, "Đã đọc được QR CCCD")
+            return IdentityScanResult(value, "qr", str(path))
+
+        recognized_pages: list[str] = []
+        recognized_source = ""
+        for index, path in enumerate(valid_paths):
+            if progress_callback:
+                progress_callback(
+                    72 + int((index / max(1, len(valid_paths))) * 23),
+                    f"Không đọc được QR, đang OCR ảnh {index + 1}/{len(valid_paths)}",
+                )
+            try:
+                text = self._recognize_identity_text(path)
+            except Exception:
+                continue
+            if text.strip():
+                if not recognized_source:
+                    recognized_source = str(path)
+                recognized_pages.append(f"--- scan {index + 1} ---\n{text.strip()}")
+
+        if recognized_pages:
+            recognized_text = "\n".join(recognized_pages)
+            if not self._looks_like_identity_ocr_text(recognized_text):
+                raise RuntimeError(
+                    "Tài liệu ảnh không phải CCCD/Căn cước hoặc không đủ rõ để xác minh loại tài liệu."
+                )
+            if progress_callback:
+                progress_callback(96, "Đã nhận diện CCCD bằng OCR")
+            return IdentityScanResult(recognized_text, "ocr", recognized_source)
+
+        detail = qr_errors[-1] if qr_errors else "Không đọc được nội dung ảnh."
+        raise RuntimeError(
+            "Không đọc được QR hoặc chữ trên CCCD. Hãy dùng ảnh gốc, chụp đủ hai mặt, "
+            f"rõ nét và không bị lóa. Chi tiết: {detail}"
+        )
 
     def scan_qr(
         self,
@@ -74,6 +154,14 @@ class IdentityQrScanner:
             "và tránh ảnh chụp màn hình đã bị nén."
         )
 
+    def _recognize_identity_text(self, image_path: Path) -> str:
+        from mingo_assistant.services.ocr.vietnamese_document_ocr import VietnameseDocumentOcr
+
+        if self._identity_ocr_engine is None:
+            self._identity_ocr_engine = VietnameseDocumentOcr(self._resource_root())
+        lines = self._identity_ocr_engine.recognize(image_path.read_bytes())
+        return "\n".join(text for text, _score in lines if text.strip())
+
     def _read_image_for_cv(self, image_path: Path) -> Any | None:
         """Read image paths containing Vietnamese/Unicode characters on Windows."""
         try:
@@ -120,7 +208,8 @@ class IdentityQrScanner:
         base_height, base_width = base.shape[:2]
         crop_boxes = [
             (0.55, 0.00, 1.00, 0.45),
-            (0.68, 0.00, 1.00, 0.36),
+            (0.62, 0.00, 1.00, 0.42),
+            (0.68, 0.02, 0.99, 0.36),
             (0.50, 0.00, 1.00, 0.60),
             (0.00, 0.00, 1.00, 1.00),
         ]
@@ -138,12 +227,63 @@ class IdentityQrScanner:
             return [image]
 
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        sharpened = cv2.addWeighted(gray, 1.7, cv2.GaussianBlur(gray, (0, 0), 1.2), -0.7, 0)
+        clahe = cv2.createCLAHE(clipLimit=2.4, tileGridSize=(8, 8)).apply(gray)
+        otsu = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+        adaptive = cv2.adaptiveThreshold(
+            gray,
+            255,
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY,
+            31,
+            7,
+        )
+
+        def enlarged(source: Any, scale: float) -> Any:
+            height, width = source.shape[:2]
+            resized = cv2.resize(source, (int(width * scale), int(height * scale)), interpolation=cv2.INTER_CUBIC)
+            border = max(16, int(min(resized.shape[:2]) * 0.05))
+            return cv2.copyMakeBorder(resized, border, border, border, border, cv2.BORDER_CONSTANT, value=255)
+
         return [
             image,
             gray,
-            cv2.createCLAHE(clipLimit=2.4, tileGridSize=(8, 8)).apply(gray),
-            cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1],
+            sharpened,
+            clahe,
+            otsu,
+            adaptive,
+            enlarged(gray, 1.5),
+            enlarged(gray, 3.0),
+            enlarged(adaptive, 3.0),
         ]
+
+    def _normalize_cccd_qr_payload(self, value: Any) -> str:
+        text = unicodedata.normalize("NFC", str(value or "")).replace("\x00", "").lstrip("\ufeff").strip()
+        parts = [part.strip() for part in re.split(r"\|+", text) if part.strip()]
+        first_digits = re.sub(r"\D", "", parts[0]) if parts else ""
+        if len(parts) < 6 or not re.fullmatch(r"\d{12}", first_digits):
+            return ""
+        return text
+
+    @staticmethod
+    def _looks_like_identity_ocr_text(value: str) -> bool:
+        normalized = unicodedata.normalize("NFD", value or "")
+        folded = "".join(
+            character
+            for character in normalized
+            if unicodedata.category(character) != "Mn"
+        ).lower().replace("đ", "d")
+        score = 2 if re.search(r"\b\d{12}\b", folded) else 0
+        marker_groups = (
+            ("can cuoc", "citizen identity", "identity card"),
+            ("ho va ten", "full name"),
+            ("ngay sinh", "date of birth"),
+            ("gioi tinh", "sex"),
+            ("quoc tich", "nationality"),
+            ("noi cu tru", "thuong tru", "place of residence"),
+        )
+        score += sum(any(marker in folded for marker in group) for group in marker_groups)
+        return score >= 3
 
     def _scan_qr_with_wechat(self, candidates: list[Any]) -> str:
         detector = self._get_wechat_detector()
@@ -155,8 +295,9 @@ class IdentityQrScanner:
             except Exception:
                 continue
             for value in values:
-                if value:
-                    return str(value).strip()
+                normalized = self._normalize_cccd_qr_payload(value)
+                if normalized:
+                    return normalized
         return ""
 
     def _get_wechat_detector(self) -> Any | None:
@@ -202,14 +343,15 @@ class IdentityQrScanner:
                     candidate,
                     formats=zxingcpp.BarcodeFormat.QRCode,
                     try_rotate=True,
-                    try_downscale=False,
+                    try_downscale=True,
+                    try_invert=True,
                 )
             except Exception:
                 continue
             for code in codes:
-                value = getattr(code, "text", "")
-                if value:
-                    return str(value).strip()
+                normalized = self._normalize_cccd_qr_payload(getattr(code, "text", ""))
+                if normalized:
+                    return normalized
         return ""
 
     def _scan_qr_with_pyzbar(self, candidates: list[Any]) -> str:
@@ -226,28 +368,33 @@ class IdentityQrScanner:
                 value = getattr(code, "data", b"")
                 if isinstance(value, bytes):
                     value = value.decode("utf-8", errors="replace")
-                if value:
-                    return str(value).strip()
+                normalized = self._normalize_cccd_qr_payload(value)
+                if normalized:
+                    return normalized
         return ""
+
     def _detect_qr_value(self, detector: Any, image: Any) -> str:
         try:
             value, _, _ = detector.detectAndDecode(image)
-            if value:
-                return value.strip()
+            normalized = self._normalize_cccd_qr_payload(value)
+            if normalized:
+                return normalized
         except Exception:
             pass
         try:
             value, _, _ = detector.detectAndDecodeCurved(image)
-            if value:
-                return value.strip()
+            normalized = self._normalize_cccd_qr_payload(value)
+            if normalized:
+                return normalized
         except Exception:
             pass
         try:
             ok, values, _, _ = detector.detectAndDecodeMulti(image)
             if ok:
                 for value in values:
-                    if value:
-                        return str(value).strip()
+                    normalized = self._normalize_cccd_qr_payload(value)
+                    if normalized:
+                        return normalized
         except Exception:
             pass
         return ""

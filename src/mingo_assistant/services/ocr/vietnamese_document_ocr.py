@@ -31,10 +31,14 @@ class VietnameseDocumentOcr:
 
     def recognize(self, image: bytes) -> list[tuple[str, float]]:
         """Return recognized lines and their confidence scores in reading order."""
+        return [(text, score) for _box, text, score in self.recognize_detailed(image)]
+
+    def recognize_detailed(self, image: bytes) -> list[tuple[Any, str, float]]:
+        """Return geometry, text and confidence so downstream parsers can refine lines."""
         engine = self._get_engine()
         result, _elapsed = engine(image, text_score=0.25)
         return [
-            (str(line[1]).strip(), float(line[2]))
+            (line[0], str(line[1]).strip(), float(line[2]))
             for line in result or []
             if len(line) >= 3 and str(line[1]).strip()
         ]

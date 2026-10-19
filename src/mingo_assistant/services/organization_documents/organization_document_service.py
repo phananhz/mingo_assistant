@@ -16,6 +16,10 @@ from mingo_assistant.services.ocr.vietnamese_document_ocr import VietnameseDocum
 ProgressCallback = Callable[[int, str], None]
 
 
+class DocumentTypeMismatchError(ValueError):
+    """Raised before full OCR when a PDF belongs to another supported workflow."""
+
+
 @dataclass(frozen=True)
 class OrganizationDocumentResult:
     values: dict[str, str]
@@ -26,9 +30,12 @@ class OrganizationDocumentResult:
     field_sources: dict[str, str] = field(default_factory=dict)
     quality_score: float = 0.0
     processing_route: tuple[str, ...] = ()
+    document_type: str = "erc"
 
 
 class OrganizationDocumentService:
+    DOCUMENT_TYPE = "erc"
+
     """Extract organization-owner fields from common Vietnamese business PDFs."""
 
     _ESSENTIAL_FIELDS = (
@@ -51,6 +58,10 @@ class OrganizationDocumentService:
         self._progress(progress_callback, 5, "Đang mở tài liệu doanh nghiệp")
         with fitz.open(document_path) as document:
             direct_text = "\n".join(page.get_text("text") for page in document)
+            detected_type = self._validate_expected_document_type(direct_text)
+            if not detected_type:
+                quick_text = self._extract_first_page_for_type_detection(document, progress_callback)
+                self._validate_expected_document_type(quick_text)
             direct_result = self._extract_supported_document(direct_text, "text", source="pdf_text")
             if direct_result is not None and not self._needs_ocr_fallback(direct_result):
                 self._progress(progress_callback, 100, "Đã đọc thông tin tổ chức")
@@ -94,9 +105,89 @@ class OrganizationDocumentService:
             return replace(result, processing_route=tuple(route))
 
         raise ValueError(
-            "Không nhận ra mẫu tài liệu doanh nghiệp. Hãy tải lên Giấy chứng nhận đăng ký doanh nghiệp "
-            "hoặc hồ sơ có mục Thông tin về chủ sở hữu."
+            "Không nhận ra Giấy chứng nhận đăng ký doanh nghiệp (ERC) trong PDF đã chọn."
         )
+
+    @classmethod
+    def detect_document_type(cls, text: str) -> str:
+        """Classify ERC/BRC from cheap PDF text or a quick first-page OCR pass."""
+        compact = cls._compact(text)
+        if not compact:
+            return ""
+
+        brc_score = 0
+        erc_score = 0
+        if "giaychungnhandangkydiadiemkinhdoanh" in compact:
+            brc_score += 8
+        if "masodiadiemkinhdoanh" in compact or "masdiadiemkinhdoanh" in compact:
+            brc_score += 3
+        if "tendiadiemkinhdoanh" in compact or "tendiadimkinhdoanh" in compact:
+            brc_score += 3
+        if "thongtinvendoanhnghiepchinhanhchuquan" in compact:
+            brc_score += 1
+
+        if "giaychungnhandangkydoanhnghiep" in compact:
+            erc_score += 8
+        if "masodoanhnghiep" in compact or "masdoanhnghiep" in compact:
+            erc_score += 2
+        if "tencongtyvietbangtiengviet" in compact or "diachitrusochinh" in compact:
+            erc_score += 2
+
+        if brc_score >= 6 and brc_score > erc_score:
+            return "brc"
+        if erc_score >= 6 and erc_score > brc_score:
+            return "erc"
+        if "thongtinvechusohuu" in compact and "tentochuc" in compact:
+            return "other"
+        return ""
+
+    def _validate_expected_document_type(self, text: str) -> str:
+        actual = self.detect_document_type(text)
+        expected = self.DOCUMENT_TYPE
+        if not actual or actual == expected:
+            return actual
+
+        expected_label = {
+            "erc": "Giấy chứng nhận đăng ký doanh nghiệp (ERC)",
+            "brc": "Giấy chứng nhận đăng ký địa điểm kinh doanh (BRC)",
+        }.get(expected, expected.upper())
+        actual_label = {
+            "erc": "Giấy chứng nhận đăng ký doanh nghiệp (ERC)",
+            "brc": "Giấy chứng nhận đăng ký địa điểm kinh doanh (BRC)",
+            "other": "một tài liệu khác không thuộc ERC/BRC",
+        }.get(actual, actual.upper())
+        workflow = "thành lập doanh nghiệp" if expected == "erc" else "địa điểm kinh doanh"
+        raise DocumentTypeMismatchError(
+            f"Sai loại tài liệu: chức năng {workflow} chỉ nhận CCCD hoặc {expected_label}. "
+            f"Tài liệu đã chọn được nhận dạng là {actual_label}."
+        )
+
+    def _extract_first_page_for_type_detection(
+        self,
+        document: fitz.Document,
+        progress_callback: ProgressCallback | None,
+    ) -> str:
+        """Run one inexpensive OCR pass only when embedded PDF text is inconclusive."""
+        try:
+            if int(document.page_count) <= 0:
+                return ""
+            from rapidocr_onnxruntime import RapidOCR
+
+            if not hasattr(self, "_legacy_engine"):
+                self._legacy_engine = RapidOCR()
+            self._progress(progress_callback, 12, "Đang kiểm tra nhanh loại tài liệu")
+            page = document.load_page(0)
+            scale = self._render_scale(page, enhanced=False)
+            pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
+            return self._extract_page_with_ocr(
+                self._legacy_engine,
+                pixmap.tobytes("png"),
+                use_legacy=True,
+            )
+        except Exception:
+            # Type detection is an early guard. If it is inconclusive, the
+            # normal OCR pipeline remains responsible for the final result.
+            return ""
 
     def _extract_supported_document(
         self,
@@ -105,13 +196,11 @@ class OrganizationDocumentService:
         *,
         source: str | None = None,
     ) -> OrganizationDocumentResult | None:
-        # A certificate has authoritative company fields in sections 1 and 2.
-        # Do not let section 4 (owner) overwrite the company identity.
+        # Only an ERC is valid in company-establishment workflows. Its
+        # authoritative company fields are in sections 1 and 2; section 4
+        # must never be accepted as a standalone organization document.
         if self._is_business_certificate(text):
             return self._build_certificate_result(text, text, method, source=source)
-        owner_section = self._owner_section(text)
-        if self._is_usable_owner_section(owner_section):
-            return self._build_owner_section_result(owner_section, text, method, source=source)
         return None
 
     def _extract_with_ocr(
@@ -143,13 +232,24 @@ class OrganizationDocumentService:
                 percent = 25 + int((index / page_count) * 49)
                 status = "Đang nhận diện"
             self._progress(progress_callback, percent, f"{status} trang {index + 1}/{page_count}")
-            scale = 3.0 if enhanced else 2.0
+            scale = self._render_scale(page, enhanced=enhanced)
             image = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
             image_bytes = image.tobytes("png")
             if enhanced:
                 image_bytes = self._preprocess_for_ocr(image_bytes)
             pages.append(self._extract_page_with_ocr(engine, image_bytes, use_legacy=use_legacy))
         return "\n".join(pages)
+
+    @staticmethod
+    def _render_scale(page, *, enhanced: bool) -> float:
+        """Render small/normal pages sharply without exploding unusually large pages."""
+        longest_side = max(float(page.rect.width), float(page.rect.height), 1.0)
+        # The bundled detector is calibrated well around 2x for ordinary A4
+        # certificates. Upscaling every page can merge thin Vietnamese glyphs,
+        # so reserve the larger render for the quality-triggered enhanced pass.
+        target_pixels = 3000.0 if enhanced else 1600.0
+        minimum, maximum = (3.0, 3.6) if enhanced else (2.0, 2.5)
+        return max(minimum, min(maximum, target_pixels / longest_side))
 
     @staticmethod
     def _preprocess_for_ocr(image_bytes: bytes) -> bytes:
@@ -195,9 +295,22 @@ class OrganizationDocumentService:
         """Prefer bundled PP-OCRv6, retaining the existing engine as a safe fallback."""
         if not use_legacy and self._vietnamese_ocr and self._vietnamese_ocr.is_available:
             try:
-                lines = self._vietnamese_ocr.recognize(image_bytes)
+                lines = self._vietnamese_ocr.recognize_detailed(image_bytes)
                 if lines:
-                    return "\n".join(text for text, _score in lines)
+                    try:
+                        import cv2
+                        import numpy as np
+                        from mingo_assistant.services.ocr.vietnamese_line_refiner import VietnameseLineRefiner
+
+                        if not hasattr(self, "_line_refiner"):
+                            self._line_refiner = VietnameseLineRefiner(self._vietnamese_ocr.model_dir)
+                        image = cv2.imdecode(np.frombuffer(image_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
+                        if image is not None:
+                            lines = self._line_refiner.refine(image, lines)
+                    except Exception:
+                        # PP-OCRv6 text remains usable if optional VietOCR refinement fails.
+                        pass
+                    return "\n".join(text for _box, text, _score in lines)
             except Exception:
                 # A damaged optional model must never prevent a user from
                 # reading a PDF with the formerly shipped OCR engine.
@@ -445,6 +558,7 @@ class OrganizationDocumentService:
             field_sources=field_sources,
             quality_score=quality_score,
             processing_route=(actual_source,),
+            document_type=self.DOCUMENT_TYPE,
         )
 
     def _merge_results(
@@ -470,11 +584,19 @@ class OrganizationDocumentService:
         for key in keys:
             ranked: list[tuple[tuple[float, int, int], OrganizationDocumentResult, str, float]] = []
             distinct_strong_values: set[str] = set()
+            agreement_counts: dict[str, int] = {}
+            for result in candidates:
+                candidate_value = result.values.get(key, "").strip()
+                if candidate_value:
+                    canonical = self._compact(candidate_value)
+                    agreement_counts[canonical] = agreement_counts.get(canonical, 0) + 1
             for result in candidates:
                 value = result.values.get(key, "").strip()
                 confidence = result.field_confidences.get(key, self._field_quality(key, value))
                 source = result.field_sources.get(key, result.extraction_method)
                 if value:
+                    agreement = agreement_counts.get(self._compact(value), 1)
+                    confidence = min(0.99, confidence + (0.03 * (agreement - 1)))
                     ranked.append((self._candidate_rank(key, value, confidence, source), result, value, confidence))
                     if confidence >= 0.80:
                         distinct_strong_values.add(self._compact(value))
@@ -524,6 +646,7 @@ class OrganizationDocumentService:
             field_sources=field_sources,
             quality_score=self._result_quality(field_confidences),
             processing_route=route,
+            document_type=self.DOCUMENT_TYPE,
         )
 
     def _candidate_rank(
@@ -579,7 +702,8 @@ class OrganizationDocumentService:
             suspicious = sum(not (character.isalnum() or character.isspace() or character in "&.,'()-/") for character in value)
             if suspicious / max(len(value), 1) > 0.08:
                 return 0.45
-            return 0.94 if len(value) >= 10 else 0.82
+            base = 0.94 if len(value) >= 10 else 0.82
+            return min(base, self._vietnamese_text_integrity(value))
 
         if key == "organization_owner_address_detail":
             compact = self._compact(value)
@@ -593,8 +717,8 @@ class OrganizationDocumentService:
                 "thanhpho", "ap", "thon", "khu", "street", "road", "room",
             )
             if len(value) >= 16 and any(marker in compact for marker in address_markers):
-                return 0.93
-            return 0.78 if len(value) >= 10 else 0.45
+                return min(0.93, self._vietnamese_text_integrity(value))
+            return min(0.78 if len(value) >= 10 else 0.45, self._vietnamese_text_integrity(value))
 
         if key == "organization_owner_issue_date":
             for pattern in ("%d/%m/%Y", "%d-%m-%Y"):
@@ -624,6 +748,45 @@ class OrganizationDocumentService:
             return 0.90 if len(value) >= 3 else 0.55
 
         return 0.80
+
+    @classmethod
+    def _vietnamese_text_integrity(cls, value: str) -> float:
+        """Penalize likely lost letters/spacing without guessing the intended proper noun."""
+        if not value:
+            return 0.0
+        words = re.findall(r"[^\W\d_]+", value, flags=re.UNICODE)
+        consonant_only = 0
+        for word in words:
+            folded = cls._fold(word)
+            if len(folded) >= 3 and not any(vowel in folded for vowel in "aeiouy"):
+                # Legal abbreviations such as TNHH and JSC are valid.
+                if not (word.isupper() and len(word) <= 6):
+                    consonant_only += 1
+        if consonant_only >= 2:
+            return 0.58
+        if consonant_only == 1:
+            return 0.72
+
+        glued_words = sum(
+            1
+            for word in words
+            if sum(left.islower() and right.isupper() for left, right in zip(word, word[1:])) >= 2
+        )
+        if glued_words:
+            return 0.74
+
+        folded_value = cls._fold(value)
+        vietnamese_markers = (
+            "congty", "thuongmai", "dichvu", "diachi", "duong", "phuong",
+            "thanhpho", "doanhnghiep", "diadiemkinhdoanh",
+        )
+        accent_count = sum(
+            unicodedata.combining(character) != 0
+            for character in unicodedata.normalize("NFD", value)
+        )
+        if accent_count == 0 and any(marker in folded_value for marker in vietnamese_markers):
+            return 0.86
+        return 1.0
 
     @classmethod
     def _result_quality(cls, field_confidences: dict[str, float]) -> float:
@@ -895,6 +1058,7 @@ class OrganizationDocumentService:
             (r"(?i)\btai\s*chinh\s*doanh\s*nghiep\b", "Tài chính doanh nghiệp"),
             (r"(?i)\bva\s*kinh\s*te\s*tap\s*the\b", "và Kinh tế tập thể"),
             (r"(?i)\bthanh\s*pho\s*ho\s*chi\s*minh\b", "Thành phố Hồ Chí Minh"),
+            (r"(?i)\bthanh\s*pho\s*thu\s*d[ui]r?c\b", "Thành phố Thủ Đức"),
             (r"(?i)\bthanh\s*pho\s*ha\s*noi\b", "Thành phố Hà Nội"),
             (r"(?i)\bthanh\s*ph[0o6]\s*ha\s*n[qo]i\b", "Thành phố Hà Nội"),
             (r"(?i)\btinh\s*vinh\s*long\b", "Tỉnh Vĩnh Long"),
@@ -908,6 +1072,8 @@ class OrganizationDocumentService:
             (r"(?i)\btran\s*ba\s*giao\b", "Trần Bá Giao"),
             (r"(?i)\bphng\s*5\b", "Phường 5"),
             (r"(?i)\bhoang\s*cau\b", "Hoàng Cầu"),
+            (r"(?i)\bbach\s*mai\b", "Bạch Mai"),
+            (r"(?i)\bthira\s+dat\b", "Thửa đất"),
             (r"(?i)\bao\s*doi\b", "Ao Đôi"),
             (r"(?i)\bphu\s*chien\b", "Phú Chiến"),
             (r"(?i)\bnha\s*xuong\b", "Nhà xưởng"),
@@ -916,7 +1082,7 @@ class OrganizationDocumentService:
             (r"(?i)\bng[0o]\b", "ngõ"),
             (r"(?i)\bcong\s*nghiep\b", "công nghiệp"),
             (r"(?i)\bsan\s*xuat\b", "sản xuất"),
-            (r"(?i)\bs[0o]\s*(?=\d)", "Số "),
+            (r"(?i)\bs[0o6]\s*(?=\d)", "Số "),
             (r"(?i)\bngach\b", "ngách"),
             (r"(?i)\bngo\b", "ngõ"),
             (r"(?i)\bduong\b", "đường"),

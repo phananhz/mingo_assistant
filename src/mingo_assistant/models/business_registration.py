@@ -11,7 +11,11 @@ class OcrPerson:
     front_path: str = ""
     back_path: str = ""
     data: dict[str, str] = field(default_factory=dict)
+    saved_data: dict[str, str] = field(default_factory=dict)
     recognition_type: str = ""
     raw_text: str = ""
     organization_data: dict[str, str] = field(default_factory=dict)
+    saved_organization_data: dict[str, str] = field(default_factory=dict)
     organization_extraction_method: str = ""
+    document_type: str = ""
+    recognition_saved: bool = True

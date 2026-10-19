@@ -9,6 +9,11 @@ from difflib import SequenceMatcher
 from mingo_assistant.services.normalization.administrative_place_matcher import AdministrativePlaceMatcher
 
 
+CCCD_ISSUE_PLACE_LEGACY = "Cục Cảnh sát Quản lý Hành chính về Trật tự Xã hội"
+CCCD_ISSUE_PLACE_CURRENT = "Bộ Công an"
+CURRENT_ID_CARD_START_DATE = date(2024, 7, 1)
+
+
 @dataclass
 class ExtractedIdCard:
     full_name: str = ""
@@ -22,6 +27,7 @@ class ExtractedIdCard:
     address_message: str = ""
     place_of_origin: str = ""
     issue_date: str = ""
+    issue_place: str = ""
     expiry_date: str = ""
     raw_text: str = ""
     unknown_lines: list[str] = field(default_factory=list)
@@ -39,6 +45,7 @@ class ExtractedIdCard:
             "legal_representative_address_status": self.address_status,
             "legal_representative_address_message": self.address_message,
             "legal_representative_issue_date": self.issue_date,
+            "legal_representative_issue_place": self.issue_place,
             "legal_representative_expiry_date": self.expiry_date,
         }
 
@@ -56,10 +63,28 @@ class IdCardParser:
         card.id_number = self._find_id_number(joined)
         card.date_of_birth = self._find_date_of_birth(lines, joined)
         card.gender = self._find_gender(lines) or self._gender_from_id_number(card.id_number)
+        card.nationality = self._find_nationality(joined)
         card.full_name = self._find_name(lines)
-        raw_permanent_address = self._find_address(lines, ["thuong tru", "residence", "place of residence"])
+        card.issue_date = self._find_issue_date(lines)
+        card.issue_place = self._infer_issue_place(card.issue_date, joined)
+        card.expiry_date = self._find_expiry(lines)
+        raw_permanent_address = self._find_address(
+            lines,
+            ["thuong tru", "noi cu tru", "cu tru", "residence", "place of residence"],
+        )
         self._set_card_permanent_address(card, raw_permanent_address)
-        card.place_of_origin = self._find_address(lines, ["que quan", "origin", "ongin", "place of origin", "nguyen quan"])
+        card.place_of_origin = self._find_address(
+            lines,
+            [
+                "que quan",
+                "noi dang ky khai sinh",
+                "origin",
+                "ongin",
+                "place of origin",
+                "place of birth",
+                "nguyen quan",
+            ],
+        )
         card.place_of_origin = self.place_matcher.normalize_address(card.place_of_origin)
         completed_address = self._complete_residence_with_origin(
             card.permanent_address,
@@ -98,6 +123,7 @@ class IdCardParser:
 
         if not card.id_number:
             card.warnings.append("Mã QR không có số CCCD 12 số; thông tin CMND cũ đã được bỏ qua.")
+        card.issue_place = self._infer_issue_place(card.issue_date, qr_text)
         card.nationality = "Vi\u1ec7t Nam"
         card.unknown_lines = parts
         return card
@@ -211,6 +237,44 @@ class IdCardParser:
                 nearby = " ".join(lines[index : index + 3])
                 return self._find_first_date(nearby)
         return ""
+
+    def _find_issue_date(self, lines: list[str]) -> str:
+        markers = ["ngay cap", "date of issue", "year of issue", "ngay, thang, nam cap"]
+        for index, line in enumerate(lines):
+            folded = self._fold(line)
+            if not any(marker in folded for marker in markers):
+                continue
+            date_value = self._find_first_date(" ".join(lines[index : index + 4]))
+            if date_value:
+                return date_value
+        return ""
+
+    def _infer_issue_place(self, issue_date: str, raw_text: str = "") -> str:
+        """Return one of the two issuing authorities used by the CCCD form.
+
+        QR payloads contain the issue date but not the issuing authority. Cards
+        issued from 01/07/2024 use the new Identity Card design displaying
+        "Bộ Công an"; earlier CCCD cards use the C06 authority. When OCR has
+        read an authority explicitly, that text takes precedence over the date.
+        """
+        folded = self._fold(raw_text)
+        if "bo cong an" in folded or "ministry of public security" in folded:
+            return CCCD_ISSUE_PLACE_CURRENT
+        legacy_markers = (
+            "cuc canh sat quan ly hanh chinh ve trat tu xa hoi",
+            "cuc canh sat qlhc ve ttxh",
+        )
+        if any(marker in folded for marker in legacy_markers):
+            return CCCD_ISSUE_PLACE_LEGACY
+
+        try:
+            day, month, year = self._date_parts(issue_date)
+            issued_on = date(year, month, day)
+        except (AttributeError, TypeError, ValueError):
+            return ""
+        if issued_on >= CURRENT_ID_CARD_START_DATE:
+            return CCCD_ISSUE_PLACE_CURRENT
+        return CCCD_ISSUE_PLACE_LEGACY
 
     def _find_gender(self, lines: list[str]) -> str:
         for index, line in enumerate(lines):
@@ -447,9 +511,15 @@ class IdCardParser:
     def _is_noisy_address_marker(self, line: str, folded_keywords: list[str]) -> bool:
         folded = self._fold(line)
         if self._expects_origin_marker(folded_keywords):
-            return self._has_fuzzy_marker(folded, ["que quan", "place of origin", "place of ongin", "qui quan", "placo"])
+            return self._has_fuzzy_marker(
+                folded,
+                ["que quan", "noi dang ky khai sinh", "place of origin", "place of birth", "place of ongin", "qui quan", "placo"],
+            )
         if self._expects_residence_marker(folded_keywords):
-            return self._has_fuzzy_marker(folded, ["noi thuong tru", "thuong tru", "uong uu", "place of residence", "place of residenc", "residenc"])
+            return self._has_fuzzy_marker(
+                folded,
+                ["noi thuong tru", "noi cu tru", "cu tru", "thuong tru", "uong uu", "place of residence", "place of residenc", "residenc"],
+            )
         return False
 
     def _has_fuzzy_marker(self, folded: str, markers: list[str]) -> bool:
@@ -478,10 +548,10 @@ class IdCardParser:
 
     def _is_other_address_marker(self, line: str, folded_keywords: list[str]) -> bool:
         folded = self._fold(line)
-        residence_keywords = ["thuong tru", "residence", "place of residence"]
-        origin_keywords = ["que quan", "origin", "ongin", "place of origin", "nguyen quan"]
-        has_residence = any(marker in folded for marker in ["thuong tru", "residence"]) or self._is_noisy_address_marker(line, residence_keywords)
-        has_origin = any(marker in folded for marker in ["que quan", "origin", "ongin"]) or self._is_noisy_address_marker(line, origin_keywords)
+        residence_keywords = ["thuong tru", "noi cu tru", "cu tru", "residence", "place of residence"]
+        origin_keywords = ["que quan", "noi dang ky khai sinh", "origin", "ongin", "place of origin", "place of birth", "nguyen quan"]
+        has_residence = any(marker in folded for marker in ["thuong tru", "noi cu tru", "cu tru", "residence"]) or self._is_noisy_address_marker(line, residence_keywords)
+        has_origin = any(marker in folded for marker in ["que quan", "dang ky khai sinh", "origin", "ongin", "place of birth"]) or self._is_noisy_address_marker(line, origin_keywords)
         if self._expects_residence_marker(folded_keywords):
             return has_origin
         if self._expects_origin_marker(folded_keywords):
@@ -489,19 +559,26 @@ class IdCardParser:
         return False
 
     def _expects_residence_marker(self, folded_keywords: list[str]) -> bool:
-        return any(keyword in {"thuong tru", "residence", "place of residence"} for keyword in folded_keywords)
+        return any(keyword in {"thuong tru", "noi cu tru", "cu tru", "residence", "place of residence"} for keyword in folded_keywords)
 
     def _expects_origin_marker(self, folded_keywords: list[str]) -> bool:
-        return any(keyword in {"que quan", "origin", "ongin", "place of origin", "nguyen quan"} for keyword in folded_keywords)
+        return any(
+            keyword in {"que quan", "noi dang ky khai sinh", "origin", "ongin", "place of origin", "place of birth", "nguyen quan"}
+            for keyword in folded_keywords
+        )
 
     def _is_address_marker_only(self, line: str) -> bool:
         folded = self._fold(line).strip(" :")
         markers = {
             "noi",
             "thuong tru",
+            "noi cu tru",
+            "cu tru",
             "place of residence",
             "que quan",
+            "noi dang ky khai sinh",
             "place of origin",
+            "place of birth",
         }
         return folded in markers
 
@@ -511,13 +588,17 @@ class IdCardParser:
                 r"place\s+of\s+residence",
                 r"noi\s+thuong\s+tru",
                 r"n[oơ]i\s+th[uư][oờ]ng\s+tr[uú]",
+                r"noi\s+cu\s+tru",
+                r"n[oơ]i\s+c[uư]\s+tr[uú]",
             ]
         else:
             patterns = [
                 r"place\s+of\s+origin",
+                r"place\s+of\s+birth",
                 r"place\s+o[ií]\s+on?gin",
                 r"que\s+quan",
                 r"qu[eê]\s+qu[aá]n",
+                r"noi\s+dang\s+ky\s+khai\s+sinh",
             ]
         latest_end = -1
         for pattern in patterns:
@@ -534,9 +615,19 @@ class IdCardParser:
         if not tail:
             return tail
         if self._expects_residence_marker(folded_keywords):
-            patterns = [r"place\s+of\s+origin", r"place\s+o[ií]\s+on?gin", r"que\s+quan", r"qu[eê]\s+qu[aá]n"]
+            patterns = [r"place\s+of\s+origin", r"place\s+of\s+birth", r"place\s+o[ií]\s+on?gin", r"que\s+quan", r"qu[eê]\s+qu[aá]n", r"noi\s+dang\s+ky\s+khai\s+sinh"]
         else:
-            patterns = [r"place\s+of\s+residence", r"noi\s+thuong\s+tru", r"n[oơ]i\s+th[uư][oờ]ng\s+tr[uú]"]
+            patterns = [r"place\s+of\s+residence", r"noi\s+thuong\s+tru", r"n[oơ]i\s+th[uư][oờ]ng\s+tr[uú]", r"noi\s+cu\s+tru", r"n[oơ]i\s+c[uư]\s+tr[uú]"]
+        patterns.extend(
+            [
+                r"ng[aà]y\s*,?\s*th[aá]ng\s*,?\s*n[aă]m\s+c[aấ]p",
+                r"ng[aà]y\s+c[aấ]p",
+                r"date\s*,?\s*month\s*,?\s*year\s+of\s+issue",
+                r"date\s+of\s+issue",
+                r"c[oó]\s+gi[aá]\s+tr[iị]",
+                r"date\s+of\s+expiry",
+            ]
+        )
         cut_at: int | None = None
         for pattern in patterns:
             match = re.search(pattern, tail, flags=re.IGNORECASE)
@@ -558,8 +649,12 @@ class IdCardParser:
             "co gia",
             "expiry",
             "thuong tru",
+            "noi cu tru",
+            "cu tru",
             "residence",
             "que quan",
+            "noi dang ky khai sinh",
+            "place of birth",
             "origin",
         ]
         return any(marker in folded for marker in markers)

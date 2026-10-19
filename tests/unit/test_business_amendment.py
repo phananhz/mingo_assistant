@@ -20,7 +20,7 @@ from mingo_assistant.ui.main_window import MainWindow
 from mingo_assistant.ui.views.business_amendment_workspace import (
     BUSINESS_AMENDMENT_CASE_TYPE, BusinessAmendmentWorkspace,
 )
-from mingo_assistant.services.documents.business_amendment_fields import AMENDMENT_FIELD_GROUPS, SLOTS
+from mingo_assistant.services.documents.business_amendment_fields import AMENDMENT_FIELD_GROUPS
 from mingo_assistant.models.case import CaseSummary
 from mingo_assistant.ui.views.business_registration_workspace import BusinessRegistrationWorkspace
 
@@ -675,6 +675,35 @@ class BusinessAmendmentWorkflowTests(unittest.TestCase):
         self.assertEqual(5, workspace.amendment_line_tables["remove"].rowCount())
         self.assertEqual(min(target, bar.maximum()), bar.value())
 
+    def test_adding_industry_does_not_force_outer_workspace_to_scroll(self):
+        self.window._open_business_amendment_modal()
+        workspace = self.window.current_workspace
+        workspace.fields["change_business_lines_selected"].setChecked(True)
+        workspace._select_form_section(3)
+
+        self.window.resize(1000, 650)
+        self.window.show()
+        self.app.processEvents()
+        scroll = workspace.findChild(QScrollArea, "BusinessWorkspaceScroll")
+        self.assertIsNotNone(scroll)
+        bar = scroll.verticalScrollBar()
+        self.assertGreater(bar.maximum(), 0)
+        target = max(1, bar.maximum() // 3)
+        bar.setValue(target)
+
+        workspace._open_amendment_industry_lookup("add")
+        industry = next(
+            row for row in workspace.industry_catalog.display_rows
+            if workspace._industry_row_code(row)
+        )
+        workspace.industry_search_input.setText(workspace._industry_row_code(industry))
+        self.app.processEvents()
+        workspace.industry_results_table.selectRow(0)
+        workspace._add_selected_industry_row()
+        self.app.processEvents()
+
+        self.assertEqual(min(target, bar.maximum()), bar.value())
+
     def test_legacy_empty_template_rows_are_removed_without_losing_entered_industries(self):
         values = {"amendment_schema_version": "3", "amendment_line_add_row_count": "3",
                   "amendment_line_add_1_name": "", "amendment_line_add_1_code": "",
@@ -1173,6 +1202,9 @@ class BusinessAmendmentWorkflowTests(unittest.TestCase):
         workspace.organization_review_checkbox.setChecked(True)
         with patch("mingo_assistant.ui.views.business_amendment_workspace.QMessageBox.information"):
             workspace._save_organization_profile()
+        self.assertEqual("", workspace.fields["parent_entity_name"].text())
+        selector = workspace.update_organization_selector
+        selector.setCurrentIndex(selector.findData("profile:0"))
         self.assertEqual("PDF COMPANY", workspace.fields["parent_entity_name"].text())
         self.assertEqual("9.000.000.000", workspace.fields["registered_capital"].text())
         self.assertEqual("", workspace.fields["legal_representative_full_name"].text())
