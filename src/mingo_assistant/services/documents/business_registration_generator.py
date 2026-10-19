@@ -140,6 +140,7 @@ class DocxTemplateGenerator(DocxTemplateEngine):
         return sorted(set(placeholders))
 
     def _replace_placeholders(self, docx_path: Path, values: dict[str, str]) -> None:
+        values = self._values_for_template(docx_path.name, values)
         self._replace_bookmarked_fields_in_package(docx_path, values)
         self._replace_split_placeholders_in_package(docx_path, values)
         document = Document(docx_path)
@@ -178,6 +179,20 @@ class DocxTemplateGenerator(DocxTemplateEngine):
         self._ensure_power_of_attorney_address_font(document, docx_path.name, values)
         self._ensure_power_of_attorney_place_date_font(document, docx_path.name, values)
         document.save(docx_path)
+
+    def _values_for_template(self, template_name: str, values: dict[str, str]) -> dict[str, str]:
+        """Add values required only by the one-member personal charter."""
+        if template_name != self.PERSONAL_CHARTER_TEMPLATE:
+            return values
+        if str(values.get("beneficial_owner_nationality", "") or "").strip():
+            return values
+
+        charter_values = dict(values)
+        charter_values["beneficial_owner_nationality"] = (
+            str(values.get("legal_representative_nationality", "") or "").strip()
+            or "Việt Nam"
+        )
+        return charter_values
 
     def _replace_case_type_text(self, document: Document, values: dict[str, str]) -> None:
         try:
@@ -966,6 +981,13 @@ class DocxTemplateGenerator(DocxTemplateEngine):
         if not (place and day and month and year):
             return
         date_line = f"{place}, ngày {day} tháng {month} năm {year}"
+        if template_name == self.PERSONAL_CHARTER_TEMPLATE:
+            paragraphs = list(self._iter_paragraphs(document))
+            for index, paragraph in enumerate(paragraphs[:-1]):
+                if self._fold(paragraphs[index + 1].text) != "chu so huu":
+                    continue
+                self._replace_paragraph_text(paragraph, date_line)
+                return
         for paragraph in self._iter_paragraphs(document):
             folded = self._fold(paragraph.text)
             if not (folded.startswith(("thanh pho ", "tinh ")) and "ngay" in folded and "thang" in folded and "nam" in folded):

@@ -27,6 +27,10 @@ class RegistrationApplicationTests(unittest.TestCase):
         def province_for_office(self, office_name: str) -> str:
             return "Tỉnh Mẫu" if office_name else ""
 
+    class _CityRegistrationOffices:
+        def province_for_office(self, office_name: str) -> str:
+            return "Thành phố Đồng Nai" if office_name else ""
+
     def test_view_model_copies_state_and_exposes_domain_projection(self) -> None:
         values = {
             "company_name": "CÔNG TY TNHH TEST",
@@ -119,6 +123,14 @@ class RegistrationApplicationTests(unittest.TestCase):
         self.assertEqual(result["member_capital_ratio"], "100%")
         self.assertEqual(result["capital_source_total_ratio"], "100")
         self.assertEqual(result["business_lines"], "Bán buôn\nChi tiết: hàng mẫu [4690] - ngành nghề chính")
+
+    def test_value_composer_omits_city_prefix_for_dong_nai_signing_place(self) -> None:
+        composer = RegistrationValueComposer(self._AddressParser(), self._CityRegistrationOffices())
+
+        self.assertEqual(
+            "Đồng Nai",
+            composer.signing_place_for_office("Phòng Đăng ký kinh doanh thành phố Đồng Nai"),
+        )
 
 
 if __name__ == "__main__":

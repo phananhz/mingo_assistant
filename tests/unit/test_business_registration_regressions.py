@@ -1,3 +1,5 @@
+import shutil
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -346,5 +348,51 @@ class BusinessRegistrationRegressionTest(unittest.TestCase):
         )
 
         self.assertEqual(table.rows[1].cells[5].text, "")
+
+    def test_one_member_charter_fills_owner_nationality_and_country_only(self) -> None:
+        template_dir = (
+            Path(__file__).resolve().parents[2]
+            / "assets"
+            / "templates"
+            / "word"
+            / "business_registration"
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / DocxTemplateGenerator.PERSONAL_CHARTER_TEMPLATE
+            shutil.copy2(template_dir / output_path.name, output_path)
+            generator = DocxTemplateGenerator(template_dir, Path(temp_dir))
+            foreign_values = generator._values_for_template(
+                DocxTemplateGenerator.PERSONAL_CHARTER_TEMPLATE,
+                {"legal_representative_nationality": "Úc"},
+            )
+            self.assertEqual("Úc", foreign_values["beneficial_owner_nationality"])
+
+            generator._replace_placeholders(
+                output_path,
+                {
+                    "company_name": "CÔNG TY TNHH MẪU",
+                    "beneficial_owner_full_name": "NGUYỄN VĂN MẪU",
+                    "document_place": "Quảng Ninh",
+                    "document_day": "19",
+                    "document_month": "10",
+                    "document_year": "2026",
+                },
+            )
+
+            document = Document(output_path)
+            paragraphs = [paragraph.text for paragraph in document.paragraphs]
+            self.assertIn("Quốc tịch: Việt Nam", paragraphs[6])
+            self.assertIn("Quốc tịch: Việt Nam", paragraphs[42])
+            self.assertIn("Quốc gia: Việt Nam", paragraphs[48])
+            all_paragraphs = list(generator._iter_paragraphs(document))
+            owner_heading_index = next(
+                index
+                for index, paragraph in enumerate(all_paragraphs)
+                if generator._fold(paragraph.text) == "chu so huu"
+            )
+            self.assertEqual(
+                "Quảng Ninh, ngày 19 tháng 10 năm 2026",
+                all_paragraphs[owner_heading_index - 1].text,
+            )
 if __name__ == "__main__":
     unittest.main()

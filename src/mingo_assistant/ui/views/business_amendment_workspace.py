@@ -28,6 +28,7 @@ from mingo_assistant.services.documents.business_amendment_generator import (
 )
 from mingo_assistant.services.organization_documents.business_amendment_document_service import BusinessAmendmentDocumentService
 from mingo_assistant.services.business_lines.legacy_industry_lookup import load_legacy_industry_catalog
+from mingo_assistant.services.registration_offices import update_saved_registration_values
 from mingo_assistant.ui.views.location_business_update_workspace import LocationBusinessUpdateWorkspace
 from mingo_assistant.ui.views.amendment_industry_table import AmendmentIndustryTable
 from mingo_assistant.ui.views.business_amendment_capital_section import AmendmentCapitalSection
@@ -56,9 +57,11 @@ class BusinessAmendmentWorkspace(LocationBusinessUpdateWorkspace):
         legacy_industry_catalog = kwargs.pop("legacy_industry_catalog", None)
         case = kwargs.get("case") or (args[2] if len(args) > 2 else None)
         self._legacy_values = (
-            migrate_business_amendment_form_values(
-                case.form_values,
-                from_version=case.form_schema_version,
+            update_saved_registration_values(
+                migrate_business_amendment_form_values(
+                    case.form_values,
+                    from_version=case.form_schema_version,
+                )
             )
             if case
             else {}

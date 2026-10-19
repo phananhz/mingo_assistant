@@ -16666,13 +16666,13 @@
       "code": "22",
       "name": "Quảng Ninh",
       "short_name": "Quảng Ninh",
-      "type": "Tỉnh"
+      "type": "Thành phố"
     },
     {
       "code": "24",
       "name": "Bắc Ninh",
       "short_name": "Bắc Ninh",
-      "type": "Tỉnh"
+      "type": "Thành phố"
     },
     {
       "code": "25",
@@ -16768,7 +16768,7 @@
       "code": "75",
       "name": "Đồng Nai",
       "short_name": "Đồng Nai",
-      "type": "Tỉnh"
+      "type": "Thành phố"
     },
     {
       "code": "79",

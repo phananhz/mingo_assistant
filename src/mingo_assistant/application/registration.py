@@ -5,6 +5,8 @@ from pathlib import Path
 import re
 from typing import Mapping, Protocol
 
+from mingo_assistant.services.registration_offices import signing_place_for_province
+
 from mingo_assistant.domains.business_registration import (
     RegistrationCase,
     RegistrationValidationResult,
@@ -199,9 +201,7 @@ class RegistrationValueComposer:
 
     def signing_place_for_office(self, office_name: str) -> str:
         place = self._registration_offices.province_for_office(office_name).strip()
-        if place.casefold() == "thành phố hồ chí minh":
-            return place
-        return re.sub(r"^(?:Thành phố|Tỉnh)\s+", "", place, flags=re.IGNORECASE).strip()
+        return signing_place_for_province(place)
 
     @staticmethod
     def case_type_for_members(member_count: int) -> str:

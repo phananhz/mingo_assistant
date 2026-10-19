@@ -7,6 +7,86 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+PROVINCE_NAME_UPDATES = {
+    "Tỉnh Đồng Nai": "Thành phố Đồng Nai",
+    "Tỉnh Quảng Ninh": "Thành phố Quảng Ninh",
+    "Tỉnh Bắc Ninh": "Thành phố Bắc Ninh",
+}
+
+REGISTRATION_OFFICE_NAME_UPDATES = {
+    "Phòng Đăng ký kinh doanh Tỉnh Đồng Nai": "Phòng Đăng ký kinh doanh thành phố Đồng Nai",
+    "Phòng Quản lý doanh nghiệp Tỉnh Quảng Ninh": "Phòng Quản lý doanh nghiệp thành phố Quảng Ninh",
+    "Phòng Đăng ký kinh doanh và Quản lý doanh nghiệp Tỉnh Bắc Ninh": "Phòng Quản lý doanh nghiệp thành phố Bắc Ninh",
+}
+
+
+def update_current_administrative_names(value: object) -> str:
+    """Replace only the province names changed by the 2026 resolutions."""
+
+    current = str(value or "")
+    for old_name, new_name in PROVINCE_NAME_UPDATES.items():
+        current = current.replace(old_name, new_name)
+    return current
+
+
+def update_registration_office_name(value: object) -> str:
+    """Return the current office name while preserving unrelated/manual values."""
+
+    current = " ".join(str(value or "").split())
+    folded_current = current.casefold()
+    for old_name, new_name in REGISTRATION_OFFICE_NAME_UPDATES.items():
+        if folded_current == old_name.casefold():
+            return new_name
+    return current
+
+
+def signing_place_for_province(value: object) -> str:
+    """Format the signing place while retaining the two special city prefixes."""
+
+    place = update_current_administrative_names(value).strip()
+    if place.casefold() in {"thành phố hồ chí minh", "thành phố hà nội"}:
+        return place
+    return re.sub(r"^(?:Thành phố|Tỉnh)\s+", "", place, flags=re.IGNORECASE).strip()
+
+
+def update_saved_signing_line(value: object) -> str:
+    """Update only the leading place in an existing place/date display line."""
+
+    current = update_current_administrative_names(value).strip()
+    match = re.match(r"^([^,]+)(,.*)?$", current)
+    if not match:
+        return current
+    place = signing_place_for_province(match.group(1))
+    return f"{place}{match.group(2) or ''}"
+
+
+def update_saved_registration_values(
+    values: dict[str, str],
+    *,
+    update_office: bool = True,
+) -> dict[str, str]:
+    """Upgrade saved display values in memory when an existing case is opened."""
+
+    updated: dict[str, str] = {}
+    for key, value in values.items():
+        normalized_key = str(key)
+        if normalized_key == "business_registration_office":
+            updated[normalized_key] = (
+                update_registration_office_name(value)
+                if update_office
+                else str(value or "")
+            )
+            continue
+        if normalized_key == "document_place":
+            updated[normalized_key] = signing_place_for_province(value)
+            continue
+        if normalized_key == "document_place_date":
+            updated[normalized_key] = update_saved_signing_line(value)
+            continue
+        updated[normalized_key] = update_current_administrative_names(value)
+    return updated
+
+
 @dataclass(frozen=True)
 class RegistrationOffice:
     province: str
@@ -21,9 +101,9 @@ class RegistrationOffice:
     @classmethod
     def from_dict(cls, item: dict[str, object]) -> "RegistrationOffice":
         return cls(
-            province=str(item.get("province", "")).strip(),
+            province=update_current_administrative_names(item.get("province", "")).strip(),
             office_name=str(item.get("office_name", "")).strip(),
-            display_name=str(item.get("display_name", "")).strip(),
+            display_name=update_registration_office_name(item.get("display_name", "")),
             address=str(item.get("address", "")).strip(),
             reception_address=str(item.get("reception_address", "")).strip(),
             phone=str(item.get("phone", "")).strip(),
@@ -75,7 +155,7 @@ class RegistrationOfficeCatalog:
         return [office.display_name for office in matches[:limit]]
 
     def province_for_office(self, office_name: str) -> str:
-        folded_office = self._fold(office_name)
+        folded_office = self._fold(update_registration_office_name(office_name))
         if not folded_office:
             return ""
         for office in self.offices:
@@ -114,6 +194,10 @@ class RegistrationOfficeCatalog:
             self._fold(office.display_name),
             self._fold(office.office_name),
         }
+        for old_name, current_name in PROVINCE_NAME_UPDATES.items():
+            if self._fold(office.province) == self._fold(current_name):
+                values.add(self._fold(old_name))
+                values.add(self._fold(re.sub(r"^(?:Tỉnh|Thành phố)\s+", "", old_name)))
         if province_without_prefix == "ho chi minh":
             values.update({"tp hcm", "tphcm", "hcm", "sai gon", "sg"})
         if province_without_prefix == "da nang":

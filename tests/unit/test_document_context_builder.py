@@ -50,6 +50,20 @@ class DocumentContextBuilderTests(unittest.TestCase):
             "012345678901",
         )
 
+    def test_splits_current_office_name_without_assuming_the_old_department_name(self) -> None:
+        values = {
+            "business_registration_office": "Phòng Quản lý doanh nghiệp thành phố Bắc Ninh",
+        }
+
+        self.assertEqual(
+            "Phòng Quản lý doanh nghiệp ",
+            self.builder.value_for_target("business_registration_office_prefix", values),
+        )
+        self.assertEqual(
+            "thành phố Bắc Ninh",
+            self.builder.value_for_target("business_registration_office_province", values),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

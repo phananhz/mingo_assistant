@@ -28,10 +28,15 @@ class DocumentContextBuilder:
         if target == "__clear":
             return ""
         if target == "business_registration_office_prefix":
-            return "Ph\u00f2ng \u0110\u0103ng k\u00fd kinh doanh " if str(values.get("business_registration_office", "") or "").strip() else ""
+            office = str(values.get("business_registration_office", "") or "").strip()
+            if not office:
+                return ""
+            match = re.match(r"^(.*?)(?=(?:Tỉnh|Thành phố)\s+)", office, flags=re.IGNORECASE)
+            return f"{match.group(1).strip()} " if match else f"{office} "
         if target == "business_registration_office_province":
             office = str(values.get("business_registration_office", "") or "").strip()
-            return re.sub(r"^\s*Ph\u00f2ng\s+\u0110\u0103ng\s+k\u00fd\s+kinh\s+doanh\s*", "", office, flags=re.IGNORECASE)
+            match = re.search(r"((?:Tỉnh|Thành phố)\s+.+)$", office, flags=re.IGNORECASE)
+            return match.group(1).strip() if match else ""
         if target.endswith("_date_of_birth_day"):
             return self._formatter.date_component(values.get(target.removesuffix("_day"), ""), 0)
         if target.endswith("_date_of_birth_month"):

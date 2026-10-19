@@ -59,6 +59,7 @@ from mingo_assistant.services.documents.business_registration_variants import (
     TWO_MEMBER_INDIVIDUAL_VARIANT,
 )
 from mingo_assistant.services.business_lines.industry_lookup import IndustryCatalog, IndustryRow
+from mingo_assistant.services.registration_offices import update_saved_registration_values
 from mingo_assistant.models.business_registration import OcrPerson
 from mingo_assistant.ui.widgets.combo_box import NoWheelComboBox
 from mingo_assistant.ui.views.business_registration.components import (
@@ -2882,13 +2883,17 @@ class BusinessRegistrationWorkspace(QWidget):
             "asset_capital_text": "(không có)",
         }
         if case:
+            saved_values = update_saved_registration_values(
+                case.form_values,
+                update_office=case.case_type != "Thành lập hộ kinh doanh",
+            )
             defaults.update(
                 {
                     "company_name": case.company_name,
                     "legal_representative_full_name": case.owner,
                 }
             )
-            defaults.update(case.form_values)
+            defaults.update(saved_values)
         self._clear_cross_person_authorized_contacts(defaults)
         # Restore financial fields together, without recalculating partial rows.
         self.updating_capital = True
@@ -2899,10 +2904,11 @@ class BusinessRegistrationWorkspace(QWidget):
         finally:
             self.updating_capital = False
             self.updating_member_contributions = False
-        self._restore_business_lines(case.form_values if case else {})
-        self._restore_people(case.form_values if case else {})
-        self._restore_company_members(case.form_values if case else {})
-        self._restore_two_member_beneficial_owners(case.form_values if case else {})
+        restored_values = saved_values if case else {}
+        self._restore_business_lines(restored_values)
+        self._restore_people(restored_values)
+        self._restore_company_members(restored_values)
+        self._restore_two_member_beneficial_owners(restored_values)
 
     def _restore_people(self, values: dict[str, str]) -> None:
         try:
