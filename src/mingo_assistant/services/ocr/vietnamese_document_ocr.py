@@ -36,7 +36,10 @@ class VietnameseDocumentOcr:
     def recognize_detailed(self, image: bytes) -> list[tuple[Any, str, float]]:
         """Return geometry, text and confidence so downstream parsers can refine lines."""
         engine = self._get_engine()
-        result, _elapsed = engine(image, text_score=0.25)
+        # Vietnamese tone marks and thin strokes on photocopied certificates
+        # frequently receive a slightly lower score than the base letters.
+        # Keep those lines here and let the field validators reject bad data.
+        result, _elapsed = engine(image, text_score=0.18)
         return [
             (line[0], str(line[1]).strip(), float(line[2]))
             for line in result or []
@@ -55,6 +58,13 @@ class VietnameseDocumentOcr:
             det_model_path=str(self.model_dir / self._DETECTOR),
             rec_model_path=str(self.model_dir / self._RECOGNIZER),
             cls_model_path=str(self.model_dir / self._CLASSIFIER),
-            text_score=0.25,
+            text_score=0.18,
+            max_side_len=3600,
+            det_limit_side_len=1280,
+            det_limit_type="min",
+            det_thresh=0.24,
+            det_box_thresh=0.38,
+            det_unclip_ratio=1.75,
+            det_score_mode="fast",
         )
         return self._engine

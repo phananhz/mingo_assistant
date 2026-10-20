@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from mingo_assistant.services.organization_documents.business_amendment_document_service import BusinessAmendmentDocumentService
@@ -50,6 +51,60 @@ ISSUER NAME
 
 
 class BusinessAmendmentDocumentTests(unittest.TestCase):
+    def test_first_page_type_check_is_reused_when_name_and_code_are_complete(self):
+        service = BusinessAmendmentDocumentService(bundle_root=Path(__file__).resolve().parents[2])
+        text = CERTIFICATE.split("2. Địa chỉ trụ sở chính", 1)[0]
+        module = "mingo_assistant.services.organization_documents.organization_document_service"
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "image-only.pdf"
+            path.touch()
+            with patch(f"{module}.fitz.open"), \
+                    patch(f"{module}.extract_certificate_text", return_value=""), \
+                    patch.object(service, "_extract_first_page_for_type_detection", return_value=text) as quick_ocr, \
+                    patch.object(service, "_extract_with_ocr") as full_ocr:
+                result = service.extract_pdf(path)
+
+        quick_ocr.assert_called_once()
+        full_ocr.assert_not_called()
+        self.assertEqual(("rapidocr",), result.processing_route)
+        self.assertEqual("ocr", result.extraction_method)
+        self.assertEqual("0319291466", result.values["organization_owner_registration_number"])
+        self.assertEqual(set(service.RECOGNIZED_FIELDS), set(result.values))
+
+    def test_complete_name_and_code_skip_ocr_without_an_address(self):
+        service = BusinessAmendmentDocumentService(bundle_root=Path(__file__).resolve().parents[2])
+        text = CERTIFICATE.split("2. Địa chỉ trụ sở chính", 1)[0]
+        module = "mingo_assistant.services.organization_documents.organization_document_service"
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "company.pdf"
+            path.touch()
+            with patch(f"{module}.fitz.open"), \
+                    patch(f"{module}.extract_certificate_text", return_value=text), \
+                    patch.object(service, "_extract_with_ocr") as ocr, \
+                    patch.object(service, "_extract_first_page_for_type_detection") as quick_ocr:
+                result = service.extract_pdf(path)
+
+        self.assertEqual(("pdf_text",), result.processing_route)
+        self.assertEqual("text", result.extraction_method)
+        self.assertEqual("0319291466", result.values["organization_owner_registration_number"])
+        self.assertEqual(set(service.RECOGNIZED_FIELDS), set(result.values))
+        ocr.assert_not_called()
+        quick_ocr.assert_not_called()
+
+    def test_amendment_retries_missing_or_damaged_required_fields_only(self):
+        service = BusinessAmendmentDocumentService()
+        good = {"organization_owner_name": "CÔNG TY TNHH KIỂM THỬ",
+                "organization_owner_registration_number": "0312345678"}
+        for key, damaged in (("organization_owner_name", ""),
+                             ("organization_owner_name", "CÔNG TY TNHH KIỂM TH�"),
+                             ("organization_owner_registration_number", "03123")):
+            with self.subTest(key=key, damaged=damaged):
+                result = service._document_result({**good, key: damaged}, "", "text", source="pdf_text")
+                self.assertTrue(service._needs_ocr_fallback(result))
+        recognized = service._document_result(good, "", "ocr", source="ppocr_v6")
+        self.assertFalse(service._needs_ocr_fallback(recognized))
+        self.assertFalse(service._needs_enhanced_pass(recognized))
+
     def test_public_pdf_result_contains_only_company_name_and_code(self):
         service = BusinessAmendmentDocumentService()
         rich = service._extract_supported_document(CERTIFICATE, "text", source="pdf_text")

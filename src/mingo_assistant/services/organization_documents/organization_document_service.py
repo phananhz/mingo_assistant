@@ -11,6 +11,8 @@ import fitz
 
 from mingo_assistant.services.normalization.address_parser import AddressParser
 from mingo_assistant.services.ocr.vietnamese_document_ocr import VietnameseDocumentOcr
+from mingo_assistant.services.ocr.certificate_layout import certificate_lines
+from mingo_assistant.services.organization_documents.pdf_text import extract_certificate_text
 
 
 ProgressCallback = Callable[[int, str], None]
@@ -57,15 +59,24 @@ class OrganizationDocumentService:
 
         self._progress(progress_callback, 5, "Đang mở tài liệu doanh nghiệp")
         with fitz.open(document_path) as document:
-            direct_text = "\n".join(page.get_text("text") for page in document)
+            direct_text = extract_certificate_text(document)
             detected_type = self._validate_expected_document_type(direct_text)
+            quick_result = None
             if not detected_type:
                 quick_text = self._extract_first_page_for_type_detection(document, progress_callback)
                 self._validate_expected_document_type(quick_text)
+                quick_result = self._extract_supported_document(quick_text, "ocr", source="rapidocr")
             direct_result = self._extract_supported_document(direct_text, "text", source="pdf_text")
             if direct_result is not None and not self._needs_ocr_fallback(direct_result):
                 self._progress(progress_callback, 100, "Đã đọc thông tin tổ chức")
                 return replace(direct_result, processing_route=("pdf_text",))
+            # The type check already recognizes the first page. Reuse those
+            # fields instead of throwing them away and scanning every page
+            # again, especially for workflows that only need company name/code.
+            early_result = self._merge_results(direct_result, quick_result)
+            if early_result is not None and not self._needs_ocr_fallback(early_result):
+                self._progress(progress_callback, 100, "Đã nhận diện thông tin tổ chức")
+                return early_result
 
             self._progress(progress_callback, 25, "Đang nhận diện chữ trong tài liệu")
             ocr_text = self._extract_with_ocr(document, progress_callback)
@@ -75,14 +86,21 @@ class OrganizationDocumentService:
                 else "rapidocr"
             )
             primary_result = self._extract_supported_document(ocr_text, "ocr", source=primary_source)
-            result = self._merge_results(direct_result, primary_result)
+            candidates = [direct_result, quick_result, primary_result]
+            result = self._merge_results(*candidates)
             route = ["pdf_text", primary_source]
+            if quick_result is not None:
+                route.insert(1, "rapidocr")
 
-            if self._vietnamese_ocr and self._vietnamese_ocr.is_available:
+            if (
+                self._vietnamese_ocr and self._vietnamese_ocr.is_available
+                and self._needs_ocr_fallback(result)
+            ):
                 self._progress(progress_callback, 75, "Đang đối chiếu bằng bộ nhận diện dự phòng")
                 legacy_text = self._extract_with_ocr(document, progress_callback, use_legacy=True)
                 legacy_result = self._extract_supported_document(legacy_text, "ocr", source="rapidocr")
-                result = self._merge_results(result, legacy_result)
+                candidates.append(legacy_result)
+                result = self._merge_results(*candidates)
                 route.append("rapidocr")
 
             if self._needs_enhanced_pass(result):
@@ -93,16 +111,19 @@ class OrganizationDocumentService:
                     if self._vietnamese_ocr and self._vietnamese_ocr.is_available
                     else "rapidocr_enhanced"
                 )
-                enhanced_result = self._extract_supported_document(
-                    enhanced_text,
-                    "ocr",
-                    source=enhanced_source,
-                )
-                result = self._merge_results(result, enhanced_result)
+                enhanced_results = [
+                    self._extract_supported_document(text, "ocr", source=enhanced_source)
+                    for text in dict.fromkeys((
+                        enhanced_text,
+                        *getattr(self, "_last_enhanced_text_candidates", ()),
+                    ))
+                ]
+                candidates.extend(enhanced_results)
+                result = self._merge_results(*candidates)
                 route.append(enhanced_source)
         if result is not None:
             self._progress(progress_callback, 100, "Đã nhận diện thông tin tổ chức")
-            return replace(result, processing_route=tuple(route))
+            return replace(result, processing_route=tuple(dict.fromkeys(route)))
 
         raise ValueError(
             "Không nhận ra Giấy chứng nhận đăng ký doanh nghiệp (ERC) trong PDF đã chọn."
@@ -177,17 +198,53 @@ class OrganizationDocumentService:
                 self._legacy_engine = RapidOCR()
             self._progress(progress_callback, 12, "Đang kiểm tra nhanh loại tài liệu")
             page = document.load_page(0)
-            scale = self._render_scale(page, enhanced=False)
-            pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
+            # Some image-only PDFs declare a tiny physical page (under 400pt)
+            # while embedding a sharp 3000px scan. A fixed 3x cap shrinks the
+            # text until letters and spaces disappear. Keep the actual pixel
+            # target, and inspect the upper company-information area first.
+            rect = page.rect
+            scale = min(8.0, 2200.0 / max(float(rect.width), float(rect.height), 1.0))
+            clip = (
+                fitz.Rect(rect.x0, rect.y0, rect.x1, rect.y0 + rect.height * .70)
+                if self.DOCUMENT_TYPE == "erc" else rect
+            )
+            pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False, clip=clip)
+            image_bytes = self._suppress_certificate_background(pixmap.tobytes("png"))
             return self._extract_page_with_ocr(
                 self._legacy_engine,
-                pixmap.tobytes("png"),
+                image_bytes,
                 use_legacy=True,
             )
         except Exception:
             # Type detection is an early guard. If it is inconclusive, the
             # normal OCR pipeline remains responsible for the final result.
             return ""
+
+    @staticmethod
+    def _suppress_certificate_background(image_bytes: bytes) -> bytes:
+        """Lighten yellow certificate patterns only in the quick image pass.
+
+        Dark/neutral ink is preserved. If colors are absent or decoding fails,
+        use the original image. The full-page fallback always keeps its source
+        colors, including any colored text the quick reading might miss.
+        """
+        try:
+            import cv2
+            import numpy as np
+
+            image = cv2.imdecode(np.frombuffer(image_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
+            if image is None:
+                return image_bytes
+            blue, green, red = (image[:, :, index].astype(np.int16) for index in range(3))
+            yellow = (red - blue > 20) & (green - blue > 15) & (red > 110) & (green > 110)
+            if float(yellow.mean()) < .01:
+                return image_bytes
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            gray[yellow] = np.maximum(gray[yellow], red[yellow]).astype(np.uint8)
+            success, encoded = cv2.imencode(".png", gray)
+            return encoded.tobytes() if success else image_bytes
+        except Exception:
+            return image_bytes
 
     def _extract_supported_document(
         self,
@@ -220,6 +277,9 @@ class OrganizationDocumentService:
             self._legacy_engine = RapidOCR()
         engine = self._legacy_engine
         pages: list[str] = []
+        enhanced_page_candidates: list[list[str]] = []
+        if enhanced:
+            self._last_enhanced_text_candidates = ()
         page_count = max(document.page_count, 1)
         for index, page in enumerate(document):
             if enhanced:
@@ -236,9 +296,37 @@ class OrganizationDocumentService:
             image = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
             image_bytes = image.tobytes("png")
             if enhanced:
-                image_bytes = self._preprocess_for_ocr(image_bytes)
-            pages.append(self._extract_page_with_ocr(engine, image_bytes, use_legacy=use_legacy))
-        return "\n".join(pages)
+                texts = [
+                    self._extract_page_with_ocr(engine, candidate, use_legacy=use_legacy)
+                    for candidate in self._preprocess_variants_for_ocr(image_bytes)
+                ]
+                enhanced_page_candidates.append(texts)
+                pages.append(max(texts, key=self._ocr_text_quality, default=""))
+            else:
+                pages.append(self._extract_page_with_ocr(engine, image_bytes, use_legacy=use_legacy))
+                if self.DOCUMENT_TYPE == "erc":
+                    source = (
+                        "ppocr_v6" if not use_legacy and self._vietnamese_ocr
+                        and self._vietnamese_ocr.is_available else "rapidocr"
+                    )
+                    partial = self._extract_supported_document("\n".join(pages), "ocr", source=source)
+                    if partial is not None and not self._needs_ocr_fallback(partial):
+                        break
+        selected_text = "\n".join(pages)
+        if enhanced_page_candidates:
+            candidate_count = max(len(candidates) for candidates in enhanced_page_candidates)
+            documents: list[str] = []
+            for candidate_index in range(candidate_count):
+                page_texts = [
+                    candidates[candidate_index]
+                    if candidate_index < len(candidates)
+                    else max(candidates, key=self._ocr_text_quality, default="")
+                    for candidates in enhanced_page_candidates
+                ]
+                documents.append("\n".join(page_texts))
+            self._last_enhanced_text_candidates = tuple(dict.fromkeys(documents))
+            return max(documents, key=self._ocr_text_quality, default=selected_text)
+        return selected_text
 
     @staticmethod
     def _render_scale(page, *, enhanced: bool) -> float:
@@ -247,49 +335,112 @@ class OrganizationDocumentService:
         # The bundled detector is calibrated well around 2x for ordinary A4
         # certificates. Upscaling every page can merge thin Vietnamese glyphs,
         # so reserve the larger render for the quality-triggered enhanced pass.
-        target_pixels = 3000.0 if enhanced else 1600.0
-        minimum, maximum = (3.0, 3.6) if enhanced else (2.0, 2.5)
+        target_pixels = 3300.0 if enhanced else 2200.0
+        minimum, maximum = (3.5, 4.1) if enhanced else (2.5, 3.1)
         return max(minimum, min(maximum, target_pixels / longest_side))
 
     @staticmethod
     def _preprocess_for_ocr(image_bytes: bytes) -> bytes:
         """Improve faint scans and correct small page skew for the final OCR pass."""
+        variants = OrganizationDocumentService._preprocess_variants_for_ocr(image_bytes)
+        return variants[0] if variants else image_bytes
+
+    @staticmethod
+    def _preprocess_variants_for_ocr(image_bytes: bytes) -> list[bytes]:
+        """Build complementary scan variants for faint text and uneven paper.
+
+        The contrast image preserves fine Vietnamese marks. The binary image
+        is deliberately separate because thresholding can help shadows and
+        stamps while damaging accents on an otherwise clean page.
+        """
         try:
             import cv2
             import numpy as np
 
-            image = cv2.imdecode(np.frombuffer(image_bytes, dtype=np.uint8), cv2.IMREAD_GRAYSCALE)
-            if image is None:
-                return image_bytes
+            color = cv2.imdecode(np.frombuffer(image_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
+            if color is None:
+                return [image_bytes]
+            gray = cv2.cvtColor(color, cv2.COLOR_BGR2GRAY)
 
-            clahe = cv2.createCLAHE(clipLimit=1.8, tileGridSize=(8, 8))
-            enhanced = clahe.apply(image)
-            blurred = cv2.GaussianBlur(enhanced, (0, 0), 1.0)
-            enhanced = cv2.addWeighted(enhanced, 1.35, blurred, -0.35, 0)
+            # Remove slow illumination changes from camera scans and faded
+            # photocopies, then improve local contrast without over-thickening.
+            background = cv2.GaussianBlur(gray, (0, 0), 19.0)
+            normalized = cv2.divide(gray, background, scale=255)
+            clahe = cv2.createCLAHE(clipLimit=1.7, tileGridSize=(10, 10))
+            contrast = clahe.apply(normalized)
+            blurred = cv2.GaussianBlur(contrast, (0, 0), 0.8)
+            contrast = cv2.addWeighted(contrast, 1.28, blurred, -0.28, 0)
 
-            _, foreground = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+            _, foreground = cv2.threshold(contrast, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
             coordinates = cv2.findNonZero(foreground)
+            angle = 0.0
             if coordinates is not None:
-                foreground_ratio = len(coordinates) / float(enhanced.size)
+                foreground_ratio = len(coordinates) / float(contrast.size)
                 if 0.002 < foreground_ratio < 0.35:
                     angle = cv2.minAreaRect(coordinates)[-1]
                     angle = -(90 + angle) if angle < -45 else -angle
-                    if 0.6 <= abs(angle) <= 8.0:
-                        height, width = enhanced.shape
-                        matrix = cv2.getRotationMatrix2D((width / 2, height / 2), angle, 1.0)
-                        enhanced = cv2.warpAffine(
-                            enhanced,
-                            matrix,
-                            (width, height),
-                            flags=cv2.INTER_CUBIC,
-                            borderMode=cv2.BORDER_CONSTANT,
-                            borderValue=255,
-                        )
+                    if not 0.45 <= abs(angle) <= 7.0:
+                        angle = 0.0
 
-            success, encoded = cv2.imencode(".png", enhanced)
-            return encoded.tobytes() if success else image_bytes
+            if angle:
+                height, width = contrast.shape
+                matrix = cv2.getRotationMatrix2D((width / 2, height / 2), angle, 1.0)
+                contrast = cv2.warpAffine(
+                    contrast,
+                    matrix,
+                    (width, height),
+                    flags=cv2.INTER_CUBIC,
+                    borderMode=cv2.BORDER_CONSTANT,
+                    borderValue=255,
+                )
+
+            binary = cv2.adaptiveThreshold(
+                contrast,
+                255,
+                cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                cv2.THRESH_BINARY,
+                41,
+                13,
+            )
+
+            variants: list[bytes] = []
+            for candidate in (contrast, binary):
+                success, encoded = cv2.imencode(".png", candidate)
+                if success:
+                    variants.append(encoded.tobytes())
+            return variants or [image_bytes]
         except Exception:
-            return image_bytes
+            return [image_bytes]
+
+    def _ocr_text_quality(self, text: str) -> tuple[int, int, int, int]:
+        """Rank enhanced OCR variants by document anchors and readable text."""
+        compact = self._compact(text)
+        if self.DOCUMENT_TYPE == "brc":
+            anchors = (
+                "giaychungnhandangkydiadiemkinhdoanh",
+                "masodiadiemkinhdoanh",
+                "tendiadiemkinhdoanh",
+                "diachi",
+                "tendoanhnghiepchinhanh",
+                "masodoanhnghiepchinhanh",
+            )
+        else:
+            anchors = (
+                "giaychungnhandangkydoanhnghiep",
+                "masodoanhnghiep",
+                "tencongty",
+                "diachitrusochinh",
+                "dienthoai",
+            )
+        anchor_score = sum(1 for anchor in anchors if anchor in compact)
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        readable_lines = sum(sum(character.isalpha() for character in line) >= 4 for line in lines)
+        accent_count = sum(
+            unicodedata.combining(character) != 0
+            for character in unicodedata.normalize("NFD", text)
+        )
+        replacement_count = text.count("�")
+        return anchor_score, readable_lines - replacement_count, accent_count, len(compact)
 
     def _extract_page_with_ocr(self, legacy_engine, image_bytes: bytes, *, use_legacy: bool = False) -> str:
         """Prefer bundled PP-OCRv6, retaining the existing engine as a safe fallback."""
@@ -310,13 +461,15 @@ class OrganizationDocumentService:
                     except Exception:
                         # PP-OCRv6 text remains usable if optional VietOCR refinement fails.
                         pass
-                    return "\n".join(text for _box, text, _score in lines)
+                    return "\n".join(certificate_lines(lines))
             except Exception:
                 # A damaged optional model must never prevent a user from
                 # reading a PDF with the formerly shipped OCR engine.
                 pass
         result, _elapsed = legacy_engine(image_bytes)
-        return "\n".join(str(line[1]).strip() for line in result or [] if len(line) > 1)
+        lines = [(line[0], str(line[1]).strip(), float(line[2]) if len(line) > 2 else 0.0)
+                 for line in result or [] if len(line) > 1]
+        return "\n".join(certificate_lines(lines))
 
     def _owner_section(self, text: str) -> str:
         lines = self._lines(text)
@@ -350,13 +503,29 @@ class OrganizationDocumentService:
     def _needs_ocr_fallback(cls, result: OrganizationDocumentResult | None) -> bool:
         if result is None:
             return True
-        return any(result.field_confidences.get(key, 0.0) < 0.82 for key in cls._ESSENTIAL_FIELDS)
+        if result.extraction_method == "text":
+            # Judge the fields actually consumed by this workflow. A readable
+            # short address ("Ấp Xóm Cò") does not become better by OCR merely
+            # because the administrative matcher cannot split a ward/province.
+            thresholds = {
+                "organization_owner_name": .90,
+                "organization_owner_registration_number": .99,
+                "organization_owner_address_detail": .78,
+            }
+            for key in cls._ESSENTIAL_FIELDS:
+                value = result.values.get(key, "")
+                if not value or result.field_confidences.get(key, 0.0) < thresholds.get(key, .90):
+                    return True
+                if key == "organization_owner_address_detail" and cls._vietnamese_text_integrity(value) < .86:
+                    return True
+            return False
+        return any(result.field_confidences.get(key, 0.0) < 0.90 for key in cls._ESSENTIAL_FIELDS)
 
     @classmethod
     def _needs_enhanced_pass(cls, result: OrganizationDocumentResult | None) -> bool:
         if result is None:
             return True
-        return any(result.field_confidences.get(key, 0.0) < 0.70 for key in cls._ESSENTIAL_FIELDS)
+        return any(result.field_confidences.get(key, 0.0) < 0.88 for key in cls._ESSENTIAL_FIELDS)
 
     @classmethod
     def _essential_field_count(cls, result: OrganizationDocumentResult | None) -> int:
@@ -500,8 +669,9 @@ class OrganizationDocumentService:
     @staticmethod
     def _restore_address_ocr(value: str) -> str:
         replacements = (
-            (r"(?i)\b(?:d|đ)[uư][oòóọơờớợ]ng\b", "đường"),
-            (r"(?i)\bph[uư](?:[oòóọơờớợ])?ng\b", "Phường"),
+            # Dương is a proper name (Bình Dương, Hải Dương), not a street label.
+            (r"(?i)\b(?:d[uư]r[oơ]ng|đ[uư][oòóọơờớợ]ng)\b", "đường"),
+            (r"(?i)\bph[uư]r?(?:[oòóọơờớợ])?ng\b", "Phường"),
             (r"(?i)\bqun\b", "Quận"),
             (r"(?i)\bthành\s*ph[oóò]?\b", "Thành phố"),
             (r"(?i)\bthanh\s*ph[oóò]?\b", "Thành phố"),
@@ -514,6 +684,8 @@ class OrganizationDocumentService:
             (r"(?i)\bxưng\b", "xưởng"),
             (r"(?i)\bs\s+(?=\d)", "số "),
             (r"(?i)\bđưng\b", "đường"),
+            (r"(?i)\bph[06]\b", "phố"),
+            (r"(?i)\b(?:tng|tang)\s+(?=\d)", "Tầng "),
             (r"(?i)\bsn\s+xut\b", "sản xuất"),
             (r"(?i)\bnghip\b", "nghiệp"),
             (r"(?i)\blo?a?i\s+2\b", "loại 2"),
@@ -522,7 +694,10 @@ class OrganizationDocumentService:
         restored = value
         for pattern, replacement in replacements:
             restored = re.sub(pattern, replacement, restored)
-        return restored
+        # An ASCII "Duong" can be a person/province name. Only treat it as
+        # a street caption at the start of an address segment or after a number.
+        restored = re.sub(r"(?i)(^|[,;]\s*|\b\d[\d/.-]*\s+)duong\b", r"\1đường", restored)
+        return re.sub(r"\s+([,;])", r"\1", restored)
 
     def _document_result(
         self,
@@ -536,7 +711,12 @@ class OrganizationDocumentService:
             key: unicodedata.normalize("NFC", self._restore_vietnamese_phrases(value)).strip()
             for key, value in values.items()
         }
-        normalized["organization_owner_name"] = normalized.get("organization_owner_name", "").upper()
+        if method == "ocr":
+            normalized["organization_owner_name"] = self._restore_company_name(
+                normalized.get("organization_owner_name", "")
+            )
+        else:
+            normalized["organization_owner_name"] = normalized.get("organization_owner_name", "").upper()
         field_confidences = {
             key: self._field_quality(key, value)
             for key, value in normalized.items()
@@ -577,29 +757,33 @@ class OrganizationDocumentService:
         disagreement_labels = {
             "organization_owner_name": "Tên tổ chức",
             "organization_owner_registration_number": "Mã số doanh nghiệp/Số quyết định",
+            "organization_owner_address_detail": "Địa chỉ trụ sở chính",
             "organization_owner_issue_date": "Ngày cấp",
             "organization_owner_email": "Thư điện tử",
         }
 
         for key in keys:
-            ranked: list[tuple[tuple[float, int, int], OrganizationDocumentResult, str, float]] = []
+            ranked: list[tuple[tuple[float, int, int, int, int], OrganizationDocumentResult, str, float]] = []
             distinct_strong_values: set[str] = set()
-            agreement_counts: dict[str, int] = {}
+            agreeing_sources: dict[str, set[str]] = {}
             for result in candidates:
                 candidate_value = result.values.get(key, "").strip()
                 if candidate_value:
-                    canonical = self._compact(candidate_value)
-                    agreement_counts[canonical] = agreement_counts.get(canonical, 0) + 1
+                    canonical = self._agreement_key(candidate_value)
+                    source = result.field_sources.get(key, result.extraction_method)
+                    agreeing_sources.setdefault(canonical, set()).add(source.removesuffix("_enhanced"))
             for result in candidates:
                 value = result.values.get(key, "").strip()
-                confidence = result.field_confidences.get(key, self._field_quality(key, value))
+                # Recompute from content: a previous merge may already include
+                # agreement. Repeated image variants are not independent votes.
+                confidence = self._field_quality(key, value)
                 source = result.field_sources.get(key, result.extraction_method)
                 if value:
-                    agreement = agreement_counts.get(self._compact(value), 1)
+                    agreement = len(agreeing_sources[self._agreement_key(value)])
                     confidence = min(0.99, confidence + (0.03 * (agreement - 1)))
                     ranked.append((self._candidate_rank(key, value, confidence, source), result, value, confidence))
                     if confidence >= 0.80:
-                        distinct_strong_values.add(self._compact(value))
+                        distinct_strong_values.add(self._agreement_key(value))
 
             if not ranked:
                 values[key] = ""
@@ -607,6 +791,8 @@ class OrganizationDocumentService:
                 continue
 
             _rank, winner, value, confidence = max(ranked, key=lambda item: item[0])
+            if key == "organization_owner_address_detail":
+                value = self._enrich_address_words(value, [item[2] for item in ranked])
             values[key] = value
             field_confidences[key] = confidence
             field_sources[key] = winner.field_sources.get(key, winner.extraction_method)
@@ -655,7 +841,7 @@ class OrganizationDocumentService:
         value: str,
         confidence: float,
         source: str,
-    ) -> tuple[float, int, int]:
+    ) -> tuple[float, int, int, int, int]:
         source_priority = {
             "pdf_text": 5,
             "ppocr_v6_enhanced": 4,
@@ -663,14 +849,6 @@ class OrganizationDocumentService:
             "rapidocr_enhanced": 2,
             "rapidocr": 1,
         }.get(source, 0)
-        if key == "organization_owner_name":
-            source_priority = {
-                "pdf_text": 5,
-                "rapidocr_enhanced": 4,
-                "rapidocr": 4,
-                "ppocr_v6_enhanced": 3,
-                "ppocr_v6": 2,
-            }.get(source, 0)
         length_tiebreaker = 0 if key in {
             "organization_owner_registration_number",
             "organization_owner_issue_date",
@@ -678,7 +856,41 @@ class OrganizationDocumentService:
             "organization_owner_fax",
             "organization_owner_email",
         } else min(len(value), 200)
-        return confidence, source_priority, length_tiebreaker
+        return confidence, int(source == "pdf_text"), self._accent_count(value), length_tiebreaker, source_priority
+
+    @staticmethod
+    def _accent_count(value: str) -> int:
+        return sum(bool(unicodedata.combining(char)) for char in unicodedata.normalize("NFD", value))
+
+    @classmethod
+    def _enrich_address_words(cls, value: str, alternatives: list[str]) -> str:
+        """Borrow missing accents from aligned words, retaining every letter/digit.
+
+        Keep already accented words and punctuation from the selected reading.
+        A second recognizer may supply accents even if it dropped another word.
+        """
+        from difflib import SequenceMatcher
+
+        word_pattern = re.compile(r"[^\W\d_]+", re.UNICODE)
+        for alternative in alternatives:
+            words = word_pattern.findall(value)
+            others = word_pattern.findall(alternative)
+            if (len(words) != len(others)
+                    or re.findall(r"\d+", value) != re.findall(r"\d+", alternative)
+                    or SequenceMatcher(None, cls._compact(value), cls._compact(alternative)).ratio() < .88):
+                continue
+            replacements = iter(others)
+
+            def restore(match):
+                word, other = match.group(), next(replacements)
+                if cls._fold(word) != cls._fold(other) or cls._accent_count(word) or not cls._accent_count(other):
+                    return word
+                if word.isupper():
+                    return other.upper()
+                return other[:1].upper() + other[1:] if word[:1].isupper() else other.lower()
+
+            value = word_pattern.sub(restore, value)
+        return value
 
     def _field_quality(self, key: str, value: str) -> float:
         value = str(value or "").strip()
@@ -708,16 +920,23 @@ class OrganizationDocumentService:
         if key == "organization_owner_address_detail":
             compact = self._compact(value)
             table_markers = ("stt", "tyle", "vongop", "tenthanhvien", "quoctich")
-            if len(value) > 250 or sum(marker in compact for marker in table_markers) >= 2:
+            contact_markers = ("dienthoai", "dinthoi", "sofax", "thudientu", "website")
+            if (len(value) > 250 or sum(marker in compact for marker in table_markers) >= 2
+                    or any(marker in compact for marker in contact_markers)):
                 return 0.25
             if len(value) > 25 and value.count(" ") < 3:
                 return 0.60
             address_markers = (
                 "duong", "pho", "phuong", "xa", "quan", "huyen", "tinh",
-                "thanhpho", "ap", "thon", "khu", "street", "road", "room",
+                "thanhpho", "ap", "thon", "khu", "to", "xom", "nha", "lo",
+                "street", "road", "room",
             )
+            if len(value.split()) >= 2 and re.match(r"^(?:thôn|thon|ấp|ap|khu|tổ|to)\s+\w", value, re.IGNORECASE):
+                return min(.85, self._vietnamese_text_integrity(value))
             if len(value) >= 16 and any(marker in compact for marker in address_markers):
                 return min(0.93, self._vietnamese_text_integrity(value))
+            if len(value) >= 10 and re.search(r"(?:^|\s)\d+[A-Za-z]?(?:[/.-]\d+)?(?:\s|$)", value):
+                return min(0.90, self._vietnamese_text_integrity(value))
             return min(0.78 if len(value) >= 10 else 0.45, self._vietnamese_text_integrity(value))
 
         if key == "organization_owner_issue_date":
@@ -843,7 +1062,14 @@ class OrganizationDocumentService:
             parts = [self._line_tail(line)]
             for following in lines[index + 1 :]:
                 compact = self._compact(following)
-                if self._looks_like_label(following) or compact.startswith("2"):
+                # A wrapped company name may begin with THƯƠNG MẠI, MẠI or
+                # digits (e.g. 369). These are not the Thư/Mã/3. labels.
+                if re.match(r"^\s*[2-9]\s*[.)]\s*", following) or compact.startswith((
+                    "tencongty", "tendoanhnghiep", "tenviettat", "tengiaodich",
+                    "tenbangtiengnuocngoai", "diachitrusochinh", "dienthoai",
+                    "sofax", "fax", "thudientu", "email", "website", "masodoanhnghiep",
+                    "vondieule",
+                )):
                     break
                 parts.append(following)
             return " ".join(part for part in parts if part).strip().upper()
@@ -946,14 +1172,8 @@ class OrganizationDocumentService:
         return ""
 
     def _contact_value(self, lines: list[str], *labels: str) -> str:
-        for line in lines:
-            if not self._line_has_any_label(line, labels):
-                continue
-            value = self._line_tail(line)
-            if "@" in value:
-                return value.replace(" ", "")
-            return value
-        return ""
+        value = self._value_for_labels(lines, *labels)
+        return value.replace(" ", "") if "@" in value else value
 
     def _address_value(self, lines: list[str]) -> str:
         for index, line in enumerate(lines):
@@ -1027,6 +1247,30 @@ class OrganizationDocumentService:
         return self.address_parser.place_matcher.best_province_name(value)
 
     @staticmethod
+    def _restore_company_name(value: str) -> str:
+        """Repair common business phrases in OCR, retaining proper names.
+
+        These are legal-form / activity terms, never a customer-name lookup.
+        Apply only to a recognized company name, not to decoded PDF text.
+        """
+        value = unicodedata.normalize("NFC", value).strip().upper()
+        if not re.match(r"^(?:CHI NHÁNH\s+)?C[ÔO]NG\s+TY\b", value):
+            return value
+        # OCR occasionally mistakes the right edge of a Vietnamese glyph for
+        # a quote immediately before a numeric company qualifier (for example
+        # ``ĐẦU TƯ' 358``).  Limit the cleanup to this unambiguous position so
+        # legitimate punctuation elsewhere in a proper name is preserved.
+        value = re.sub(r"(?<=[A-ZÀ-Ỹ])['’`´](?=\s+\d)", "", value)
+        value = re.sub(r"\bC[ỔÔOỎ]\s+PH[ẦÂA]?N\b", "CỔ PHẦN", value, count=1)
+        value = re.sub(r"\b[ĐD][ẦÂÀA]U\s+T[ƯU]\b", "ĐẦU TƯ", value)
+        value = re.sub(r"\bPH[ÁA]T\s+TRI[ỂÊE]?N\b", "PHÁT TRIỂN", value)
+        value = re.sub(r"\bTHI[ẾÊE]?T\s+K[ẾÊE]?\b", "THIẾT KẾ", value)
+        value = re.sub(r"\bTH[ƯU][ƠO]NG\s+M[ẠA]?I\b", "THƯƠNG MẠI", value)
+        value = re.sub(r"\bN[ÔO]NG\s+S[ẢÁA]N\b", "NÔNG SẢN", value)
+        value = re.sub(r"\bVA(?=\s+(?:PHÁT|ĐẦU|XÂY|THI|THƯƠNG))", "VÀ", value)
+        return re.sub(r"\bX[ÂA]Y\s+[ĐD][ỰƯU]?NG\b", "XÂY DỰNG", value)
+
+    @staticmethod
     def _restore_vietnamese_phrases(value: str) -> str:
         """Restore high-confidence Vietnamese phrases while preserving foreign names."""
         if not value:
@@ -1038,6 +1282,28 @@ class OrganizationDocumentService:
             (r"(?i)\bcong\s*ty\s*co\s*phan\b", "CÔNG TY CỔ PHẦN"),
             (r"(?i)\bcong\s*ty\s*tnhh\b", "CÔNG TY TNHH"),
             (r"(?i)\bcong\s*ty\s*trach\s*nhiem\s*hu.?u\s*han\b", "CÔNG TY TRÁCH NHIỆM HỮU HẠN"),
+            (
+                r"(?i)\bd[uư](?:oc|ợc|c)\s+ph(?:am|ẩm|ám|m)\s+y\s+t(?:e|ế|é)\s+"
+                r"v(?:an|ạn|n)\s+ph(?:uc|úc)\b",
+                "DƯỢC PHẨM Y TẾ VẠN PHÚC",
+            ),
+            (r"(?i)\bd[uư](?:oc|ợc|c)\s+ph(?:am|ẩm|ám|m)\b", "DƯỢC PHẨM"),
+            (r"(?i)\bn[oô]ng\s+s(?:an|ản|ån)\b", "NÔNG SẢN"),
+            (r"(?i)\bn(?:oi|ội|i)\s+th(?:at|ất|át)\b", "NỘI THẤT"),
+            (r"(?i)\bd(?:au|ầu|àu)\s+t(?:u|ư)\b", "ĐẦU TƯ"),
+            (r"(?i)\bnha\s+thu(?:oc|ốc|ôc)\b", "NHÀ THUỐC"),
+            (r"(?i)\bthap\s+mu(?:oi|ời|òi)\b", "THÁP MƯỜI"),
+            (r"(?i)\bqu(?:ang|àng|ng)\s+ninh\b", "Quảng Ninh"),
+            (r"(?i)\btran\s+hung\s+dao\b", "Trần Hưng Đạo"),
+            (r"(?i)\bhung\s+vuong\b", "Hùng Vương"),
+            (r"(?i)\blau\s+(?=\d)", "lầu "),
+            (r"(?i)\bhiep\s+binh\s+chanh\b", "Hiệp Bình Chánh"),
+            (r"(?i)\bhiệp\s+bình\s+ch(?:ảnh|anh)\b", "Hiệp Bình Chánh"),
+            (r"(?i)\bph(?:am|ạm)\s+v(?:an|ăn)\s+(?:dong|đông)\b", "Phạm Văn Đồng"),
+            (
+                r"(?i)\bth[aà]nh\s+ph[oố]\s+th[uủ]\s+d(?:irc|uc|ức)\b",
+                "Thành phố Thủ Đức",
+            ),
             (r"(?i)\bcung\s+[ứu]ng\s+lao\s+d[oô]?ng\b", "CUNG ỨNG LAO ĐỘNG"),
             (r"(?i)\bcung\s*ung\s*lao\s*dong\b", "CUNG ỨNG LAO ĐỘNG"),
             (r"(?i)\bgi[ảaá]i\s+ph[áa]p\s+ph[ầa]?n\s+m[ềe]?m\b", "GIẢI PHÁP PHẦN MỀM"),
@@ -1085,7 +1351,6 @@ class OrganizationDocumentService:
             (r"(?i)\bs[0o6]\s*(?=\d)", "Số "),
             (r"(?i)\bngach\b", "ngách"),
             (r"(?i)\bngo\b", "ngõ"),
-            (r"(?i)\bduong\b", "đường"),
             (r"(?i)\bap\b", "ấp"),
             (r"(?i)\bphuong\b", "Phường"),
             (r"(?i)\bquan\b", "Quận"),
@@ -1131,6 +1396,11 @@ class OrganizationDocumentService:
     @classmethod
     def _compact(cls, value: str) -> str:
         return re.sub(r"[^a-z0-9]+", "", cls._fold(value))
+
+    @staticmethod
+    def _agreement_key(value: str) -> str:
+        """Ignore presentation differences without hiding OCR character errors."""
+        return " ".join(unicodedata.normalize("NFC", value).casefold().split())
 
     @staticmethod
     def _fold(value: str) -> str:

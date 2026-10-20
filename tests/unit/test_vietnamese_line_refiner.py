@@ -19,6 +19,25 @@ class VietnameseLineRefinerTests(unittest.TestCase):
     def test_accepts_accented_address_with_ocr_label_zero(self):
         self.assertTrue(VietnameseLineRefiner.accept("S0 273 Ly Tu Trong", "Số 273 Lý Tự Trọng", .95))
 
+    def test_repairs_dropped_letters_without_adding_candidate_words(self):
+        original = "Đa ch tr s chính: Duong Nguyn Thi Dinh, Phuong Binh Trung"
+        candidate = "Địa chỉ trụ sở chính: Đường Nguyễn Thị Định, Phường Bình Trưng"
+
+        self.assertTrue(VietnameseLineRefiner.accept(original, candidate, .94))
+        self.assertEqual(
+            "Địa chỉ trụ sở chính: Đường Nguyễn Thị Định, Phường Bình Trưng",
+            VietnameseLineRefiner.restore_accents(original, candidate),
+        )
+
+    def test_fuzzy_repair_keeps_original_word_count(self):
+        self.assertEqual(
+            "Phường Bến Thành",
+            VietnameseLineRefiner.restore_accents(
+                "Phuong Ben Thanh",
+                "Khu Phố Phường Bến Thành",
+            ),
+        )
+
     def test_fuzzy_address_heading_enables_refinement(self):
         for label in ("2. Dja chi:", "2. Dachi:", "2. Dia chi:", "2. Địa chỉ:"):
             with self.subTest(label=label):

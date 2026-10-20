@@ -38,6 +38,22 @@ Tên công ty viết bằng tiếng Việt: CÔNG TY TNHH KIỂM THỬ
 
 
 class LocationCertificateOcrQualityTests(TestCase):
+    def test_brc_primary_pass_uses_bundled_ppocr_v6(self) -> None:
+        service = LocationCertificateService()
+        service._vietnamese_ocr = MagicMock()
+        service._vietnamese_ocr.is_available = True
+        service._vietnamese_ocr.model_dir = Path("models")
+        service._vietnamese_ocr.recognize_detailed.return_value = [
+            ([[0, 0], [100, 0], [100, 20], [0, 20]], "GIẤY CHỨNG NHẬN", 0.96)
+        ]
+        legacy = MagicMock()
+
+        text = service._extract_page_with_ocr(legacy, b"not-an-image")
+
+        self.assertEqual("GIẤY CHỨNG NHẬN", text)
+        service._vietnamese_ocr.recognize_detailed.assert_called_once()
+        legacy.assert_not_called()
+
     def test_document_type_classifier_distinguishes_erc_and_brc(self) -> None:
         self.assertEqual("brc", OrganizationDocumentService.detect_document_type(NOISY_BRC))
         self.assertEqual("erc", OrganizationDocumentService.detect_document_type(ERC_TEXT))
@@ -138,6 +154,63 @@ class LocationCertificateOcrQualityTests(TestCase):
         self.assertEqual(
             "Số 258 phố Bạch Mai, Thửa đất 1459, Thành phố Thủ Đức, Việt Nam",
             restored,
+        )
+
+    def test_location_name_stops_before_noisy_foreign_language_label(self) -> None:
+        service = LocationCertificateService()
+        noisy = """GIAY CHUNG NHAN DANG KY DIA DIEM KINH DOANH
+Ma so dia diem kinh doanh: 00001
+1. Ten dia diem kinh doanh:
+DA DIEM KINH DOANH - CONG TY CO PHAN DAU TU 358
+TEN DA DIM KINH DOANH VIT BNG TING NƯC NGOÀI:
+BUSINESS LOCATION - 358 INVESTMENT JOINT STOCK COMPANY
+2. Dia chi: So 10 Tran Hung Dao, Phuong Dong Hai, Thanh pho Hai Phong, Viet Nam
+3. Thong tin ve nguoi dung dau
+4. Thong tin ve doanh nghiep/chi nhanh chu quan:
+Ten doanh nghiep/chi nhanh: CONG TY CO PHAN DAU TU 358
+Ma so doanh nghiep/chi nhanh: 0202184078
+"""
+
+        values = service._parse_certificate(noisy)
+
+        self.assertEqual(
+            "ĐỊA ĐIỂM KINH DOANH - CÔNG TY CỔ PHẦN ĐẦU TƯ 358",
+            values["location_business_name"],
+        )
+        self.assertNotIn("BUSINESS LOCATION", values["location_business_name"])
+
+    def test_repeated_company_suffix_repairs_parent_name(self) -> None:
+        service = LocationCertificateService()
+        values = {
+            "parent_entity_name": "CÔNG TY TNHH DUC PHM Y TÉ VN PHÚC",
+            "location_business_name": (
+                "NHÀ THUỐC BV THÁP MƯỜI - "
+                "CÔNG TY TNHH DƯỢC PHẨM Y TẾ VẠN PHÚC"
+            ),
+        }
+
+        self.assertEqual(
+            "CÔNG TY TNHH DƯỢC PHẨM Y TẾ VẠN PHÚC",
+            service._parent_name_from_location(values),
+        )
+
+    def test_brc_address_repairs_damaged_administrative_prefixes(self) -> None:
+        service = LocationCertificateService()
+
+        restored = service._restore_address(
+            "Nhà ông Mai Văn Tun, to 12A, khu 4B, Phưng Bãi Cháy, Tinh Qung Ninh, Viet Nam"
+        )
+
+        self.assertIn("Tổ 12A", restored)
+        self.assertIn("Phường Bãi Cháy", restored)
+        self.assertIn("Tỉnh Quảng Ninh", restored)
+
+    def test_company_name_removes_ocr_quote_before_numeric_qualifier(self) -> None:
+        service = LocationCertificateService()
+
+        self.assertEqual(
+            "CÔNG TY CỔ PHẦN ĐẦU TƯ 358",
+            service._restore_name("CÔNG TY CỔ PHẦN ĐẦU TƯ' 358"),
         )
 
     def test_incomplete_brc_runs_enhanced_pass(self) -> None:

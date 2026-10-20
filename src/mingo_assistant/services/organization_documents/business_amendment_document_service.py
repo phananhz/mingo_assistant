@@ -14,6 +14,9 @@ from mingo_assistant.services.organization_documents.organization_document_servi
 
 class BusinessAmendmentDocumentService(OrganizationDocumentService):
     RECOGNIZED_FIELDS = ("organization_owner_name", "organization_owner_registration_number")
+    # This workflow only displays name/code. Unused addresses or representative
+    # fields must not trigger a full-document OCR pass after these are read.
+    _ESSENTIAL_FIELDS = RECOGNIZED_FIELDS
 
     def extract_pdf(self, path, progress_callback=None) -> OrganizationDocumentResult:
         self._refinement_used = False

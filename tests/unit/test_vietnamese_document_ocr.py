@@ -3,9 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import cv2
+import fitz
 import numpy as np
 
 from mingo_assistant.services.ocr.vietnamese_document_ocr import VietnameseDocumentOcr
@@ -13,6 +14,92 @@ from mingo_assistant.services.organization_documents.organization_document_servi
 
 
 class VietnameseDocumentOcrTests(TestCase):
+    def test_quick_scan_preserves_pixel_resolution_of_small_physical_page(self) -> None:
+        service = OrganizationDocumentService()
+        service._legacy_engine = MagicMock()
+        with fitz.open() as document:
+            document.new_page(width=259.5, height=395.5)
+            with patch.object(service, "_extract_page_with_ocr", return_value="certificate") as ocr:
+                self.assertEqual("certificate", service._extract_first_page_for_type_detection(document, None))
+
+        image = cv2.imdecode(np.frombuffer(ocr.call_args.args[1], dtype=np.uint8), cv2.IMREAD_COLOR)
+        # At the old 3.1x cap this page was only 805px wide, too small to
+        # separate the address's letters from the security pattern.
+        self.assertGreater(image.shape[1], 1400)
+        self.assertGreater(image.shape[0], 1500)
+        self.assertLess(image.shape[0], 1600)
+
+    def test_quick_background_cleanup_lightens_yellow_but_preserves_dark_ink(self) -> None:
+        image = np.full((60, 120, 3), 255, dtype=np.uint8)
+        image[10:50, 10:100] = (80, 180, 190)
+        image[25:30, 20:80] = (25, 25, 25)
+        _, encoded = cv2.imencode(".png", image)
+
+        cleaned = OrganizationDocumentService._suppress_certificate_background(encoded.tobytes())
+        gray = cv2.imdecode(np.frombuffer(cleaned, dtype=np.uint8), cv2.IMREAD_GRAYSCALE)
+
+        self.assertGreater(int(gray[15, 15]), int(cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)[15, 15]))
+        self.assertEqual(25, int(gray[27, 25]))
+
+    def test_quick_background_cleanup_keeps_monochrome_and_invalid_inputs(self) -> None:
+        image = np.full((40, 80, 3), 255, dtype=np.uint8)
+        image[10:20, 20:60] = (25, 25, 25)
+        _, encoded = cv2.imencode(".png", image)
+        for original in (encoded.tobytes(), b"not-an-image"):
+            with self.subTest(valid=original != b"not-an-image"):
+                self.assertEqual(original, OrganizationDocumentService._suppress_certificate_background(original))
+
+    def test_complete_primary_erc_does_not_run_second_full_ocr_engine(self) -> None:
+        text = (
+            "GIẤY CHỨNG NHẬN ĐĂNG KÝ DOANH NGHIỆP\n"
+            "Mã số doanh nghiệp: 0312345678\n"
+            "Tên công ty viết bằng tiếng Việt: CÔNG TY TNHH KIỂM THỬ\n"
+            "2. Địa chỉ trụ sở chính: Số 12 đường Nguyễn Thị Định, Việt Nam\n"
+        )
+        service = OrganizationDocumentService(bundle_root=Path(__file__).resolve().parents[2])
+        module = "mingo_assistant.services.organization_documents.organization_document_service"
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "scan.pdf"
+            path.touch()
+            with patch(f"{module}.fitz.open"), \
+                    patch(f"{module}.extract_certificate_text", return_value=""), \
+                    patch.object(service, "_extract_first_page_for_type_detection", return_value=text.split("Mã số", 1)[0]), \
+                    patch.object(service, "_extract_with_ocr", return_value=text) as ocr:
+                result = service.extract_pdf(path)
+
+        ocr.assert_called_once()
+        self.assertEqual(("pdf_text", "ppocr_v6"), result.processing_route)
+
+    def test_erc_stops_after_first_page_when_required_fields_are_complete(self) -> None:
+        text = (
+            "GIẤY CHỨNG NHẬN ĐĂNG KÝ DOANH NGHIỆP\n"
+            "Mã số doanh nghiệp: 0312345678\n"
+            "Tên công ty viết bằng tiếng Việt: CÔNG TY TNHH KIỂM THỬ\n"
+            "2. Địa chỉ trụ sở chính: Số 12 đường Nguyễn Thị Định, Việt Nam\n"
+        )
+        for complete_first_page in (True, False):
+            with self.subTest(complete_first_page=complete_first_page):
+                service = OrganizationDocumentService()
+                service._legacy_engine = MagicMock()
+                first, second = MagicMock(), MagicMock()
+                for page in (first, second):
+                    page.rect.width, page.rect.height = 600, 800
+                    page.get_pixmap.return_value.tobytes.return_value = b"page"
+                document = MagicMock()
+                document.page_count = 2
+                document.__iter__.return_value = iter([first, second])
+                caption, address = text.split("2. Địa chỉ", 1)
+                readings = [text] if complete_first_page else [caption, "2. Địa chỉ" + address]
+                with patch.object(service, "_extract_page_with_ocr", side_effect=readings) as ocr:
+                    result = service._extract_with_ocr(document, None)
+
+                self.assertEqual(1 if complete_first_page else 2, ocr.call_count)
+                if complete_first_page:
+                    second.get_pixmap.assert_not_called()
+                else:
+                    second.get_pixmap.assert_called_once()
+                self.assertIn("Nguyễn Thị Định", result)
+
     def test_bundled_ppocrv6_models_are_detected(self) -> None:
         project_root = Path(__file__).resolve().parents[2]
 
@@ -41,7 +128,11 @@ class VietnameseDocumentOcrTests(TestCase):
             ))
             with patch("mingo_assistant.services.organization_documents.organization_document_service.fitz.open") as open_pdf:
                 open_pdf.return_value.__enter__.return_value.__iter__.return_value = iter(())
-                with patch.object(service, "_extract_with_ocr", side_effect=("unrecognized OCR text", legacy_text)) as ocr:
+                with patch.object(
+                    service,
+                    "_extract_with_ocr",
+                    side_effect=("unrecognized OCR text", legacy_text, legacy_text),
+                ) as ocr:
                     result = service.extract_pdf(pdf_path)
 
         self.assertEqual("0123456789", result.values["organization_owner_registration_number"])
@@ -80,7 +171,11 @@ class VietnameseDocumentOcrTests(TestCase):
                 with patch.object(
                     service,
                     "_extract_with_ocr",
-                    side_effect=(header, header + "\n2. Dia chi tru so chinh: 1 DUONG MAU, VIET NAM"),
+                    side_effect=(
+                        header,
+                        header + "\n2. Dia chi tru so chinh: 1 DUONG MAU, VIET NAM",
+                        header + "\n2. Dia chi tru so chinh: 1 DUONG MAU, VIET NAM",
+                    ),
                 ) as ocr:
                     result = service.extract_pdf(pdf_path)
 
@@ -165,6 +260,72 @@ class VietnameseDocumentOcrTests(TestCase):
         self.assertEqual(image.shape, decoded.shape)
         self.assertGreater(float(decoded.std()), float(image.std()))
 
+    def test_enhanced_preprocessing_produces_complementary_scan_variants(self) -> None:
+        image = np.full((240, 700), 235, dtype=np.uint8)
+        gradient = np.tile(np.linspace(0, 30, image.shape[1], dtype=np.uint8), (image.shape[0], 1))
+        image = cv2.subtract(image, gradient)
+        cv2.putText(
+            image,
+            "DIA CHI TRU SO CHINH: 12 NGUYEN THI DINH",
+            (10, 125),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.72,
+            115,
+            1,
+        )
+        success, encoded = cv2.imencode(".png", image)
+        self.assertTrue(success)
+
+        variants = OrganizationDocumentService._preprocess_variants_for_ocr(encoded.tobytes())
+
+        self.assertEqual(2, len(variants))
+        for variant in variants:
+            decoded = cv2.imdecode(np.frombuffer(variant, dtype=np.uint8), cv2.IMREAD_GRAYSCALE)
+            self.assertIsNotNone(decoded)
+            self.assertEqual(image.shape, decoded.shape)
+
+    def test_enhanced_variant_ranking_prefers_document_anchors_and_accents(self) -> None:
+        service = OrganizationDocumentService()
+        incomplete = "GIAY CHUNG NHAN\nCONG TY TNHH KIEM THU"
+        complete = (
+            "GIẤY CHỨNG NHẬN ĐĂNG KÝ DOANH NGHIỆP\n"
+            "Mã số doanh nghiệp: 0312345678\n"
+            "Tên công ty: CÔNG TY TNHH KIỂM THỬ\n"
+            "Địa chỉ trụ sở chính: 12 Nguyễn Thị Định"
+        )
+
+        self.assertGreater(service._ocr_text_quality(complete), service._ocr_text_quality(incomplete))
+
+    def test_enhanced_pass_retains_each_image_variant_for_field_level_merge(self) -> None:
+        service = OrganizationDocumentService()
+        service._legacy_engine = MagicMock()
+        page = MagicMock()
+        page.rect.width = 600
+        page.rect.height = 800
+        page.get_pixmap.return_value.tobytes.return_value = b"rendered-page"
+        document = MagicMock()
+        document.page_count = 1
+        document.__iter__.return_value = iter([page])
+        weak = "GIAY CHUNG NHAN"
+        strong = (
+            "GIẤY CHỨNG NHẬN ĐĂNG KÝ DOANH NGHIỆP\n"
+            "Mã số doanh nghiệp: 0312345678\nĐịa chỉ trụ sở chính: Hà Nội"
+        )
+
+        with patch.object(
+            service,
+            "_preprocess_variants_for_ocr",
+            return_value=[b"contrast", b"binary"],
+        ), patch.object(
+            service,
+            "_extract_page_with_ocr",
+            side_effect=[weak, strong],
+        ):
+            selected = service._extract_with_ocr(document, None, enhanced=True)
+
+        self.assertEqual(strong, selected)
+        self.assertEqual((weak, strong), service._last_enhanced_text_candidates)
+
     def test_address_cleanup_preserves_detail_and_removes_administrative_suffix(self) -> None:
         service = OrganizationDocumentService()
         cases = (
@@ -187,6 +348,22 @@ class VietnameseDocumentOcrTests(TestCase):
             with self.subTest(raw_address=raw_address):
                 values = service._organization_address_values(raw_address)
                 self.assertEqual(expected_detail, values["organization_owner_address_detail"])
+
+    def test_domain_phrases_repair_real_erc_ocr_damage(self) -> None:
+        service = OrganizationDocumentService()
+
+        self.assertEqual(
+            "CÔNG TY TNHH TRANG TRÍ NỘI THẤT HP",
+            service._restore_vietnamese_phrases(
+                "CÔNG TY TNHH TRANG TRÍ NI THÁT HP"
+            ),
+        )
+        self.assertEqual(
+            "CÔNG TY TNHH THƯƠNG MẠI NÔNG SẢN THANH HOA",
+            service._restore_vietnamese_phrases(
+                "CÔNG TY TNHH THƯƠNG MẠI NÔNG SÅN THANH HOA"
+            ),
+        )
 
     def test_fuzzy_certificate_labels_keep_v6_name_and_address_available(self) -> None:
         service = OrganizationDocumentService()
