@@ -1,3 +1,5 @@
+param([string]$OpenCvRoot = "")
+
 $ErrorActionPreference = "Stop"
 
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot ".." )).Path
@@ -13,11 +15,24 @@ if (-not (Test-Path -LiteralPath $pythonPath -PathType Leaf)) {
     throw "Khong tim thay Python cua du an tai: $pythonPath"
 }
 
+if ($OpenCvRoot) {
+    $opencvDependencyRoot = (Resolve-Path -LiteralPath $OpenCvRoot).Path
+    if (-not (Test-Path -LiteralPath (Join-Path $opencvDependencyRoot "cv2\cv2.pyd") -PathType Leaf)) {
+        throw "OpenCvRoot must contain a complete OpenCV Contrib installation."
+    }
+    $env:PYTHONPATH = $opencvDependencyRoot + [IO.Path]::PathSeparator + $env:PYTHONPATH
+}
+
 New-Item -ItemType Directory -Path $outputPath -Force | Out-Null
 
 & $pythonPath -c "import PySide6, PyInstaller; print('PySide6', PySide6.__version__); print('PyInstaller', PyInstaller.__version__)"
 if ($LASTEXITCODE -ne 0) {
     throw "Moi truong build chua co du PySide6 va PyInstaller."
+}
+
+& $pythonPath -c "import cv2; assert hasattr(cv2, 'wechat_qrcode_WeChatQRCode'), 'OpenCV Contrib is missing or shadowed by another OpenCV distribution'; print('OpenCV Contrib', cv2.__version__, cv2.__file__)"
+if ($LASTEXITCODE -ne 0) {
+    throw "Build requires OpenCV Contrib with WeChat QR. Repair conflicting cv2 packages or supply -OpenCvRoot."
 }
 
 Write-Host "Building Min Assistant EXE..."
@@ -36,20 +51,37 @@ New-Item -ItemType Directory -Path $selfTestRoot -Force | Out-Null
 Remove-Item -LiteralPath $selfTestReport -Force -ErrorAction SilentlyContinue
 
 Write-Host "Running OCR/QR self-test inside the frozen EXE..."
-$selfTestProcess = Start-Process `
-    -FilePath $exePath `
-    -ArgumentList @("--portable-self-test", $selfTestReport) `
-    -WindowStyle Hidden `
-    -PassThru
-if (-not $selfTestProcess.WaitForExit(240000)) {
-    Stop-Process -Id $selfTestProcess.Id -Force -ErrorAction SilentlyContinue
-    throw "Portable OCR/QR self-test timed out after 240 seconds."
+$previousPath = $env:PATH
+$previousPythonPath = $env:PYTHONPATH
+$previousPythonHome = $env:PYTHONHOME
+try {
+    # Only this child process is isolated; do not modify machine/user settings.
+    $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
+    $env:PYTHONPATH = $null
+    $env:PYTHONHOME = $null
+    $selfTestProcess = Start-Process `
+        -FilePath $exePath `
+        -WorkingDirectory $selfTestRoot `
+        -ArgumentList @("--portable-self-test", ('"' + $selfTestReport + '"')) `
+        -WindowStyle Hidden `
+        -PassThru
+    if (-not $selfTestProcess.WaitForExit(240000)) {
+        Stop-Process -Id $selfTestProcess.Id -Force -ErrorAction SilentlyContinue
+        throw "Portable OCR/QR self-test timed out after 240 seconds."
+    }
+    if ($selfTestProcess.ExitCode -ne 0) {
+        throw "Portable self-test exited with code $($selfTestProcess.ExitCode). See $selfTestReport"
+    }
+} finally {
+    $env:PATH = $previousPath
+    $env:PYTHONPATH = $previousPythonPath
+    $env:PYTHONHOME = $previousPythonHome
 }
 if (-not (Test-Path -LiteralPath $selfTestReport -PathType Leaf)) {
     throw "The frozen EXE did not create its OCR/QR self-test report."
 }
 $selfTestResult = Get-Content -LiteralPath $selfTestReport -Raw -Encoding UTF8 | ConvertFrom-Json
-if (-not $selfTestResult.ok) {
+if (-not $selfTestResult.ok -or -not $selfTestResult.frozen) {
     $selfTestResult | ConvertTo-Json -Depth 8
     throw "Portable OCR/QR self-test failed inside the frozen EXE."
 }

@@ -15,6 +15,9 @@ from docx.enum.text import WD_COLOR_INDEX
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
+from mingo_assistant.domains.dependent_unit.location_changes import (
+    entered_location_changes, normalize_location_update_tax_values,
+)
 from mingo_assistant.services.documents.docx_template_engine import DocxTemplateEngine
 from mingo_assistant.services.documents.generation_result import GeneratedDocument, GenerationResult
 from mingo_assistant.services.documents.template_manifest import TemplateManifest
@@ -244,6 +247,9 @@ class DependentUnitTemplateGenerator(DocxTemplateEngine):
 
     def _replace_highlighted_runs(self, docx_path: Path, template_name: str, values: dict[str, str]) -> None:
         """Use the company-dossier writer, then apply this form's protected tables."""
+        is_update_notification = self._fold(template_name).startswith('thong bao thay doi')
+        if is_update_notification:
+            values = normalize_location_update_tax_values(values)
         document = Document(docx_path)
         highlighted_values = dict(values)
         foreign_location_manager = (
@@ -279,7 +285,6 @@ class DependentUnitTemplateGenerator(DocxTemplateEngine):
             "tax_vat_deduction_x",
         ):
             highlighted_values[key] = ""
-        is_update_notification = self._fold(template_name).startswith('thong bao thay doi')
         if is_update_notification:
             # The protected template still has three legacy yellow slots for
             # Part B, but the form now supplies one unrestricted plain-text
@@ -338,7 +343,83 @@ class DependentUnitTemplateGenerator(DocxTemplateEngine):
                 elif 'ca nhan duoi day' in folded:
                     for run in paragraph.runs:
                         run.font.size = Pt(13)
+        if is_update_notification:
+            self._remove_empty_notification_sections(document, values)
         document.save(docx_path)
+
+    def _remove_empty_notification_sections(self, document: Document, values: dict[str, str]) -> None:
+        """Prune whole unused blocks only after all original slots are filled.
+
+        A populated block retains its blank child fields, labels and tables.
+        UI checkbox state never controls export. The retired correction block
+        is always removed, while the common commitments and signer are kept.
+        """
+        headings = (
+            ("dang ky thay doi ten dia diem kinh doanh", "change_name_selected"),
+            ("dang ky thay doi dia chi dia diem kinh doanh", "change_address_selected"),
+            ("dang ky thay doi nganh, nghe kinh doanh/noi dung hoat dong", "change_business_lines_selected"),
+            ("dang ky thay doi nguoi dung dau dia diem kinh doanh", "change_manager_selected"),
+            ("dang ky thay doi thong tin dang ky thue", "change_tax_selected"),
+            ("b. bo sung, cap nhat thong tin dang ky hoat dong", "change_supplemental_selected"),
+            ("c. de nghi hieu dinh thong tin dang ky hoat dong", "change_correction_selected"),
+        )
+        elements = list(document.element.body)
+        boundaries: list[tuple[int, str]] = []
+        text_by_index: dict[int, str] = {}
+        for index, element in enumerate(elements):
+            if element.tag != qn("w:p"):
+                continue
+            text = re.sub(r"\s+", " ", self._fold("".join(element.xpath(".//w:t/text()")))).strip()
+            text_by_index[index] = text
+            for prefix, section in headings:
+                if text.startswith(prefix):
+                    boundaries.append((index, section))
+                    break
+        if not boundaries:
+            return
+        closing = next((
+            index for index, text in text_by_index.items()
+            if index > boundaries[-1][0]
+            and text.startswith("doanh nghiep cam ket hoan toan chiu trach nhiem")
+        ), None)
+        if closing is None:
+            raise ValueError("Không xác định được phần cam kết cuối mẫu Thông báo thay đổi; chưa xóa đầu mục.")
+
+        populated = set(entered_location_changes(values))
+        remove_indices: set[int] = set()
+        for position, (start, section) in enumerate(boundaries):
+            stop = boundaries[position + 1][0] if position + 1 < len(boundaries) else closing
+            if section not in populated:
+                remove_indices.update(range(start, stop))
+        # Part A is only a wrapper for its five change sections. Do not leave
+        # an empty Part A heading when the user only provides Part B content.
+        if not populated.intersection({section for _prefix, section in headings[:5]}):
+            part_a = next((
+                index for index, text in text_by_index.items()
+                if index < boundaries[0][0] and text.startswith("a. dang ky thay doi noi dung")
+            ), None)
+            if part_a is not None:
+                remove_indices.update(range(part_a, boundaries[0][0]))
+        for index in sorted(remove_indices, reverse=True):
+            element = elements[index]
+            if element.xpath(".//w:sectPr"):
+                raise ValueError("Đầu mục cần xóa chứa thiết lập trang; cần kiểm tra lại cấu trúc mẫu Word.")
+            document.element.body.remove(element)
+        # The source has nine padding paragraphs after the signing table.
+        # Once sections are pruned they can spill onto a completely blank last
+        # page. Keep one final paragraph after the table; never alter its rows,
+        # signature space, or any paragraph containing runs/section settings.
+        trailing = []
+        for element in reversed(list(document.element.body)):
+            if element.tag == qn("w:sectPr"):
+                continue
+            if element.tag != qn("w:p") or any(child.tag != qn("w:pPr") for child in element):
+                break
+            if element.xpath(".//w:sectPr"):
+                break
+            trailing.append(element)
+        for element in trailing[1:]:
+            document.element.body.remove(element)
 
     def _normalize_notification_entered_value_fonts(
         self, document: Document, template_name: str, values: dict[str, str]

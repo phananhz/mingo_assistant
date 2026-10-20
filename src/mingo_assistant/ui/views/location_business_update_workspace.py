@@ -14,6 +14,10 @@ from PySide6.QtWidgets import (
 )
 
 from mingo_assistant.models.case import CaseSummary
+from mingo_assistant.domains.dependent_unit.location_changes import (
+    LOCATION_CHANGE_FIELDS, UPDATE_LABOR_INPUT_KEY, UPDATE_LEGACY_LABOR_KEY,
+    entered_location_changes, location_change_has_data, normalize_location_update_tax_values,
+)
 from mingo_assistant.services.organization_documents.location_certificate_service import (
     LocationCertificateService,
 )
@@ -44,6 +48,20 @@ class LocationBusinessUpdateWorkspace(LocationBusinessWorkspace):
         self.organization_document_service = LocationCertificateService(
             self.address_parser, self.bundle_root
         )
+
+    def _seed_from_case(self, case: CaseSummary | None) -> None:
+        saved = normalize_location_update_tax_values(case.form_values) if case else {}
+        super()._seed_from_case(replace(case, form_values=saved) if case else None)
+        # Override the creation default even for saved dossiers. A legacy
+        # unconfirmed 1 is not evidence that the user requested a tax change.
+        self._set_field("tax_labor_count", saved.get("tax_labor_count", ""))
+        self._legacy_tax_labor_count = saved.get(UPDATE_LEGACY_LABOR_KEY, "")
+        field = self.fields.get("tax_labor_count")
+        if isinstance(field, QLineEdit) and self._legacy_tax_labor_count:
+            field.setToolTip(
+                "Hồ sơ cũ có giá trị 1 chưa xác nhận, có thể do app tự điền. "
+                "Nếu cần kê khai 1 lao động, vui lòng nhập lại 1."
+            )
 
     def _build_organization_result_section(self) -> QWidget:
         return build_location_certificate_result_section(self)
@@ -298,6 +316,14 @@ class LocationBusinessUpdateWorkspace(LocationBusinessWorkspace):
 
     def form_values(self, apply_defaults: bool = True) -> dict[str, str]:
         values = super().form_values(apply_defaults=apply_defaults)
+        # Creation-only defaults/phone synchronization must not populate an
+        # update section, or overwrite tax contacts actually entered here.
+        values.update(self._change_input_values())
+        values[UPDATE_LABOR_INPUT_KEY] = "1" if values.get("tax_labor_count", "").strip() else "0"
+        legacy_labor = getattr(self, "_legacy_tax_labor_count", "")
+        if legacy_labor:
+            values[UPDATE_LEGACY_LABOR_KEY] = legacy_labor
+        values["change_correction_selected"] = ""
         organization = getattr(self, "_selected_update_organization", {})
         if organization:
             values["company_name"] = (
@@ -353,7 +379,8 @@ class LocationBusinessUpdateWorkspace(LocationBusinessWorkspace):
         layout.addWidget(common)
 
         instruction = QLabel(
-            "Ch\u1ecdn m\u1ed9t ho\u1eb7c nhi\u1ec1u n\u1ed9i dung. Form c\u1ee7a c\u00e1c m\u1ee5c \u0111\u00e3 ch\u1ecdn s\u1ebd hi\u1ec3n theo \u0111\u00fang th\u1ee9 t\u1ef1 trong Th\u00f4ng b\u00e1o thay \u0111\u1ed5i; DOCX ch\u1ec9 gi\u1eef c\u00e1c m\u1ee5c \u0111\u00f3."
+            "Chọn đầu mục để mở hoặc thu gọn form nhập. Dấu ✓ cho biết đầu mục đã có dữ liệu. "
+            "Khi xuất Word, chỉ giữ các đầu mục có dữ liệu, kể cả khi form đang thu gọn."
         )
         instruction.setObjectName("PageDescription")
         instruction.setWordWrap(True)
@@ -366,12 +393,11 @@ class LocationBusinessUpdateWorkspace(LocationBusinessWorkspace):
         choice_grid.setVerticalSpacing(6)
         self.change_options = (
             ("change_name_selected", "\u0110\u0103ng k\u00fd thay \u0111\u1ed5i t\u00ean \u0111\u1ecba \u0111i\u1ec3m kinh doanh", (("new_location_business_name", "T\u00ean \u0111\u1ecba \u0111i\u1ec3m kinh doanh b\u1eb1ng ti\u1ebfng Vi\u1ec7t sau khi thay \u0111\u1ed5i"), ("new_location_business_english_name", "T\u00ean \u0111\u1ecba \u0111i\u1ec3m kinh doanh b\u1eb1ng ti\u1ebfng n\u01b0\u1edbc ngo\u00e0i sau khi thay \u0111\u1ed5i"), ("new_location_business_short_name", "T\u00ean \u0111\u1ecba \u0111i\u1ec3m kinh doanh vi\u1ebft t\u1eaft sau khi thay \u0111\u1ed5i"))),
-            ("change_address_selected", "\u0110\u0103ng k\u00fd thay \u0111\u1ed5i \u0111\u1ecba ch\u1ec9 \u0111\u1ecba \u0111i\u1ec3m kinh doanh", (("new_location_address_detail", "S\u1ed1 nh\u00e0/ph\u00f2ng, ng\u00e1ch/h\u1ebbm, ng\u00f5/ki\u1ec7t, \u0111\u01b0\u1eddng/ph\u1ed1/\u0111\u1ea1i l\u1ed9, t\u1ed5/x\u00f3m/\u1ea5p/th\u00f4n"), ("new_location_ward", "X\u00e3/Ph\u01b0\u1eddng/\u0110\u1eb7c khu"), ("new_location_province", "T\u1ec9nh/Th\u00e0nh ph\u1ed1 tr\u1ef1c thu\u1ed9c trung \u01b0\u01a1ng"), ("new_location_phone", "\u0110\u1ec7n tho\u1ea1i (n\u1ebfu c\u00f3)"), ("new_location_fax", "S\u1ed1 fax (n\u1ebfu c\u00f3)"), ("new_location_email", "Th\u01b0 \u0111i\u1ec7n t\u1eed (n\u1ebfu c\u00f3)"), ("new_location_website", "Website (n\u1ebfu c\u00f3)"))),
+            ("change_address_selected", "\u0110\u0103ng k\u00fd thay \u0111\u1ed5i \u0111\u1ecba ch\u1ec9 \u0111\u1ecba \u0111i\u1ec3m kinh doanh", (("new_location_address_detail", "S\u1ed1 nh\u00e0/ph\u00f2ng, ng\u00e1ch/h\u1ebbm, ng\u00f5/ki\u1ec7t, \u0111\u01b0\u1eddng/ph\u1ed1/\u0111\u1ea1i l\u1ed9, t\u1ed5/x\u00f3m/\u1ea5p/th\u00f4n"), ("new_location_ward", "X\u00e3/Ph\u01b0\u1eddng/\u0110\u1eb7c khu"), ("new_location_province", "T\u1ec9nh/Th\u00e0nh ph\u1ed1 tr\u1ef1c thu\u1ed9c trung \u01b0\u01a1ng"), ("new_location_phone", "\u0110i\u1ec7n tho\u1ea1i (n\u1ebfu c\u00f3)"), ("new_location_fax", "S\u1ed1 fax (n\u1ebfu c\u00f3)"), ("new_location_email", "Th\u01b0 \u0111i\u1ec7n t\u1eed (n\u1ebfu c\u00f3)"), ("new_location_website", "Website (n\u1ebfu c\u00f3)"))),
             ("change_business_lines_selected", "\u0110\u0103ng k\u00fd thay \u0111\u1ed5i ng\u00e0nh, ngh\u1ec1 kinh doanh/n\u1ed9i dung ho\u1ea1t \u0111\u1ed9ng", ()),
-            ("change_manager_selected", "\u0110\u0103ng k\u00fd thay \u0111\u1ed5i ng\u01b0\u1eddi \u0111\u1ee9ng \u0111\u1ea7u \u0111\u1ecba \u0111i\u1ec3m kinh doanh", (("location_manager_full_name", "H\u1ecd, ch\u1eef \u0111\u1ec7m v\u00e0 t\u00ean (ghi b\u1eb1ng ch\u1eef in hoa)"), ("location_manager_date_of_birth", "Ng\u00e0y, th\u00e1ng, n\u0103m sinh"), ("location_manager_gender", "Gi\u1edbi t\u00ednh"), ("location_manager_id_number", "S\u1ed1 \u0111\u1ecbnh danh c\u00e1 nh\u00e2n"), ("location_manager_address_detail", "S\u1ed1 nh\u00e0/ph\u00f2ng, ng\u00e1ch/h\u1ebbm, ng\u00f5/ki\u1ebft, \u0111\u01b0\u1eddng/ph\u1ed1/\u0111\u1ea1i l\u1ed9, t\u1ed5/x\u00f3m/\u1ea5p/th\u00f4n"), ("location_manager_ward", "X\u00e3/Ph\u01b0\u1eddng/\u0110\u1eb7c khu"), ("location_manager_province", "T\u1ec9nh/Th\u00e0nh ph\u1ed1 tr\u1ef1c thu\u1ed9c trung \u01b0\u01a1ng"), ("location_manager_nationality", "Qu\u1ed1c gia"), ("location_manager_phone", "\u0110\u1ec7n tho\u1ea1i (n\u1ebfu c\u00f3)"), ("location_manager_email", "Th\u01b0 \u0111i\u1ec7n t\u1eed (n\u1ebfu c\u00f3)"))),
-            ("change_tax_selected", "\u0110\u0103ng k\u00fd thay \u0111\u1ed5i th\u00f4ng tin \u0111\u0103ng k\u00fd thu\u1ebf", (("tax_accountant_full_name", "H\u1ecd, ch\u1eef \u0111\u1ec7m v\u00e0 t\u00ean K\u1ebf to\u00e1n tr\u01b0\u1edfng/Ph\u1ee5 tr\u00e1ch k\u1ebf to\u00e1n (n\u1ebfu c\u00f3)"), ("tax_accountant_date_of_birth", "Ng\u00e0y, th\u00e1ng, n\u0103m sinh"), ("tax_accountant_gender", "Gi\u1edbi t\u00ednh"), ("tax_accountant_id_number", "S\u1ed1 \u0111\u1ecbnh danh c\u00e1 nh\u00e2n"), ("tax_accountant_phone", "\u0110i\u1ec7n tho\u1ea1i"), ("tax_notification_address_detail", "\u0110\u1ecba ch\u1ec9 nh\u1eadn th\u00f4ng b\u00e1o thu\u1ebf (n\u1ebfu c\u00f3) - s\u1ed1 nh\u00e0/ph\u00f2ng, \u0111\u01b0\u1eddng/ph\u1ed1"), ("tax_notification_ward", "\u0110\u1ecba ch\u1ec9 nh\u1eadn th\u00f4ng b\u00e1o thu\u1ebf (n\u1ebfu c\u00f3) - x\u00e3/ph\u01b0\u1eddng/\u0111\u1eb7c khu"), ("tax_notification_province", "\u0110\u1ecba ch\u1ec9 nh\u1eadn th\u00f4ng b\u00e1o thu\u1ebf (n\u1ebfu c\u00f3) - t\u1ec9nh/th\u00e0nh ph\u1ed1"), ("tax_notification_phone", "\u0110\u1ec7n tho\u1ea1i nh\u1eadn th\u00f4ng b\u00e1o thu\u1ebf (n\u1ebfu c\u00f3)"), ("tax_notification_email", "Th\u01b0 \u0111i\u1ec7n t\u1eed nh\u1eadn th\u00f4ng b\u00e1o thu\u1ebf (n\u1ebfu c\u00f3)"), ("tax_accounting_independent_x", "H\u1ea1ch to\u00e1n \u0111\u1ed9c l\u1eadp"), ("tax_accounting_consolidated_x", "C\u00f3 b\u00e1o c\u00e1o t\u00e0i ch\u00ednh h\u1ee3p nh\u1ea5t"), ("tax_accounting_dependent_x", "H\u1ea1ch to\u00e1n ph\u1ee5 thu\u1ed9c"), ("tax_financial_year_start", "N\u0103m t\u00e0i ch\u00ednh - \u00e1p d\u1ee5ng t\u1eeb ng\u00e0y"), ("tax_financial_year_end", "N\u0103m t\u00e0i ch\u00ednh - \u0111\u1ebfn ng\u00e0y"), ("tax_labor_count", "T\u1ed5ng s\u1ed1 lao \u0111\u1ed9ng"))),
+            ("change_manager_selected", "\u0110\u0103ng k\u00fd thay \u0111\u1ed5i ng\u01b0\u1eddi \u0111\u1ee9ng \u0111\u1ea7u \u0111\u1ecba \u0111i\u1ec3m kinh doanh", (("location_manager_full_name", "H\u1ecd, ch\u1eef \u0111\u1ec7m v\u00e0 t\u00ean (ghi b\u1eb1ng ch\u1eef in hoa)"), ("location_manager_date_of_birth", "Ng\u00e0y, th\u00e1ng, n\u0103m sinh"), ("location_manager_gender", "Gi\u1edbi t\u00ednh"), ("location_manager_id_number", "S\u1ed1 \u0111\u1ecbnh danh c\u00e1 nh\u00e2n"), ("location_manager_address_detail", "S\u1ed1 nh\u00e0/ph\u00f2ng, ng\u00e1ch/h\u1ebbm, ng\u00f5/ki\u1ebft, \u0111\u01b0\u1eddng/ph\u1ed1/\u0111\u1ea1i l\u1ed9, t\u1ed5/x\u00f3m/\u1ea5p/th\u00f4n"), ("location_manager_ward", "X\u00e3/Ph\u01b0\u1eddng/\u0110\u1eb7c khu"), ("location_manager_province", "T\u1ec9nh/Th\u00e0nh ph\u1ed1 tr\u1ef1c thu\u1ed9c trung \u01b0\u01a1ng"), ("location_manager_nationality", "Qu\u1ed1c gia"), ("location_manager_phone", "\u0110i\u1ec7n tho\u1ea1i (n\u1ebfu c\u00f3)"), ("location_manager_email", "Th\u01b0 \u0111i\u1ec7n t\u1eed (n\u1ebfu c\u00f3)"))),
+            ("change_tax_selected", "\u0110\u0103ng k\u00fd thay \u0111\u1ed5i th\u00f4ng tin \u0111\u0103ng k\u00fd thu\u1ebf", (("tax_accountant_full_name", "H\u1ecd, ch\u1eef \u0111\u1ec7m v\u00e0 t\u00ean K\u1ebf to\u00e1n tr\u01b0\u1edfng/Ph\u1ee5 tr\u00e1ch k\u1ebf to\u00e1n (n\u1ebfu c\u00f3)"), ("tax_accountant_date_of_birth", "Ng\u00e0y, th\u00e1ng, n\u0103m sinh"), ("tax_accountant_gender", "Gi\u1edbi t\u00ednh"), ("tax_accountant_id_number", "S\u1ed1 \u0111\u1ecbnh danh c\u00e1 nh\u00e2n"), ("tax_accountant_phone", "\u0110i\u1ec7n tho\u1ea1i"), ("tax_notification_address_detail", "\u0110\u1ecba ch\u1ec9 nh\u1eadn th\u00f4ng b\u00e1o thu\u1ebf (n\u1ebfu c\u00f3) - s\u1ed1 nh\u00e0/ph\u00f2ng, \u0111\u01b0\u1eddng/ph\u1ed1"), ("tax_notification_ward", "\u0110\u1ecba ch\u1ec9 nh\u1eadn th\u00f4ng b\u00e1o thu\u1ebf (n\u1ebfu c\u00f3) - x\u00e3/ph\u01b0\u1eddng/\u0111\u1eb7c khu"), ("tax_notification_province", "\u0110\u1ecba ch\u1ec9 nh\u1eadn th\u00f4ng b\u00e1o thu\u1ebf (n\u1ebfu c\u00f3) - t\u1ec9nh/th\u00e0nh ph\u1ed1"), ("tax_notification_phone", "\u0110i\u1ec7n tho\u1ea1i nh\u1eadn th\u00f4ng b\u00e1o thu\u1ebf (n\u1ebfu c\u00f3)"), ("tax_notification_email", "Th\u01b0 \u0111i\u1ec7n t\u1eed nh\u1eadn th\u00f4ng b\u00e1o thu\u1ebf (n\u1ebfu c\u00f3)"), ("tax_accounting_independent_x", "H\u1ea1ch to\u00e1n \u0111\u1ed9c l\u1eadp"), ("tax_accounting_consolidated_x", "C\u00f3 b\u00e1o c\u00e1o t\u00e0i ch\u00ednh h\u1ee3p nh\u1ea5t"), ("tax_accounting_dependent_x", "H\u1ea1ch to\u00e1n ph\u1ee5 thu\u1ed9c"), ("tax_financial_year_start", "N\u0103m t\u00e0i ch\u00ednh - \u00e1p d\u1ee5ng t\u1eeb ng\u00e0y"), ("tax_financial_year_end", "N\u0103m t\u00e0i ch\u00ednh - \u0111\u1ebfn ng\u00e0y"), ("tax_labor_count", "T\u1ed5ng s\u1ed1 lao \u0111\u1ed9ng"))),
             ("change_supplemental_selected", "\u0110\u0103ng k\u00fd b\u1ed5 sung, c\u1eadp nh\u1eadt th\u00f4ng tin \u0111\u0103ng k\u00fd ho\u1ea1t \u0111\u1ed9ng", (("supplemental_registration_content", "N\u1ed9i dung b\u1ed5 sung, c\u1eadp nh\u1eadt"),)),
-            ("change_correction_selected", "\u0110\u0103ng k\u00fd hi\u1ec7u \u0111\u00ednh th\u00f4ng tin \u0111\u0103ng k\u00fd ho\u1ea1t \u0111\u1ed9ng", ()),
         )
         self.change_option_cards: dict[str, QFrame] = {}
         self.change_option_indicators: dict[str, QLabel] = {}
@@ -442,10 +468,6 @@ class LocationBusinessUpdateWorkspace(LocationBusinessWorkspace):
                 for row in self.business_line_rows:
                     row.main_checkbox.setEnabled(True)
                     row.main_checkbox.setToolTip("Ch\u1ec9 ch\u1ecdn m\u1ed9t ng\u00e0nh, ngh\u1ec1 kinh doanh ch\u00ednh.")
-            elif not fields:
-                explanation = QLabel("M\u1eabu kh\u00f4ng c\u00f3 v\u00f9ng m\u00e0u v\u00e0ng \u0111\u1ec3 \u0111i\u1ec1n th\u00eam. Vi\u1ec7c ch\u1ecdn m\u1ee5c n\u00e0y ch\u1ec9 quy\u1ebft \u0111\u1ecbnh gi\u1eef kh\u1ed1i hi\u1ec7u \u0111\u00ednh trong DOCX.")
-                explanation.setWordWrap(True)
-                form_layout.addWidget(explanation, 0, 0, 1, 4)
             else:
                 fill_target = {
                     "change_manager_selected": "location_manager",
@@ -562,25 +584,19 @@ class LocationBusinessUpdateWorkspace(LocationBusinessWorkspace):
         representative_id = re.sub(r"\D", "", self._field_value("legal_representative_id_number"))
         warning.setVisible(bool(manager_id and representative_id and manager_id == representative_id))
 
-    def _change_option_has_entered_data(self, key: str, fields: tuple[tuple[str, str], ...]) -> bool:
-        if key == "change_business_lines_selected":
-            return any(
-                bool(self._field_value(f"business_line_{index}_{part}").strip())
-                for index in range(1, len(self.business_line_rows) + 1)
-                for part in ("name", "detail", "code")
-            )
-        if key == "change_correction_selected":
-            return False
-        manual_x_keys = {
-            "tax_accounting_independent_x",
-            "tax_accounting_consolidated_x",
-            "tax_accounting_dependent_x",
+    def _change_input_values(self) -> dict[str, str]:
+        values = {
+            field: self._field_value(field)
+            for fields in LOCATION_CHANGE_FIELDS.values() for field in fields
         }
-        return any(
-            bool(self._field_value(field_key).strip())
-            for field_key, _label in fields
-            if field_key not in manual_x_keys
-        )
+        for index in range(1, len(self.business_line_rows) + 1):
+            for part in ("name", "detail", "code"):
+                key = f"business_line_{index}_{part}"
+                values[key] = self._field_value(key)
+        return values
+
+    def _change_option_has_entered_data(self, key: str, fields: tuple[tuple[str, str], ...]) -> bool:
+        return location_change_has_data(key, self._change_input_values())
 
     @staticmethod
     def _change_option_checkbox_icon(selected: bool) -> QIcon:
@@ -651,55 +667,7 @@ class LocationBusinessUpdateWorkspace(LocationBusinessWorkspace):
     @staticmethod
     def _has_entered_change_data(values: dict[str, str]) -> bool:
         """The Word notification is driven by entered values, not UI checkboxes."""
-        change_fields = (
-            "new_location_business_name",
-            "new_location_business_english_name",
-            "new_location_business_short_name",
-            "new_location_address_detail",
-            "new_location_ward",
-            "new_location_province",
-            "new_location_phone",
-            "new_location_fax",
-            "new_location_email",
-            "new_location_website",
-            "location_manager_full_name",
-            "location_manager_date_of_birth",
-            "location_manager_gender",
-            "location_manager_id_number",
-            "location_manager_address_detail",
-            "location_manager_ward",
-            "location_manager_province",
-            "location_manager_nationality",
-            "location_manager_phone",
-            "location_manager_email",
-            "tax_accountant_full_name",
-            "tax_accountant_date_of_birth",
-            "tax_accountant_gender",
-            "tax_accountant_id_number",
-            "tax_accountant_phone",
-            "tax_notification_address_detail",
-            "tax_notification_ward",
-            "tax_notification_province",
-            "tax_notification_phone",
-            "tax_notification_email",
-            "tax_financial_year_start",
-            "tax_financial_year_end",
-            "tax_labor_count",
-            "supplemental_registration_content",
-            "supplemental_registration_content_1",
-            "supplemental_registration_content_2",
-            "supplemental_registration_content_3",
-        )
-        if any(str(values.get(key, "") or "").strip() for key in change_fields):
-            return True
-        if any(
-            str(values.get(f"business_line_{index}_{part}", "") or "").strip()
-            for index in LocationBusinessUpdateWorkspace._business_line_indices(values)
-            for part in ("name", "detail", "code")
-        ):
-            return True
-        # Correction has no editable yellow data field in the supplied form.
-        return bool(str(values.get("change_correction_selected", "") or "").strip())
+        return bool(entered_location_changes(values))
 
     def _missing_required_fields(self, values: dict[str, str]) -> list[str]:
         required = {

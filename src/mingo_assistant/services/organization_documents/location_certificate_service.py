@@ -366,8 +366,10 @@ class LocationCertificateService(OrganizationDocumentService):
                     # number must contain enough digits to be real data.
                     if len(re.sub(r"\D", "", value)) < 6:
                         value = ""
-                if value:
-                    values[key] = value
+                # Keep the parser's existing empty-field contract for callers
+                # reading a printed but blank contact, without treating a
+                # neighboring caption (for example Fax:) as its value.
+                values[key] = value
 
         if values["location_full_address"]:
             values.update(self._address_fields(values["location_full_address"]))

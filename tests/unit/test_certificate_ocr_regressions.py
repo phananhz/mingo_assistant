@@ -58,10 +58,7 @@ class CertificateOcrRegressionTests(unittest.TestCase):
 
         text = NOISY_BRC.replace("Dien thoai:\n3.", "Dien thoai: Fax:\n3.")
 
-        self.assertNotIn(
-            "location_phone",
-            LocationCertificateService()._parse_certificate(text),
-        )
+        self.assertEqual("", LocationCertificateService()._parse_certificate(text)["location_phone"])
 
     def test_confident_address_retains_its_letters_during_accent_restoration(self):
         self.assertEqual("Phường Bình Trung", VietnameseLineRefiner.restore_accents(

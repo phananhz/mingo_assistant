@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import tempfile
 import unittest
 from pathlib import Path
@@ -122,7 +123,7 @@ class DdkdUpdateTemplatesTest(unittest.TestCase):
         self.assertNotIn("...", email_line.text)
         self.assertNotIn('w:leader="dot"', email_line._p.xml)
 
-    def test_notification_preserves_unselected_change_sections(self) -> None:
+    def test_notification_keeps_only_populated_change_sections(self) -> None:
         values = dict(self.values)
         values.update({
             "change_name_selected": "X",
@@ -154,23 +155,15 @@ class DdkdUpdateTemplatesTest(unittest.TestCase):
         result = self._generate(values)
         notification = next(item.output_path for item in result.generated if item.source_name == "Thong bao thay doi.docx")
         document = Document(notification)
-        source_document = Document(self.template_dir / "Thong bao thay doi.docx")
-        source_industry_table = next(
-            table for table in source_document.tables if generator._business_line_header_index(table) is not None
-        )
-        output_industry_table = next(
-            table for table in document.tables if generator._business_line_header_index(table) is not None
-        )
-        self.assertEqual(len(source_industry_table.rows), len(output_industry_table.rows))
+        self.assertFalse(any(generator._business_line_header_index(table) is not None for table in document.tables))
         folded = generator._fold("\n".join(paragraph.text for paragraph in _paragraphs(document)))
         self.assertIn("dang ky thay doi dia chi dia diem kinh doanh", folded)
         self.assertIn("dang ky thay doi ten dia diem kinh doanh", folded)
-        self.assertIn("dang ky thay doi nganh, nghe kinh doanh/noi dung hoat dong", folded)
-        self.assertIn("dang ky thay doi nguoi dung dau dia diem kinh doanh", folded)
+        self.assertNotIn("dang ky thay doi nganh, nghe kinh doanh/noi dung hoat dong", folded)
+        self.assertNotIn("dang ky thay doi nguoi dung dau dia diem kinh doanh", folded)
         self.assertIn("dang ky thay doi thong tin dang ky thue", folded)
-        self.assertIn("bo sung, cap nhat thong tin dang ky hoat dong dia diem kinh doanh", folded)
-        self.assertIn("de nghi hieu dinh thong tin dang ky hoat dong", folded)
-        self.assertIn("........................................................", folded)
+        self.assertNotIn("bo sung, cap nhat thong tin dang ky hoat dong dia diem kinh doanh", folded)
+        self.assertNotIn("de nghi hieu dinh thong tin dang ky hoat dong", folded)
         self.assertIn("12 sample street", folded)
         self.assertIn("location new name", folded)
         self.assertIn("0901000001", folded)
@@ -230,8 +223,8 @@ class DdkdUpdateTemplatesTest(unittest.TestCase):
         folded = DependentUnitTemplateGenerator(self.template_dir, Path(tempfile.gettempdir()))._fold(
             "\n".join(paragraph.text for paragraph in paragraphs)
         )
-        self.assertIn("dang ky thay doi dia chi dia diem kinh doanh", folded)
-        self.assertIn("dang ky thay doi thong tin dang ky thue", folded)
+        self.assertNotIn("dang ky thay doi dia chi dia diem kinh doanh", folded)
+        self.assertNotIn("dang ky thay doi thong tin dang ky thue", folded)
 
     def test_notification_manifest_matches_actual_yellow_highlight_count(self) -> None:
         manifest = json.loads((self.template_dir / "template_manifest.json").read_text(encoding="utf-8"))
@@ -246,10 +239,99 @@ class DdkdUpdateTemplatesTest(unittest.TestCase):
         values.update({"change_manager_selected": "X", "location_manager_full_name": "LE HUU DUC DUY"})
         result = self._generate(values)
         notification = next(item.output_path for item in result.generated if item.source_name == "Thong bao thay doi.docx")
-        source_runs = [run.text for paragraph in _paragraphs(Document(self.template_dir / "Thong bao thay doi.docx")) for run in paragraph.runs if run.font.highlight_color == WD_COLOR_INDEX.YELLOW]
-        output_runs = [run.text for paragraph in _paragraphs(Document(notification)) for run in paragraph.runs if run.font.highlight_color == WD_COLOR_INDEX.YELLOW]
-        self.assertEqual("LE HUU DUC DUY", output_runs[35])
-        self.assertEqual(source_runs[43], output_runs[43])
+        source_paragraphs = list(_paragraphs(Document(self.template_dir / "Thong bao thay doi.docx")))
+        output_paragraphs = list(_paragraphs(Document(notification)))
+        self.assertTrue(any("LE HUU DUC DUY" in paragraph.text for paragraph in output_paragraphs))
+        source_phone = next(paragraph for paragraph in source_paragraphs if "Th? ?i?n t?" in paragraph.text)
+        output_phone = next(paragraph for paragraph in output_paragraphs if "Điện thoại (nếu có)" in paragraph.text)
+        source_slot = next(run for run in source_phone.runs if run.font.highlight_color == WD_COLOR_INDEX.YELLOW)
+        output_slot = next(run for run in output_phone.runs if run.font.highlight_color == WD_COLOR_INDEX.YELLOW)
+        self.assertEqual(source_slot.text, output_slot.text)
+
+    def test_empty_sections_and_legacy_correction_are_removed_without_mutating_templates(self) -> None:
+        sources = list(self.template_dir.glob("*.docx")) + [self.template_dir / "template_manifest.json"]
+        before = {path: hashlib.sha256(path.read_bytes()).digest() for path in sources}
+        values = dict(self.values)
+        values.update({key: "X" for key in (
+            "change_name_selected", "change_address_selected", "change_business_lines_selected",
+            "change_manager_selected", "change_tax_selected", "change_supplemental_selected",
+            "change_correction_selected",
+        )})
+        notification = next(item.output_path for item in self._generate(values).generated
+                            if item.source_name == "Thong bao thay doi.docx")
+        document = Document(notification)
+        text = DependentUnitTemplateGenerator._fold("\n".join(p.text for p in _paragraphs(document)))
+        self.assertNotIn("dang ky thay doi ten dia diem kinh doanh", text)
+        self.assertNotIn("dang ky thay doi dia chi dia diem kinh doanh", text)
+        self.assertNotIn("dang ky thay doi thong tin dang ky thue", text)
+        self.assertNotIn("de nghi hieu dinh", text)
+        self.assertNotIn("bo sung, cap nhat thong tin", text)
+        self.assertIn("doanh nghiep cam ket", text)
+        self.assertIn("NGUYEN VAN A", "\n".join(p.text for p in _paragraphs(document)))
+        self.assertEqual(2, len(document.tables))  # Header and signer only.
+        trailing = []
+        for element in reversed(list(document.element.body)[:-1]):
+            if element.tag.rsplit("}", 1)[-1] != "p":
+                break
+            trailing.append(element)
+        self.assertEqual(1, len(trailing))
+        self.assertEqual(before, {path: hashlib.sha256(path.read_bytes()).digest() for path in sources})
+
+    def test_each_partial_section_exports_without_checkbox_and_keeps_blank_child_fields(self) -> None:
+        cases = (
+            ({"new_location_business_name": "NEW NAME"}, "dang ky thay doi ten", "Tên địa điểm kinh doanh viết tắt"),
+            ({"new_location_phone": "0901000001"}, "dang ky thay doi dia chi", "Website"),
+            ({"business_line_1_name": "LINE ONE", "business_line_1_code": "6201"}, "dang ky thay doi nganh", "Mã ngành"),
+            ({"location_manager_full_name": "MANAGER"}, "dang ky thay doi nguoi dung dau", "Quốc gia"),
+            ({"tax_notification_email": "tax@example.test"}, "dang ky thay doi thong tin dang ky thue", "Tổng số lao động"),
+            ({"supplemental_registration_content": "UPDATE"}, "b. bo sung, cap nhat", "UPDATE"),
+        )
+        for fields, heading, blank_label in cases:
+            with self.subTest(heading=heading):
+                notification = next(item.output_path for item in self._generate({**self.values, **fields}).generated
+                                    if item.source_name == "Thong bao thay doi.docx")
+                document = Document(notification)
+                text = "\n".join(p.text for p in _paragraphs(document))
+                folded = DependentUnitTemplateGenerator._fold(text)
+                self.assertIn(heading, folded)
+                self.assertIn(blank_label, text)
+                self.assertNotIn("de nghi hieu dinh", folded)
+                # A blank sibling remains present with its original template
+                # run properties rather than being deleted independently.
+                if "new_location_phone" in fields:
+                    source = Document(self.template_dir / "Thong bao thay doi.docx")
+                    source_label = next(p for p in source.paragraphs if "Địa chỉ địa điểm kinh doanh sau khi thay đổi" in p.text)
+                    output_label = next(p for p in document.paragraphs if "Địa chỉ địa điểm kinh doanh sau khi thay đổi" in p.text)
+                    self.assertEqual(source_label._p.xml, output_label._p.xml)
+                if "supplemental_registration_content" in fields:
+                    self.assertNotIn("a. dang ky thay doi noi dung", folded)
+
+    def test_legacy_labor_default_does_not_keep_tax_but_explicit_counts_do(self) -> None:
+        marker = "location_update_tax_labor_count_entered"
+        for labor, entered, keep_tax in (("1", None, False), ("", None, False),
+                                         ("1", "1", True), ("2", None, True), ("0", "1", True)):
+            with self.subTest(labor=labor, entered=entered):
+                values = {**self.values, "new_location_phone": "0901000001",
+                          "tax_labor_count": labor, "change_tax_selected": "X"}
+                if entered is not None:
+                    values[marker] = entered
+                notification = next(p.output_path for p in self._generate(values).generated
+                                    if p.source_name == "Thong bao thay doi.docx")
+                text = "\n".join(p.text for p in _paragraphs(Document(notification)))
+                folded = DependentUnitTemplateGenerator._fold(text)
+                self.assertIn("dang ky thay doi dia chi", folded)
+                self.assertEqual(keep_tax, "dang ky thay doi thong tin dang ky thue" in folded)
+                if keep_tax:
+                    self.assertIn(f"tong so lao dong: {labor}", folded)
+
+    def test_other_tax_data_keeps_tax_table_without_legacy_labor_value(self) -> None:
+        values = {**self.values, "tax_labor_count": "1", "tax_notification_email": "tax@example.test"}
+        notification = next(p.output_path for p in self._generate(values).generated
+                            if p.source_name == "Thong bao thay doi.docx")
+        document = Document(notification)
+        labor_line = next(p.text for p in _paragraphs(document) if "Tổng số lao động" in p.text)
+        self.assertNotIn("1", labor_line.split(":", 1)[-1])
+        self.assertIn("tax@example.test", "\n".join(p.text for p in _paragraphs(document)))
 
     def test_notification_writes_multiple_business_lines_with_one_main_x(self) -> None:
         values = dict(self.values)

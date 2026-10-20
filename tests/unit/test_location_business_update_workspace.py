@@ -3,11 +3,17 @@ from __future__ import annotations
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
 from PySide6.QtWidgets import QApplication, QCheckBox, QLineEdit, QTextEdit
 
+from mingo_assistant.domains.dependent_unit.location_changes import (
+    UPDATE_LABOR_INPUT_KEY, UPDATE_LEGACY_LABOR_KEY,
+)
+from mingo_assistant.ui.views.business_registration_workspace import BusinessRegistrationWorkspace
+from mingo_assistant.ui.views.location_business_workspace import LocationBusinessWorkspace
 from mingo_assistant.services.organization_documents.location_certificate_service import (
     LocationCertificateService,
 )
@@ -53,6 +59,13 @@ class LocationBusinessUpdateWorkspaceTest(unittest.TestCase):
                 self.assertIn("location_business_name", workspace.fields)
                 self.assertIn("location_business_code", workspace.fields)
                 self.assertIn("tax_labor_count", workspace.fields)
+                self.assertEqual("", workspace.fields["tax_labor_count"].text())
+                self.assertTrue(workspace.change_option_indicators["change_tax_selected"].isHidden())
+                self.assertNotIn("change_correction_selected", workspace.fields)
+                self.assertNotIn("change_correction_selected", workspace.change_forms)
+                address_fields = next(fields for key, _title, fields in workspace.change_options
+                                      if key == "change_address_selected")
+                self.assertEqual("Điện thoại (nếu có)", dict(address_fields)["new_location_phone"])
                 self.assertNotIn("change_detail_selector", vars(workspace))
                 self.assertTrue(hasattr(workspace, "update_organization_selector"))
                 self.assertEqual(1, workspace.update_organization_selector.count())
@@ -228,6 +241,102 @@ class LocationBusinessUpdateWorkspaceTest(unittest.TestCase):
                 self.assertTrue(workspace.change_option_indicators["change_address_selected"].isHidden())
             finally:
                 workspace.deleteLater()
+
+    def test_tax_data_matches_marker_and_export_values_without_creation_defaults(self) -> None:
+        project_root = Path(__file__).resolve().parents[2]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = LocationBusinessUpdateWorkspace(
+                on_back=lambda: None, on_save=lambda case: None,
+                bundle_root=project_root, default_export_root=Path(temp_dir),
+            )
+            try:
+                for apply_defaults in (True, False):
+                    self.assertFalse(workspace._has_entered_change_data(workspace.form_values(apply_defaults)))
+                tax = workspace.fields["change_tax_selected"]
+                tax.setChecked(True)
+                self.assertTrue(workspace.change_option_indicators["change_tax_selected"].isHidden())
+                workspace.fields["tax_notification_phone"].setText("0901000001")
+                workspace.fields["tax_notification_email"].setText("tax@example.test")
+                workspace.fields["tax_labor_count"].setText("1")
+                tax.setChecked(False)
+                self.assertFalse(workspace.change_option_indicators["change_tax_selected"].isHidden())
+                values = workspace.form_values()
+                self.assertEqual("0901000001", values["tax_notification_phone"])
+                self.assertEqual("tax@example.test", values["tax_notification_email"])
+                self.assertEqual("1", values["tax_labor_count"])
+                self.assertEqual("", values["change_tax_selected"])
+                self.assertEqual("", values["change_correction_selected"])
+                self.assertTrue(workspace._has_entered_change_data(values))
+                for field in ("tax_notification_phone", "tax_notification_email", "tax_labor_count"):
+                    workspace.fields[field].clear()
+                self.assertTrue(workspace.change_option_indicators["change_tax_selected"].isHidden())
+                self.assertFalse(workspace._has_entered_change_data(workspace.form_values()))
+                workspace.fields["tax_labor_count"].setText("1")
+                saved = workspace.build_case_summary()
+            finally:
+                workspace.deleteLater()
+            reopened = LocationBusinessUpdateWorkspace(
+                on_back=lambda: None, on_save=lambda case: None, case=saved,
+                bundle_root=project_root, default_export_root=Path(temp_dir),
+            )
+            try:
+                self.assertEqual("1", reopened.fields["tax_labor_count"].text())
+                self.assertFalse(reopened.change_option_indicators["change_tax_selected"].isHidden())
+            finally:
+                reopened.deleteLater()
+
+    def test_old_saved_default_is_ignored_but_user_can_enter_one_and_save_it(self) -> None:
+        project_root = Path(__file__).resolve().parents[2]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            options = dict(on_back=lambda: None, on_save=lambda case: None,
+                           bundle_root=project_root, default_export_root=Path(temp_dir))
+            fresh = LocationBusinessUpdateWorkspace(**options)
+            try:
+                case = fresh.build_case_summary()
+            finally:
+                fresh.deleteLater()
+            legacy_values = dict(case.form_values)
+            legacy_values.pop(UPDATE_LABOR_INPUT_KEY, None)
+            legacy_values.update(tax_labor_count="1", change_tax_selected="X")
+            legacy_case = replace(case, form_values=legacy_values)
+            workspace = LocationBusinessUpdateWorkspace(case=legacy_case, **options)
+            try:
+                self.assertEqual("", workspace.fields["tax_labor_count"].text())
+                self.assertTrue(workspace.change_option_indicators["change_tax_selected"].isHidden())
+                self.assertEqual("", workspace.form_values()["tax_labor_count"])
+                self.assertEqual("1", workspace.form_values()[UPDATE_LEGACY_LABOR_KEY])
+                self.assertEqual("1", legacy_case.form_values["tax_labor_count"])
+                workspace.fields["tax_labor_count"].setText("1")
+                saved = workspace.build_case_summary()
+                self.assertEqual("1", saved.form_values[UPDATE_LABOR_INPUT_KEY])
+            finally:
+                workspace.deleteLater()
+            reopened = LocationBusinessUpdateWorkspace(case=saved, **options)
+            try:
+                self.assertEqual("1", reopened.fields["tax_labor_count"].text())
+                self.assertFalse(reopened.change_option_indicators["change_tax_selected"].isHidden())
+                reopened.fields["tax_labor_count"].clear()
+                saved_empty = reopened.build_case_summary()
+                self.assertEqual("0", saved_empty.form_values[UPDATE_LABOR_INPUT_KEY])
+                self.assertEqual("", saved_empty.form_values["tax_labor_count"])
+            finally:
+                reopened.deleteLater()
+
+    def test_creation_workflows_keep_their_original_labor_default(self) -> None:
+        project_root = Path(__file__).resolve().parents[2]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            for workspace_class in (LocationBusinessWorkspace, BusinessRegistrationWorkspace):
+                with self.subTest(workspace_class=workspace_class.__name__):
+                    workspace = workspace_class(
+                        on_back=lambda: None, on_save=lambda case: None,
+                        bundle_root=project_root, default_export_root=Path(temp_dir),
+                    )
+                    try:
+                        self.assertEqual("1", workspace.fields["tax_labor_count"].text())
+                        self.assertEqual("1", workspace.form_values()["tax_labor_count"])
+                        self.assertNotIn(UPDATE_LABOR_INPUT_KEY, workspace.form_values())
+                    finally:
+                        workspace.deleteLater()
 
     def test_person_dropdowns_fill_manager_and_accountant_and_warn_on_matching_id(self) -> None:
         project_root = Path(__file__).resolve().parents[2]

@@ -7,7 +7,12 @@ so a fresh clone can build without the original developer's local directories.
 from pathlib import Path
 import sys
 
-from PyInstaller.utils.hooks import collect_all
+from PyInstaller.utils.hooks import collect_all, collect_data_files
+
+import cv2
+
+if not hasattr(cv2, "wechat_qrcode_WeChatQRCode"):
+    raise RuntimeError("Portable QR build requires OpenCV Contrib; another cv2 distribution is shadowing it.")
 
 PROJECT_ROOT = Path(SPECPATH).resolve().parents[1]
 
@@ -69,13 +74,16 @@ for package_name in (
     "fitz",
     "rapidocr_onnxruntime",
     "onnxruntime",
-    # VietOCR is imported lazily by the Vietnamese line-refinement pass.
-    "vietocr",
 ):
     package_datas, package_binaries, package_hiddenimports = collect_all(package_name)
     datas += package_datas
     binaries += package_binaries
     hiddenimports += package_hiddenimports
+
+# The offline predictor imports translate/model code explicitly. Keep its
+# configuration data, without collecting training/augmentation CLI modules
+# that are not part of scanning and pull in unrelated dependencies.
+datas += collect_data_files("vietocr")
 
 
 a = Analysis(
