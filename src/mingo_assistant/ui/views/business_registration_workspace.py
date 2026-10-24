@@ -3331,7 +3331,13 @@ class BusinessRegistrationWorkspace(QWidget):
     def _restore_business_lines(self, values: dict[str, str]) -> None:
         saved_indices = self._business_line_indices(values)
         while saved_indices and len(self.business_line_rows) < saved_indices[-1]:
+            previous_count = len(self.business_line_rows)
             self._append_business_line_row(visible=False)
+            # Old snapshots may contain industry keys in a workflow without
+            # an industry table. Keep those values, but never spin on a row
+            # append that cannot make progress.
+            if len(self.business_line_rows) <= previous_count:
+                break
         for index, row in enumerate(self.business_line_rows, start=1):
             name = values.get(f"business_line_{index}_name", "")
             detail = values.get(f"business_line_{index}_detail", "")

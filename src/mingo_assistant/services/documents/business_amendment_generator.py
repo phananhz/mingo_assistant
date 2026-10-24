@@ -42,8 +42,8 @@ SECTION_RANGES = (
     ("change_business_lines_selected", "THÔNG BÁO THAY ĐỔI NGÀNH, NGHỀ KINH DOANH", "THÔNG BÁO THAY ĐỔI THÔNG TIN ĐĂNG KÝ THUẾ"),
     ("change_tax_selected", "THÔNG BÁO THAY ĐỔI THÔNG TIN ĐĂNG KÝ THUẾ", "THÔNG BÁO THAY ĐỔI THÔNG TIN VÊ"),
     ("change_beneficial_selected", "THÔNG BÁO THAY ĐỔI THÔNG TIN VÊ", "B. BỔ SUNG, CẬP NHẬT THÔNG TIN ĐĂNG KÝ DOANH NGHIỆP"),
-    (None, "B. BỔ SUNG, CẬP NHẬT THÔNG TIN ĐĂNG KÝ DOANH NGHIỆP", "C. ĐỀ NGHỊ HIỆU ĐÍNH THÔNG TIN ĐĂNG KÝ DOANH NGHIỆP"),
-    (None, "C. ĐỀ NGHỊ HIỆU ĐÍNH THÔNG TIN ĐĂNG KÝ DOANH NGHIỆP", "Đề nghị Quý Cơ quan cấp Giấy xác nhận"),
+    ("change_supplemental_selected", "B. BỔ SUNG, CẬP NHẬT THÔNG TIN ĐĂNG KÝ DOANH NGHIỆP", "C. ĐỀ NGHỊ HIỆU ĐÍNH THÔNG TIN ĐĂNG KÝ DOANH NGHIỆP"),
+    ("change_correction_selected", "C. ĐỀ NGHỊ HIỆU ĐÍNH THÔNG TIN ĐĂNG KÝ DOANH NGHIỆP", "Đề nghị Quý Cơ quan cấp Giấy xác nhận"),
 )
 
 
@@ -135,7 +135,7 @@ def compose_share_values(values: dict[str, str]) -> dict[str, str]:
 class BusinessAmendmentTemplateGenerator:
     TEMPLATE_NAME = "Thong bao thay doi.docx"
     # An unreviewed template revision must not reuse these paragraph offsets.
-    TEMPLATE_SHA256 = "cc78d7bcc60e18b2799bc7ea3af1ebcea3aebdb5a1789b8d93da824147e1f0eb"
+    TEMPLATE_SHA256 = "9cbd1db75a05a51594b22b0d1b619beb0bb0df8fc4d38466a5de479d0b3992da"
 
     def __init__(self, template_dir: Path, export_root: Path) -> None:
         self.template_dir = template_dir
@@ -170,6 +170,8 @@ class BusinessAmendmentTemplateGenerator:
             required.update({"new_company_address_detail": "Địa chỉ mới", "new_company_ward": "Xã/Phường mới", "new_company_province": "Tỉnh/Thành phố mới"})
         if "change_capital_selected" in active_changes:
             required.update({"registered_capital": "Vốn đã đăng ký", "new_capital": "Vốn sau thay đổi"})
+        if "change_correction_selected" in active_changes:
+            required.update(dict(next(fields for key, _, fields in CHANGE_GROUPS if key == "change_correction_selected")))
         issues = [f"Chưa có: {label}" for key, label in required.items() if not values.get(key, "").strip()]
         if not active_changes:
             issues.append("Nhập dữ liệu cho ít nhất một nội dung thay đổi")
@@ -523,6 +525,8 @@ class BusinessAmendmentTemplateGenerator:
             nodes = self._slot_nodes(paragraph, slot)
             if slot.continuation:
                 value = ""
+            elif slot.key == "amendment_filed_content":
+                value = " " + value
             if not nodes:
                 run = etree.SubElement(paragraph, W + "r")
                 run.append(deepcopy(paragraph.find("w:pPr/w:rPr", NS)))
@@ -540,6 +544,18 @@ class BusinessAmendmentTemplateGenerator:
             if slot.key in SHARE_VALUE_KEYS:
                 for run in value_runs:
                     self._force_regular_text(run)
+        for index, key in ((250, "amendment_supplemental_content"),
+                           (254, "amendment_certificate_content"), (257, "amendment_filed_content")):
+            if values.get(key, "").strip():
+                self._set_paragraph_alignment(paragraphs[index], "left")
+        for selection, key, indices in (
+            ("change_supplemental_selected", "amendment_supplemental_content", (251, 252)),
+            ("change_correction_selected", "amendment_certificate_content", (255,)),
+            ("change_correction_selected", "amendment_filed_content", (258,)),
+        ):
+            if selected(values.get(selection, "")) and values.get(key, "").strip():
+                for index in indices:
+                    self._collapse_empty_paragraph(paragraphs[index])
         # These three inputs use continuation lines in the blank template. Once
         # populated, let Word wrap the value naturally and remove the unused
         # continuation paragraph so it cannot create a visible blank line.

@@ -64,6 +64,44 @@ def table_containing(root, marker: str):
 
 
 class BusinessAmendmentGeneratorTests(unittest.TestCase):
+    def test_supplemental_and_correction_fill_only_reviewed_slots_with_line_breaks(self):
+        values = sample_values() | {
+            "new_company_name": "", "change_name_selected": "",
+            "amendment_supplemental_content": "Bổ sung thông tin liên hệ\nNội dung thứ hai",
+            "amendment_certificate_date": "01/10/2026",
+            "amendment_certificate_content": "Thông tin ghi chưa đúng\nDòng tiếp theo",
+            "amendment_filed_date": "25/09/2026",
+            "amendment_filed_content": "Thông tin chính xác đã đăng ký\nDòng cuối",
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            generator = BusinessAmendmentTemplateGenerator(TEMPLATE_DIR, Path(temporary))
+            self.assertEqual([], generator.validation_issues(values))
+            result = generator.generate(values, "bc")
+            with zipfile.ZipFile(result.generated[0].output_path) as package:
+                root = etree.fromstring(package.read("word/document.xml"))
+        text = node_text(root)
+        for value in ("Bổ sung thông tin liên hệ", "Nội dung thứ hai", "01/10/2026", "25/09/2026",
+                      "Thông tin ghi chưa đúng", "Thông tin chính xác đã đăng ký", "Do vậy, đề nghị Quý Cơ quan"):
+            self.assertIn(value, text)
+        self.assertGreaterEqual(len(root.findall('.//w:br', NS)), 3)
+        for prefix in ("B. BỔ SUNG", "C. ĐỀ NGHỊ"):
+            heading = paragraph_containing(root, prefix)
+            self.assertFalse(heading.findall('.//w:highlight', NS))
+        self.assertIn("cấp ngày 01/10/2026 là: Thông tin ghi chưa đúng", text)
+        self.assertIn("nộp ngày 25/09/2026", text)
+        self.assertNotIn("ĐĂNG KÝ THAY ĐỔI TÊN DOANH NGHIỆP", text)
+        invalid = generator.validation_issues(values | {"amendment_filed_date": "31/02/2026"})
+        self.assertTrue(any("Ngày nộp" in issue for issue in invalid))
+
+    def test_supplemental_only_does_not_export_correction_or_other_case_text(self):
+        values = sample_values() | {"new_company_name": "", "amendment_supplemental_content": "Nội dung riêng B"}
+        with tempfile.TemporaryDirectory() as temporary:
+            result = BusinessAmendmentTemplateGenerator(TEMPLATE_DIR, Path(temporary)).generate(values, "b")
+            with zipfile.ZipFile(result.generated[0].output_path) as package:
+                root = etree.fromstring(package.read("word/document.xml"))
+        self.assertIn("Nội dung riêng B", node_text(root))
+        self.assertNotIn("C. ĐỀ NGHỊ", node_text(root))
+
     def test_entered_company_names_export_when_saved_selection_flag_is_missing(self):
         values = sample_values() | {
             "change_name_selected": "",
@@ -606,6 +644,28 @@ class BusinessAmendmentWorkflowTests(unittest.TestCase):
         self.app.processEvents()
         QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
         self.temp.cleanup()
+
+    def test_bc_editors_grow_restore_and_keep_cases_independent(self):
+        self.window._open_business_amendment_modal()
+        workspace = self.window.current_workspace
+        for key in ("change_supplemental_selected", "change_correction_selected"):
+            self.assertTrue(workspace.fields[key].isEnabled())
+            workspace.fields[key].setChecked(True)
+        content = "\n".join(f"Dòng nội dung {i}" for i in range(35))
+        for key in ("amendment_supplemental_content", "amendment_certificate_content", "amendment_filed_content"):
+            workspace._set_field(key, content)
+            self.assertGreater(workspace.fields[key].height(), 400)
+        workspace._set_field("amendment_certificate_date", "01/10/2026")
+        workspace._set_field("amendment_filed_date", "25/09/2026")
+        case = workspace.build_case_summary()
+        self.window._open_business_amendment_workspace(case)
+        restored = self.window.current_workspace
+        self.assertEqual(content, restored._field_value("amendment_supplemental_content"))
+        self.assertEqual(content, restored._field_value("amendment_filed_content"))
+        self.assertEqual("01/10/2026", restored._field_value("amendment_certificate_date"))
+        self.window._open_business_amendment_workspace(None)
+        self.assertEqual("", self.window.current_workspace._field_value("amendment_supplemental_content"))
+        self.assertEqual(content, case.form_values["amendment_supplemental_content"])
 
     def test_new_tables_start_empty_and_delete_last_row_stays_empty_after_save(self):
         self.window._open_business_amendment_modal()

@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
 )
 
 from mingo_assistant.models.case import CaseSummary
+from mingo_assistant.models.form_values import BUSINESS_LINE_KEY_PATTERN
 from mingo_assistant.services.documents.location_termination_generator import LocationTerminationTemplateGenerator
 from mingo_assistant.services.organization_documents.location_certificate_service import LocationCertificateService
 from mingo_assistant.ui.widgets.combo_box import NoWheelComboBox
@@ -313,6 +314,11 @@ class LocationBusinessTerminationWorkspace(LocationBusinessWorkspace):
 
     def form_values(self, apply_defaults: bool = True) -> dict[str, str]:
         values = super().form_values(apply_defaults)
+        # This form has no industry editor. Retain old unused industry data
+        # rather than treating the absent table as a request to delete it.
+        if self.case:
+            values.update({key: value for key, value in self.case.form_values.items()
+                           if BUSINESS_LINE_KEY_PATTERN.match(key)})
         address = values.get("location_full_address", "").strip()
         if address:
             values.update(LocationCertificateService(self.address_parser, self.bundle_root)._address_fields(address))

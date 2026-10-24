@@ -5,8 +5,9 @@ from dataclasses import replace
 from copy import deepcopy
 import re
 from pathlib import Path
+from math import ceil
 
-from PySide6.QtCore import Qt, QSize, QTimer
+from PySide6.QtCore import Qt, QSize, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QFrame, QGridLayout, QGroupBox, QHBoxLayout, QLabel,
@@ -46,6 +47,37 @@ class _NoWheelTabBar(QTabBar):
 
     def wheelEvent(self, event):
         event.ignore()
+
+
+class _AmendmentContentEdit(QTextEdit):
+    """Grow with wrapped text so B/C content stays visible in the outer form."""
+
+    content_height_changed = Signal()
+
+    def __init__(self):
+        super().__init__()
+        self.setAcceptRichText(False)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._resize_timer = QTimer(self)
+        self._resize_timer.setSingleShot(True)
+        self._resize_timer.timeout.connect(self._fit_content)
+        self.textChanged.connect(self._fit_content)
+        self.setFixedHeight(140)
+
+    def _fit_content(self, *_):
+        measured = self.document().clone()
+        measured.setTextWidth(max(100, self.viewport().width()))
+        height = max(140, ceil(measured.size().height()) + 24)
+        measured.deleteLater()
+        if self.height() != height:
+            self.setFixedHeight(height)
+            self.content_height_changed.emit()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if event.size().width() != event.oldSize().width():
+            self._resize_timer.start(0)
 
 
 class BusinessAmendmentWorkspace(LocationBusinessUpdateWorkspace):
@@ -148,8 +180,16 @@ class BusinessAmendmentWorkspace(LocationBusinessUpdateWorkspace):
 
     def _create_field(self, key):
         # Do not attach establishment/location synchronizers to amendment inputs.
-        field = QTextEdit() if key.endswith(("original_address", "contact_address", "permanent_address")) or key.endswith("_name") and key.startswith("amendment_line_") else QLineEdit()
-        if isinstance(field, QTextEdit):
+        if key in {"amendment_supplemental_content", "amendment_certificate_content", "amendment_filed_content"}:
+            field = _AmendmentContentEdit()
+            if not hasattr(self, "_content_layout_timer"):
+                self._content_layout_timer = QTimer(self)
+                self._content_layout_timer.setSingleShot(True)
+                self._content_layout_timer.timeout.connect(self._sync_form_stack_height)
+            field.content_height_changed.connect(lambda: self._content_layout_timer.start(0))
+        else:
+            field = QTextEdit() if key.endswith(("original_address", "contact_address", "permanent_address")) or key.endswith("_name") and key.startswith("amendment_line_") else QLineEdit()
+        if isinstance(field, QTextEdit) and not isinstance(field, _AmendmentContentEdit):
             field.setAcceptRichText(False)
             field.setFixedHeight(76)
         field.textChanged.connect(self._refresh_preview)
@@ -325,7 +365,7 @@ class BusinessAmendmentWorkspace(LocationBusinessUpdateWorkspace):
                 else self._build_beneficial_notice_section() if key == "change_beneficial_selected"
                 else self._build_amendment_fields(
                     title, tuple(item for item in fields if item[0] not in self.fields),
-                    vertical=key in {"change_name_selected", "change_address_selected"},
+                    vertical=key in {"change_name_selected", "change_address_selected", "change_supplemental_selected", "change_correction_selected"},
                 )
             )
             form.setVisible(False)

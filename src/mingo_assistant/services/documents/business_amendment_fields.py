@@ -129,6 +129,13 @@ BENEFICIAL_NOTICE_FIELDS = (
     ("beneficial_notice_a_status", "Chủ sở hữu hưởng lợi — nội dung cuối mục a"),
     ("beneficial_notice_b_status", "Chủ sở hữu hưởng lợi — nội dung cuối mục b"),
 )
+SUPPLEMENTAL_FIELDS = (("amendment_supplemental_content", "Nội dung bổ sung, cập nhật"),)
+CORRECTION_FIELDS = (
+    ("amendment_certificate_date", "Ngày cấp Giấy chứng nhận/Giấy xác nhận (dd/mm/yyyy)"),
+    ("amendment_certificate_content", "Thông tin trên Giấy chứng nhận/Giấy xác nhận"),
+    ("amendment_filed_date", "Ngày nộp hồ sơ đăng ký doanh nghiệp (dd/mm/yyyy)"),
+    ("amendment_filed_content", "Thông tin đã đăng ký trong hồ sơ"),
+)
 CHANGE_GROUPS = (
     ("change_name_selected", "Đăng ký thay đổi tên doanh nghiệp", NAME_FIELDS),
     ("change_address_selected", "Đăng ký thay đổi địa chỉ trụ sở chính", ADDRESS_FIELDS),
@@ -136,14 +143,23 @@ CHANGE_GROUPS = (
     ("change_business_lines_selected", "Đăng ký thay đổi ngành, nghề kinh doanh", LINE_FIELDS),
     ("change_tax_selected", "Đăng ký thay đổi thông tin đăng ký thuế", TAX_FIELDS),
     ("change_beneficial_selected", "Đăng ký chủ sở hữu hưởng lợi", BENEFICIAL_NOTICE_FIELDS),
+    ("change_supplemental_selected", "B. Bổ sung, cập nhật thông tin đăng ký doanh nghiệp", SUPPLEMENTAL_FIELDS),
+    ("change_correction_selected", "C. Đề nghị hiệu đính thông tin đăng ký doanh nghiệp", CORRECTION_FIELDS),
 )
 UNSUPPORTED_GROUPS = (
     ("change_members_selected", "Thay đổi thành viên/phần vốn góp: mẫu yêu cầu danh sách gửi kèm."),
-    ("change_supplemental_selected", "Bổ sung, cập nhật (B): vùng nhập chưa bôi vàng."),
-    ("change_correction_selected", "Hiệu đính (C): vùng nhập chưa bôi vàng."),
 )
 
 SLOTS = [
+    YellowSlot(250, "amendment_supplemental_content", "change_supplemental_selected"),
+    YellowSlot(251, "amendment_supplemental_content", "change_supplemental_selected", continuation=True),
+    YellowSlot(252, "amendment_supplemental_content", "change_supplemental_selected", continuation=True),
+    YellowSlot(254, "amendment_certificate_date", "change_correction_selected"),
+    YellowSlot(254, "amendment_certificate_content", "change_correction_selected", segment=1),
+    YellowSlot(255, "amendment_certificate_content", "change_correction_selected", continuation=True),
+    YellowSlot(256, "amendment_filed_date", "change_correction_selected"),
+    YellowSlot(257, "amendment_filed_content", "change_correction_selected"),
+    YellowSlot(258, "amendment_filed_content", "change_correction_selected", continuation=True),
     YellowSlot(1, "parent_entity_name"), YellowSlot(11, "parent_entity_name"),
     YellowSlot(12, "parent_entity_registration_number"),
     YellowSlot(4, "document_place", segment=0), YellowSlot(4, "document_day", segment=1),
