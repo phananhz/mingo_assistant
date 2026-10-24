@@ -73,31 +73,30 @@ class BusinessRegistrationRegressionTest(unittest.TestCase):
         self.assertEqual(run.font.size, Pt(11.5))
         self.assertEqual(run.font.name, "Times New Roman")
 
-    def test_builtin_authorized_profiles_are_not_overwritten_by_saved_data(self) -> None:
+    def test_real_saved_authorized_profile_with_legacy_builtin_id_is_preserved(self) -> None:
         window = MainWindow.__new__(MainWindow)
         project_root = Path(__file__).resolve().parents[2]
         window.authorized_person_repository = AuthorizedPersonProfileRepository(
             project_root / "data" / "temp" / "not-used.json",
             project_root / "assets" / "defaults" / "authorized_person_profiles.json",
         )
-        expected = window.authorized_person_repository.default_profiles()[2]
         saved_profile = {
-            "id": expected["id"],
-            "authorized_person_full_name": "Tên bị sửa",
-            "authorized_person_issue_place": "Nơi cấp bị sửa",
-            "authorized_person_contact_address": "Địa chỉ bị chuẩn hóa",
+            "id": "builtin-authorized-person-3",
+            "authorized_person_full_name": "NGƯỜI DÙNG THẬT",
+            "authorized_person_issue_place": "Cơ quan cấp",
+            "authorized_person_contact_address": "Địa chỉ đã lưu",
         }
 
         payload = MainWindow._merge_authorized_person_profiles(
-            window, expected["id"], [saved_profile]
+            window, saved_profile["id"], [saved_profile]
         )
         profile = next(
-            item for item in payload["profiles"] if item["id"] == expected["id"]
+            item for item in payload["profiles"] if item["id"] == saved_profile["id"]
         )
 
-        self.assertEqual(profile, expected)
+        self.assertEqual(profile, saved_profile)
 
-    def test_builtin_authorized_profiles_keep_fixed_legacy_addresses(self) -> None:
+    def test_shipped_authorized_profiles_do_not_include_sample_people(self) -> None:
         project_root = Path(__file__).resolve().parents[2]
         repository = AuthorizedPersonProfileRepository(
             project_root / "data" / "temp" / "not-used.json",
@@ -105,9 +104,7 @@ class BusinessRegistrationRegressionTest(unittest.TestCase):
         )
         profiles = repository.default_profiles()
 
-        self.assertEqual(len(profiles), 3)
-        self.assertTrue(all(profile.get("authorized_person_contact_address") for profile in profiles))
-        self.assertTrue(all(repository.is_default(profile["id"]) for profile in profiles))
+        self.assertEqual(profiles, [])
 
 
     def test_cccd_sync_matches_only_the_same_identity_number(self) -> None:

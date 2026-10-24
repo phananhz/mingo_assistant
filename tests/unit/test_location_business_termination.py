@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from hashlib import sha256
 from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -288,6 +289,8 @@ class TerminationNoticeTests(unittest.TestCase):
             "location_ward": "Phường Bình Dương",
             "location_province": "Thành phố Hồ Chí Minh",
             "termination_reason": "Kinh doanh không hiệu quả",
+            "business_registration_office": "Phòng Đăng ký kinh doanh và Tài chính doanh nghiệp Thành phố Hà Nội",
+            "document_place": "Thành phố Hà Nội",
             "document_day": "27", "document_month": "09", "document_year": "2026",
             "legal_representative_full_name": "NGUYỄN VĂN A",
         }
@@ -302,6 +305,11 @@ class TerminationNoticeTests(unittest.TestCase):
             self.assertIn("00001", output.paragraphs[12].text)
             self.assertIn("Số 35, Đường D18", output.paragraphs[14].text)
             self.assertIn(values["termination_reason"], output.paragraphs[23].text)
+            self.assertEqual(
+                "Thành phố Hà Nội, ngày 27 tháng 09 năm 2026",
+                output.tables[0].cell(0, 1).paragraphs[3].text,
+            )
+            self.assertEqual("Kính gửi: " + values["business_registration_office"], output.paragraphs[5].text)
             self.assertIn("NGUYỄN VĂN A", output.tables[1].cell(0, 1).text)
             self.assertEqual(template.paragraphs[17].text, output.paragraphs[17].text)
             self.assertEqual(template.paragraphs[18].text, output.paragraphs[18].text)
@@ -325,6 +333,25 @@ class TerminationNoticeTests(unittest.TestCase):
                     self.assertEqual(original_run.italic, filled_run.italic)
                     if original_run.font.highlight_color is None:
                         self.assertEqual(original_run.text, filled_run.text)
+
+    def test_signing_place_and_receiving_office_are_independent_and_templates_unchanged(self) -> None:
+        template_dir = Path(__file__).resolve().parents[2] / "assets/templates/word/dependent_units/ddkd_terminate"
+        before = {path: sha256(path.read_bytes()).hexdigest() for path in template_dir.iterdir() if path.is_file()}
+        office = "Phòng Đăng ký kinh doanh và Tài chính doanh nghiệp Thành phố Hà Nội"
+        with TemporaryDirectory() as directory:
+            generator = LocationTerminationTemplateGenerator(template_dir, Path(directory))
+            for index, place in enumerate(("Thành phố Hà Nội", "Thành phố Đà Nẵng")):
+                values = {"business_registration_office": office, "document_place": place,
+                          "document_day": "21", "document_month": "10", "document_year": "2026"}
+                result = generator.generate(values, "Kiểm thử nơi ký", Path(directory) / str(index))
+                notice = Document(next(item.output_path for item in result.generated if item.source_name == generator.NOTICE_NAME))
+                authorization = Document(next(item.output_path for item in result.generated if item.source_name == generator.AUTHORIZATION_NAME))
+                self.assertEqual(f"{place}, ngày 21 tháng 10 năm 2026", notice.tables[0].cell(0, 1).paragraphs[3].text)
+                self.assertEqual("Kính gửi: " + office, notice.paragraphs[5].text)
+                self.assertIn(place, authorization.paragraphs[33].text)
+                self.assertIn(office, authorization.paragraphs[19].text)
+                self.assertEqual({}, result.unresolved)
+        self.assertEqual(before, {path: sha256(path.read_bytes()).hexdigest() for path in before})
 
     def test_fills_authorization_highlights_and_preserves_non_highlighted_address(self) -> None:
         template_dir = Path(__file__).resolve().parents[2] / "assets/templates/word/dependent_units/ddkd_terminate"

@@ -598,6 +598,9 @@ class BusinessAmendmentWorkflowTests(unittest.TestCase):
         )
 
     def tearDown(self) -> None:
+        # Closing an active editor now intentionally asks for confirmation.
+        # These tests cover the form, not the close dialog (tested separately).
+        self.window.hide()
         self.window.close()
         self.window.deleteLater()
         self.app.processEvents()
@@ -607,6 +610,7 @@ class BusinessAmendmentWorkflowTests(unittest.TestCase):
     def test_new_tables_start_empty_and_delete_last_row_stays_empty_after_save(self):
         self.window._open_business_amendment_modal()
         workspace = self.window.current_workspace
+        workspace._set_field("parent_entity_name", "CÔNG TY KIỂM THỬ BẢNG TRỐNG")
         workspace.fields["change_business_lines_selected"].setChecked(True)
         for kind, table in workspace.amendment_line_tables.items():
             self.assertEqual(0, table.rowCount())
@@ -1100,7 +1104,9 @@ class BusinessAmendmentWorkflowTests(unittest.TestCase):
         workspace.fields["change_capital_selected"].setChecked(False)
         self.window._open_case_workspace(workspace.build_case_summary())
         restored = self.window.current_workspace
-        self.assertTrue(restored.fields["change_capital_selected"].isChecked())
+        # A recovered editor checkpoint preserves the user's collapsed section;
+        # retaining its entered data must not silently reopen it on restore.
+        self.assertFalse(restored.fields["change_capital_selected"].isChecked())
         self.assertEqual("100", restored.fields["amendment_share_1_count"].text())
 
     def test_both_create_buttons_open_workspace_without_modal(self) -> None:

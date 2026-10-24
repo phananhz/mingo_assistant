@@ -14,9 +14,10 @@ class AuthorizedPersonProfileRepository:
 
     SCHEMA_VERSION = 1
 
-    def __init__(self, data_file: Path, defaults_file: Path) -> None:
+    def __init__(self, data_file: Path, defaults_file: Path, seed_file: Path | None = None) -> None:
         self.data_file = data_file
         self.defaults_file = defaults_file
+        self.seed_file = seed_file or defaults_file.with_name("authorized_person_seed.json")
         self.last_recovery_error: CorruptDataError | None = None
 
     def load(self) -> dict[str, object]:
@@ -25,6 +26,13 @@ class AuthorizedPersonProfileRepository:
 
         if self.last_recovery_error is not None:
             return self.merge("", [])
+        if not self.data_file.exists() and self.seed_file.is_file():
+            # Personal release resources initialize a new machine once. They
+            # are editable local profiles, not immutable built-in defaults.
+            seed = read_json(self.seed_file)
+            if not isinstance(seed, dict) or not isinstance(seed.get("profiles"), list):
+                raise ValueError("Tài nguyên profile người được ủy quyền không hợp lệ.")
+            self.save(seed)
         if self.data_file.exists():
             try:
                 raw = read_json_with_recovery(self.data_file)
@@ -68,7 +76,7 @@ class AuthorizedPersonProfileRepository:
         default_profiles = self.default_profiles()
         saved_profiles = {
             str(profile.get("id", "")): normalize_authorized_person_values(profile)
-            for profile in profiles
+            for profile in self._profile_list(profiles)
         }
         for profile in default_profiles:
             saved_profiles.pop(profile["id"], None)
@@ -82,11 +90,23 @@ class AuthorizedPersonProfileRepository:
         return next((profile for profile in profiles if str(profile.get("id", "")) == profile_id), None)
 
     @staticmethod
+    def _is_legacy_sample(profile: dict) -> bool:
+        # Match the shipped placeholders narrowly. A real profile may still
+        # have an old builtin ID; that alone must never hide the user's data.
+        return any(
+            profile.get("id") == f"builtin-authorized-person-{index}"
+            and str(profile.get("authorized_person_full_name", "")).strip().upper()
+            == f"NGƯỜI ỦY QUYỀN MẪU {index}"
+            and profile.get("authorized_person_id_number") == "000000000000"
+            for index in range(1, 4)
+        )
+
+    @staticmethod
     def _profile_list(values: object) -> list[dict[str, str]]:
         if not isinstance(values, list):
             return []
         return [
             normalize_authorized_person_values(profile)
             for profile in values
-            if isinstance(profile, dict)
+            if isinstance(profile, dict) and not AuthorizedPersonProfileRepository._is_legacy_sample(profile)
         ]

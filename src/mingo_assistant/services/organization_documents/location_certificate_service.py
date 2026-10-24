@@ -34,18 +34,27 @@ class LocationCertificateService(OrganizationDocumentService):
 
         self._progress(progress_callback, 5, "Đang mở giấy chứng nhận địa điểm kinh doanh")
         with fitz.open(pdf_path) as document:
+            self._validate_pdf(document)
             direct_text = extract_certificate_text(document)
             detected_type = self._validate_expected_document_type(direct_text)
-            if not detected_type:
+            photo_probe = getattr(self, "_photo_probe", (None, ""))
+            quick_text = photo_probe[1] if photo_probe[0] == str(pdf_path) else ""
+            if not detected_type and not quick_text:
                 quick_text = self._extract_first_page_for_type_detection(document, progress_callback)
+            if quick_text:
                 self._validate_expected_document_type(quick_text)
             candidates: list[tuple[str, dict[str, str], str]] = []
             direct = self._parse_certificate(direct_text)
             if direct:
                 candidates.append(("pdf_text", direct, direct_text))
+            if quick_text:
+                quick = self._parse_certificate(quick_text)
+                if quick:
+                    candidates.append(("rapidocr", quick, quick_text))
+            recovery_warnings: list[str] = []
             if not self._candidates_are_reliable(candidates):
                 self._progress(progress_callback, 25, "Đang nhận diện giấy chứng nhận địa điểm kinh doanh")
-                primary_text = self._extract_with_ocr(document, progress_callback)
+                primary_text = self._safe_ocr_pass(document, progress_callback, recovery_warnings)
                 primary = self._parse_certificate(primary_text)
                 if primary:
                     primary_source = (
@@ -56,13 +65,13 @@ class LocationCertificateService(OrganizationDocumentService):
                     candidates.append((primary_source, primary, primary_text))
                 if not self._candidates_are_reliable(candidates):
                     self._progress(progress_callback, 75, "Đang đối chiếu chữ và số trên giấy chứng nhận")
-                    fallback_text = self._extract_with_ocr(document, progress_callback, use_legacy=True)
+                    fallback_text = self._safe_ocr_pass(document, progress_callback, recovery_warnings, use_legacy=True)
                     fallback = self._parse_certificate(fallback_text)
                     if fallback:
                         candidates.append(("rapidocr", fallback, fallback_text))
                 if not self._candidates_are_reliable(candidates):
                     self._progress(progress_callback, 90, "Đang tăng cường ảnh giấy chứng nhận khó đọc")
-                    enhanced_text = self._extract_with_ocr(document, progress_callback, enhanced=True)
+                    enhanced_text = self._safe_ocr_pass(document, progress_callback, recovery_warnings, enhanced=True)
                     source = (
                         "ppocr_v6_enhanced"
                         if self._vietnamese_ocr and self._vietnamese_ocr.is_available
@@ -77,6 +86,8 @@ class LocationCertificateService(OrganizationDocumentService):
                             candidates.append((source, enhanced, candidate_text))
 
         if not candidates:
+            if recovery_warnings:
+                raise RuntimeError("Chưa thể đọc giấy chứng nhận vì bộ OCR gặp lỗi. Vui lòng kiểm tra bộ công cụ OCR hoặc thử lại; đây không phải kết luận tài liệu sai loại.")
             raise ValueError("Không nhận ra Giấy chứng nhận đăng ký địa điểm kinh doanh trong PDF đã chọn.")
 
         # Prefer complete labels and unbroken names from RapidOCR.  The modern
@@ -144,6 +155,7 @@ class LocationCertificateService(OrganizationDocumentService):
         warnings = ["Cần kiểm tra lại dấu tiếng Việt ở tên và địa chỉ theo giấy gốc."] if raw_source != "pdf_text" else []
         if missing:
             warnings.append("Chưa nhận diện đủ: " + ", ".join(missing) + ".")
+        warnings.extend(recovery_warnings)
         low_confidence = [key for key in self.REQUIRED if values.get(key) and confidences.get(key, 0.0) < 0.80]
         if low_confidence:
             warnings.append("Cần đối chiếu lại các trường có độ tin cậy thấp: " + ", ".join(low_confidence) + ".")
@@ -271,7 +283,7 @@ class LocationCertificateService(OrganizationDocumentService):
     def _parse_certificate(self, text: str) -> dict[str, str]:
         lines = self._lines(text)
         compact = [self._compact(line).replace("s6", "so").replace("s0", "so") for line in lines]
-        if not any(
+        if getattr(self, "_explicit_document_type", "") != "brc" and not any(
             "giaychungnh" in line
             and self._contains_fuzzy(line, "diadiemkinhdoanh", threshold=0.76)
             for line in compact
@@ -373,6 +385,9 @@ class LocationCertificateService(OrganizationDocumentService):
 
         if values["location_full_address"]:
             values.update(self._address_fields(values["location_full_address"]))
+        if (getattr(self, "_explicit_document_type", "") == "brc"
+                and not values.get("location_business_name") and not values.get("location_business_code")):
+            return {}
         return values
 
     def _label_matches(self, line: str, labels: tuple[str, ...], *, threshold: float) -> bool:

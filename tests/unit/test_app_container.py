@@ -26,7 +26,7 @@ class AppContainerTest(unittest.TestCase):
             self.assertEqual(services.profile_repository.data_file, paths.personal_profiles_file)
             self.assertIs(services.address_parser.place_matcher, services.id_card_parser.place_matcher)
             self.assertIs(services.organization_document_service.address_parser, services.address_parser)
-            self.assertEqual(len(container.authorized_person_repository.default_profiles()), 3)
+            self.assertEqual(container.authorized_person_repository.default_profiles(), [])
 
 
 if __name__ == "__main__":

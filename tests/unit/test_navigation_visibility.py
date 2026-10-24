@@ -8,7 +8,7 @@ from PySide6.QtWidgets import QApplication, QLabel, QWidget
 import shiboken6
 
 from mingo_assistant.models.case import CaseSummary
-from mingo_assistant.ui.main_window import MainWindow
+from mingo_assistant.ui.main_window import MainWindow, NAV_ITEMS
 from mingo_assistant.ui.views.household_business_workspace import (
     HOUSEHOLD_BUSINESS_CASE_TYPE,
     HouseholdBusinessWorkspace,
@@ -20,6 +20,48 @@ class NavigationVisibilityTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.app = QApplication.instance() or QApplication(sys.argv)
+
+    def test_templates_follows_section_five_and_legacy_lookup_is_hidden_in_every_menu(self) -> None:
+        window = MainWindow()
+        try:
+            keys = [key for key, _label in NAV_ITEMS]
+            self.assertEqual(keys.index("household_business") + 1, keys.index("templates"))
+            for menu in (window.nav_buttons, window.top_nav_buttons, window.slim_nav_buttons):
+                self.assertIn("templates", menu)
+                self.assertIn("industry_lookup", menu)
+                self.assertNotIn("legacy_industry_lookup", menu)
+                self.assertEqual(keys, list(menu))
+            self.assertEqual("6. Biểu mẫu", window.nav_buttons["templates"].text())
+            self.assertEqual("6. Biểu mẫu", window.top_nav_buttons["templates"].text())
+            self.assertEqual("6. Biểu mẫu", window.slim_nav_buttons["templates"].toolTip())
+            # Hiding the entry must not remove the existing lookup implementation.
+            self.assertIn("legacy_industry_lookup", window._navigation_page_registry())
+        finally:
+            window.close()
+            window.deleteLater()
+
+    def test_templates_entry_opens_its_own_placeholder_page_and_can_return(self) -> None:
+        window = MainWindow()
+        try:
+            for menu in (window.nav_buttons, window.top_nav_buttons, window.slim_nav_buttons):
+                window._select_nav("business_registration")
+                menu["templates"].click()
+                self.assertIs(window.templates_page, window.stack.currentWidget())
+                self.assertEqual("templates", window._current_nav_key)
+                self.assertIsNone(window.current_workspace)
+                window._select_nav("templates", is_user_action=True)
+                self.assertIs(window.templates_page, window.stack.currentWidget())
+            labels = {label.text() for label in window.templates_page.findChildren(QLabel)}
+            self.assertIn("Biểu mẫu", labels)
+            self.assertEqual(2, len(window.templates_page.group_buttons))
+            self.assertFalse(window.templates_page.use_template_button.isEnabled())
+            window._select_nav("household_business")
+            self.assertIs(window.household_business_page, window.stack.currentWidget())
+            window._select_nav("industry_lookup")
+            self.assertIs(window.industry_lookup_page, window.stack.currentWidget())
+        finally:
+            window.close()
+            window.deleteLater()
 
     def test_dependent_cases_are_shown_only_in_section_four(self) -> None:
         window = MainWindow()

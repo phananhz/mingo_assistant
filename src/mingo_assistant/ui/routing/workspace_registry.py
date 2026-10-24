@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import TypeAlias
 
 from PySide6.QtWidgets import QWidget
+from mingo_assistant.ui.views.tax_template_workspace import TAX_TEMPLATE_CASE_TYPE, TaxTemplateWorkspace
 
 from mingo_assistant.ui.views.business_amendment_workspace import (
     BUSINESS_AMENDMENT_CASE_TYPE,
@@ -59,6 +60,10 @@ DEFAULT_WORKSPACE_ROUTE = WorkspaceRoute(
 
 WORKSPACE_ROUTES = (
     DEFAULT_WORKSPACE_ROUTE,
+    WorkspaceRoute(
+        key="tax_template", case_types=frozenset({TAX_TEMPLATE_CASE_TYPE}),
+        workspace_class=TaxTemplateWorkspace, return_target="templates", nav_key="templates",
+    ),
     WorkspaceRoute(
         key="business_amendment",
         case_types=frozenset({BUSINESS_AMENDMENT_CASE_TYPE}),

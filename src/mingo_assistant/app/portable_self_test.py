@@ -7,6 +7,7 @@ model files all work after PyInstaller extraction.
 from __future__ import annotations
 
 import importlib
+import hashlib
 import json
 import os
 import socket
@@ -42,6 +43,62 @@ def _bundle_root() -> Path:
 
 def _check_file(path: Path) -> dict[str, Any]:
     return {"path": str(path), "exists": path.is_file(), "size": path.stat().st_size if path.is_file() else 0}
+
+
+def _verify_authorized_profiles(root: Path, working: Path, seed_file: Path | None = None) -> dict[str, Any]:
+    """Verify a clean-machine import and actual dropdown autofill, without logging PII."""
+    from PySide6.QtWidgets import QApplication
+
+    from mingo_assistant.application.profiles import AuthorizedPersonUseCases
+    from mingo_assistant.repositories.authorized_person_repository import AuthorizedPersonProfileRepository
+    from mingo_assistant.ui.views.business_registration_workspace import BusinessRegistrationWorkspace
+    from mingo_assistant.ui.views.location_business_workspace import LocationBusinessWorkspace
+    from mingo_assistant.ui.views.location_business_termination_workspace import LocationBusinessTerminationWorkspace
+
+    seed = seed_file or root / "assets/defaults/authorized_person_seed.json"
+    if not seed.is_file():
+        raise RuntimeError("The EXE is missing its authorized-person profile resource.")
+    expected_payload = json.loads(seed.read_text(encoding="utf-8"))
+    expected = expected_payload.get("profiles", [])
+    if not expected or any(AuthorizedPersonProfileRepository._is_legacy_sample(profile) for profile in expected):
+        raise RuntimeError("The EXE contains empty or sample authorized-person profiles.")
+    local_file = working / "authorized-profile-appdata/authorized_person.json"
+    if local_file.exists():
+        raise RuntimeError("Authorized-profile verification requires fresh local data.")
+    repository = AuthorizedPersonProfileRepository(
+        local_file, root / "assets/defaults/authorized_person_profiles.json", seed_file=seed,
+    )
+    defaults = AuthorizedPersonUseCases(repository).selected()
+    if defaults["__profiles"] != expected or not local_file.is_file():
+        raise RuntimeError("The EXE did not initialize all authorized-person profiles on a new machine.")
+    app = QApplication.instance() or QApplication([])
+    checks = 0
+    for workspace_type in (BusinessRegistrationWorkspace, LocationBusinessWorkspace, LocationBusinessTerminationWorkspace):
+        workspace = workspace_type(
+            on_back=lambda: None, on_save=lambda case: None, bundle_root=root,
+            default_export_root=working, authorized_person_defaults=defaults,
+        )
+        try:
+            selector = workspace.person_fill_selectors["authorized_person"]
+            if selector.count() != len(expected) + 1:
+                raise RuntimeError("The packaged authorized-person dropdown has missing or unexpected profiles.")
+            for index, profile in enumerate(expected):
+                option = selector.findData(f"authorized_profile:{index}")
+                if option < 0:
+                    raise RuntimeError("A bundled profile is absent from the packaged dropdown.")
+                selector.setCurrentIndex(option)
+                selector.activated.emit(option)
+                for key, value in profile.items():
+                    if key.startswith("authorized_person_") and key in workspace.fields:
+                        if workspace._field_value(key) != str(value or ""):
+                            raise RuntimeError(f"Packaged profile {index + 1} did not autofill field {key}.")
+                checks += 1
+        finally:
+            workspace.close()
+            workspace.deleteLater()
+            app.processEvents()
+    return {"profiles": len(expected), "autofill_checks": checks, "autofill_verified": True,
+            "fresh_install": True, "bundle_sha256": hashlib.sha256(seed.read_bytes()).hexdigest()}
 
 
 @contextmanager
@@ -209,6 +266,7 @@ def _run_checks(root: Path, report: dict[str, Any], working: Path) -> int:
     os.environ["APPDATA"] = str(working / "appdata")
     os.environ["QT_QPA_PLATFORM"] = "offscreen"
     try:
+        report["authorized_profiles"] = _verify_authorized_profiles(root, working)
         imports = {}
         for module_name in (
             "cv2",

@@ -3,10 +3,11 @@ from __future__ import annotations
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import patch
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QComboBox
 
 from mingo_assistant.services.organization_documents.organization_document_service import OrganizationDocumentResult
 from mingo_assistant.services.qr import IdentityScanResult
@@ -17,6 +18,28 @@ class ExplicitPersonFillTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.app = QApplication.instance() or QApplication(sys.argv)
+
+    def test_empty_authorized_profiles_do_not_create_a_phantom_dropdown_option(self) -> None:
+        for defaults in ({}, {"__profiles": []}):
+            selector = QComboBox()
+            selector.addItem("Chọn để tự động điền", "")
+            BusinessRegistrationWorkspace._add_authorized_person_default_options(
+                SimpleNamespace(authorized_person_defaults=defaults), selector,
+            )
+            self.assertEqual(1, selector.count())
+            selector.deleteLater()
+
+    def test_authorized_dropdown_keeps_real_and_legacy_single_profiles(self) -> None:
+        real = {"authorized_person_full_name": "NGƯỜI DÙNG THẬT"}
+        for defaults, key in (({"__profiles": [real]}, "authorized_profile:0"), (real, "authorized_defaults")):
+            selector = QComboBox()
+            BusinessRegistrationWorkspace._add_authorized_person_default_options(
+                SimpleNamespace(authorized_person_defaults=defaults), selector,
+            )
+            self.assertEqual(1, selector.count())
+            self.assertEqual(real["authorized_person_full_name"], selector.itemText(0))
+            self.assertEqual(key, selector.itemData(0))
+            selector.deleteLater()
 
     def test_company_scan_applies_to_the_selected_role(self) -> None:
         project_root = Path(__file__).resolve().parents[2]

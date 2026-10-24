@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+from dataclasses import replace
+from copy import deepcopy
 
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
+    QFileDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -22,25 +25,31 @@ from PySide6.QtWidgets import (
 from mingo_assistant.application.form_migrations import REGISTRATION_CASE_TYPES
 from mingo_assistant.core.text_normalization import uppercase_authorized_person_name
 from mingo_assistant.models.case import CaseSummary
+from mingo_assistant.services.documents.exported_dossier_move import move_exported_dossier
 
 
 class BusinessRegistrationDocumentsView(QWidget):
     def __init__(
         self, case: CaseSummary, on_back, on_edit,
         description: str = "Kiểm tra các file Word đã điền và mở nhanh phiên bản bạn cần.",
+        on_save=None,
     ) -> None:
         super().__init__()
         self.case = case
         self.on_back = on_back
         self.on_edit = on_edit
+        self.on_save = on_save
         self.description = description
         self.version_contents: list[QWidget] = []
+        self.displayed_versions: list[dict[str, object]] = []
         self.version_button_group = QButtonGroup(self)
         self.version_button_group.setExclusive(True)
         self._build_ui()
 
     def _build_ui(self) -> None:
-        root = QVBoxLayout(self)
+        root = self.layout()
+        if root is None:
+            root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
 
         scroll = QScrollArea()
@@ -95,6 +104,11 @@ class BusinessRegistrationDocumentsView(QWidget):
         edit_button.setObjectName("PrimaryButton")
         edit_button.clicked.connect(self.on_edit)
         actions.addWidget(open_folder_button)
+        self.move_button = QPushButton("Chuyển nơi lưu…")
+        self.move_button.setObjectName("GhostButton")
+        self.move_button.setToolTip("Chuyển bộ hồ sơ đang xem đến nơi khác, không giữ bản trùng và không đổi thư mục xuất mặc định.")
+        self.move_button.clicked.connect(self._move_selected_version)
+        actions.addWidget(self.move_button)
         actions.addWidget(edit_button)
 
         header.addWidget(back_button, 0, Qt.AlignTop)
@@ -162,6 +176,8 @@ class BusinessRegistrationDocumentsView(QWidget):
         layout.setSpacing(12)
 
         versions = self._versions()
+        self.displayed_versions = versions
+        self.move_button.setEnabled(bool(versions) and self.on_save is not None)
         if self._latest_only():
             files = versions[-1]["files"] if versions else []
             exported_at = str(versions[-1]["exported_at"]) if versions else ""
@@ -516,6 +532,87 @@ class BusinessRegistrationDocumentsView(QWidget):
                 seen.add(key)
         return unique_paths
 
+    def _selected_version_index(self) -> int:
+        return len(self.displayed_versions) - 1 if self._latest_only() else self.version_button_group.checkedId() - 1
+
+    def _case_with_relocated_version(self, index: int, target: Path) -> CaseSummary:
+        selected = self.displayed_versions[index]
+        source_dir = Path(selected["export_dir"]).resolve()
+        versions = deepcopy(self.case.export_versions)
+        if not versions:
+            versions = [{"name": item["name"], "export_dir": item["export_dir"],
+                         "exported_at": item["exported_at"], "documents": [path.name for path in item["files"]]}
+                        for item in self.displayed_versions]
+        found = False
+        for version in versions:
+            if version.get("export_dir") and Path(str(version["export_dir"])).resolve() == source_dir:
+                version.update(export_dir=str(target), case_export_dir=str(target),
+                               documents=[path.name for path in selected["files"]])
+                found = True
+        if not found:
+            # Repair stale metadata when this view had to discover files on disk.
+            versions.append({"name": selected["name"], "export_dir": str(target),
+                             "case_export_dir": str(target), "exported_at": selected["exported_at"],
+                             "documents": [path.name for path in selected["files"]]})
+        updates = {"export_versions": versions}
+        if index == len(self.displayed_versions) - 1:
+            updates.update(export_dir=str(target), generated_documents=[path.name for path in selected["files"]])
+        return replace(self.case, **updates)
+
+    def _move_selected_version(self) -> None:
+        if not self.displayed_versions:
+            QMessageBox.warning(self, "Chưa có file hồ sơ", "Hồ sơ này chưa có file Word để chuyển.")
+            return
+        if self.on_save is None:
+            QMessageBox.warning(self, "Không thể chuyển hồ sơ", "Chưa kết nối chức năng lưu đường dẫn hồ sơ.")
+            return
+        index = self._selected_version_index()
+        if not 0 <= index < len(self.displayed_versions):
+            QMessageBox.warning(self, "Chưa chọn phiên bản", "Vui lòng chọn phiên bản hồ sơ cần chuyển.")
+            return
+        version = self.displayed_versions[index]
+        destination = QFileDialog.getExistingDirectory(self, "Chọn thư mục chuyển bộ hồ sơ đến")
+        if not destination:
+            return
+        updated_case = None
+        def commit(target):
+            nonlocal updated_case
+            updated_case = self._case_with_relocated_version(index, target)
+            self.on_save(updated_case)
+        self.move_button.setEnabled(False)
+        try:
+            target = move_exported_dossier(
+                version["files"], Path(destination), f"{self.case.company_name} - {version['name']}", commit,
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "Không thể chuyển hồ sơ", str(exc))
+            return
+        finally:
+            self.move_button.setEnabled(True)
+        self.case = updated_case
+        self._refresh_after_move(index)
+        QMessageBox.information(
+            self, "Đã chuyển nơi lưu hồ sơ",
+            f"Đã chuyển {len(version['files'])} file Word đến:\n{target}\n\n"
+            "Các file đã được chuyển khỏi nơi cũ. Thư mục xuất mặc định không thay đổi.",
+        )
+
+    def _refresh_after_move(self, selected_index: int) -> None:
+        root = self.layout()
+        while root.count():
+            widget = root.takeAt(0).widget()
+            if widget:
+                widget.hide()
+                widget.deleteLater()
+        self.version_button_group.deleteLater()
+        self.version_button_group = QButtonGroup(self)
+        self.version_button_group.setExclusive(True)
+        self.version_contents = []
+        self._build_ui()
+        button = self.version_button_group.button(selected_index + 1)
+        if button:
+            button.setChecked(True)
+
     def _open_file(self, path: Path) -> None:
         if not path.exists():
             QMessageBox.warning(self, "Không tìm thấy file", f"File không còn tồn tại:\n{path}")
@@ -523,7 +620,10 @@ class BusinessRegistrationDocumentsView(QWidget):
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
     def _open_export_folder(self) -> None:
-        export_dir = Path(self.case.export_dir) if self.case.export_dir else None
+        index = self._selected_version_index()
+        selected = self.displayed_versions[index] if 0 <= index < len(self.displayed_versions) else None
+        folder = selected["export_dir"] if selected else self.case.export_dir
+        export_dir = Path(folder) if folder else None
         if not export_dir or not export_dir.exists():
             QMessageBox.warning(self, "Chưa có thư mục", "Hồ sơ này chưa có thư mục xuất.")
             return

@@ -128,5 +128,12 @@ def extract_certificate_text(document) -> str:
                 text = recovered
         else:
             text = page.get_text("text", sort=True)
+        # Format-only glyphs from PDF exporters can split labels and proper
+        # names invisibly. NFC restores combining Vietnamese marks, not words.
+        text = unicodedata.normalize("NFC", text)
+        text = text.translate(str.maketrans({
+            "\u200b": "", "\ufeff": "", "\u00ad": "",
+            "\u00a0": " ", "\u202f": " ",
+        }))
         pages.append(text)
     return "\n".join(pages)

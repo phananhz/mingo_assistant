@@ -5,6 +5,7 @@ Run this spec from the repository root. All paths derive from the spec location,
 so a fresh clone can build without the original developer's local directories.
 """
 from pathlib import Path
+import os
 import sys
 
 from PyInstaller.utils.hooks import collect_all, collect_data_files
@@ -33,6 +34,12 @@ if missing_assets:
 # Runtime data required by OCR, address normalization, business-line lookup,
 # and Word document generation.
 datas = [(str(PROJECT_ROOT / "assets"), "assets")]
+private_profiles = os.environ.get("MIN_ASSISTANT_AUTHORIZED_PROFILES", "")
+if private_profiles:
+    profile_resource = Path(private_profiles).resolve()
+    if not profile_resource.is_file() or profile_resource.name != "authorized_person_seed.json":
+        raise FileNotFoundError("Missing private authorized-person release resource; use packaging/build_exe.ps1.")
+    datas.append((str(profile_resource), "assets/defaults"))
 binaries = []
 hiddenimports = []
 hiddenimports += [

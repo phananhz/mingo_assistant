@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Type
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, Signal, Slot
 
 from mingo_assistant.services.documents.business_registration_generator import DocxTemplateGenerator
 
@@ -29,6 +29,7 @@ class DocxExportWorker(QObject):
         self.output_dir = output_dir
         self.generator_class = generator_class
 
+    @Slot()
     def run(self) -> None:
         try:
             generator = self.generator_class(template_dir=self.template_dir, export_root=self.export_root)

@@ -61,9 +61,11 @@ from mingo_assistant.services.documents.business_registration_variants import (
 )
 from mingo_assistant.services.business_lines.industry_lookup import IndustryCatalog, IndustryRow
 from mingo_assistant.services.organization_documents import DocumentTypeMismatchError
+from mingo_assistant.services.ocr.scan_input import identity_images
 from mingo_assistant.services.registration_offices import update_saved_registration_values
 from mingo_assistant.models.business_registration import OcrPerson
 from mingo_assistant.ui.widgets.combo_box import NoWheelComboBox
+from mingo_assistant.ui.views.draft_progress import DraftProgress, checkpoint_scan
 from mingo_assistant.ui.views.business_registration.components import (
     BeneficialOwnerRow,
     BusinessLineRow,
@@ -71,6 +73,7 @@ from mingo_assistant.ui.views.business_registration.components import (
     CompanyMemberRow,
 )
 from mingo_assistant.ui.views.business_registration.export_worker import DocxExportWorker
+from mingo_assistant.ui.views.business_registration.scan_worker import DocumentScanWorker, ScanRequest
 from mingo_assistant.ui.views.business_registration.schema import (
     ASSET_CONTRIBUTION_LABELS,
     CAPITAL_SOURCE_LABELS,
@@ -221,6 +224,9 @@ class BusinessRegistrationWorkspace(QWidget):
         self.current_person_index = 0
         self._initializing = True
         self._export_thread: QThread | None = None
+        self._scan_thread: QThread | None = None
+        self._scan_worker: DocumentScanWorker | None = None
+        self._pending_scan_payload = None
         self._export_worker: DocxExportWorker | None = None
         self._export_case_dir: Path | None = None
         self._export_version_name = ""
@@ -259,6 +265,114 @@ class BusinessRegistrationWorkspace(QWidget):
         self._seed_from_case(case)
         self._initializing = False
         self._refresh_preview()
+
+    def enable_draft_progress(self, save=None) -> None:
+        """Called after the complete concrete workflow has finished initializing."""
+        if not hasattr(self, "draft_progress"):
+            self.draft_progress = DraftProgress(self, save or self.on_save)
+
+    def _start_background_scan(self, path: str, kind: str) -> None:
+        if self._scan_thread is not None or self._export_thread is not None:
+            return
+        if any(thread.isRunning() for thread in self.window().findChildren(QThread)):
+            self.ocr_status_label.setText("Đang chờ tác vụ trước hoàn tất. Vui lòng quét lại sau ít giây.")
+            return
+        person = self.ocr_people[self.current_person_index]
+        person.front_path = path
+        self._scan_person = person
+        self._scan_case_id = self.case_id
+        self._scan_index = self.current_person_index
+        self._scan_started = monotonic()
+        self._scan_request = ScanRequest(path, kind, str(self.scan_document_type_input.currentData()), person.back_path)
+        self._pending_scan_payload = None
+        self.draft_progress.begin_scan(self._scan_index)
+        self.setEnabled(False)
+        thread = QThread(self)
+        self._scan_thread = thread
+        worker = DocumentScanWorker(self._scan_request, self.ocr_service, self.organization_document_service)
+        self._scan_worker = worker
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.progress.connect(self._handle_scan_progress)
+        worker.finished.connect(self._receive_scan_result)
+        worker.finished.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(self._complete_background_scan)
+        thread.start()
+
+    @Slot(int, str)
+    def _handle_scan_progress(self, percent, status):
+        self._update_ocr_progress(percent, status, self._format_elapsed(self._scan_started))
+
+    @Slot(object)
+    def _receive_scan_result(self, payload):
+        self._pending_scan_payload = payload
+
+    @Slot()
+    def _complete_background_scan(self):
+        thread = self._scan_thread
+        if thread is None:
+            return
+        if not thread.wait(0):
+            QTimer.singleShot(10, self._complete_background_scan)
+            return
+        payload = self._pending_scan_payload or {"error": "Không nhận được kết quả quét."}
+        self._scan_thread = None
+        self._scan_worker = None
+        thread.deleteLater()
+        self.setEnabled(True)
+        valid_target = (
+            self.case_id == self._scan_case_id and self.current_person_index == self._scan_index
+            and self.ocr_people[self.current_person_index] is self._scan_person
+            and getattr(self.window(), "current_workspace", self) is self
+        )
+        closing = getattr(self.window(), "_close_requested", False)
+        if not valid_target:
+            self.draft_progress.end_scan(self._scan_index, interrupted=True)
+            return
+        try:
+            self._applying_scan_result = True
+            if payload.get("cancelled"):
+                self.ocr_status_label.setText("Đã dừng quét. Tài liệu và kết quả đã có vẫn được giữ trong bản nháp.")
+                return
+            if payload.get("error"):
+                self.ocr_status_label.setText("Quét chưa thành công; đã giữ tiến độ để thử lại.")
+                if closing:
+                    return
+                if payload.get("mismatch"):
+                    QMessageBox.warning(self, "Sai loại tài liệu", payload["error"])
+                else:
+                    QMessageBox.critical(self, "Không thể đọc tài liệu", payload["error"])
+                return
+            result = payload["result"]
+            elapsed = self._format_elapsed(self._scan_started)
+            if payload.get("kind", self._scan_request.kind) == "cccd":
+                self.raw_ocr_text.setPlainText(result.raw_text)
+                self._parse_ocr_text(result.method, show_warnings=not closing)
+                self._update_ocr_progress(100, f"Hoàn thành quét CCCD bằng {result.method.upper()}", elapsed)
+            else:
+                self._apply_certificate_scan_result(result, self._scan_request.path, elapsed, closing=closing)
+        except Exception:
+            self.ocr_status_label.setText("Chưa áp dụng được kết quả; dữ liệu trước đó vẫn được giữ.")
+            if not closing:
+                QMessageBox.critical(self, "Không thể áp dụng kết quả", "Vui lòng kiểm tra tài liệu và thử quét lại. Bản nháp đã nhập không bị xóa.")
+            payload = {"error": True}
+        finally:
+            self.draft_progress.end_scan(self._scan_index, interrupted=bool(payload.get("error") or payload.get("cancelled")))
+            self._applying_scan_result = False
+
+    def _apply_certificate_scan_result(self, result, path, elapsed, *, closing=False):
+        if hasattr(self, "organization_controller"):
+            self.organization_controller.apply_scan_result(result, path, elapsed)
+            return
+        self._apply_organization_values_to_current_person(result.values, result.raw_text, result.extraction_method, document_type=result.document_type)
+        self._update_organization_result_fields(result.values)
+        self.raw_ocr_text.setPlainText(result.raw_text)
+        self.organization_document_label.setText(f"Tài liệu: {Path(path).name} — cần đối chiếu dữ liệu nhận diện")
+        self._show_recognition_result(result.document_type)
+        self._update_ocr_progress(100, "Đã nhận diện thông tin tổ chức", elapsed)
+        if result.warnings and not closing:
+            QMessageBox.warning(self, "Cần kiểm tra dữ liệu tổ chức", "\n".join(result.warnings))
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
@@ -358,6 +472,23 @@ class BusinessRegistrationWorkspace(QWidget):
         self.ocr_engine_input.addItem("Quét mã QR CCCD", "qr")
         self.ocr_engine_input.setVisible(False)
         actions.addWidget(self.ocr_engine_input)
+        actions.addWidget(QLabel("Loại tài liệu"))
+        self.scan_document_type_input = NoWheelComboBox()
+        self.scan_document_type_input.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.scan_document_type_input.setMinimumContentsLength(38)
+        self.scan_document_type_input.setMaximumWidth(480)
+        self.scan_document_type_input.setAccessibleName("Loại tài liệu để quét")
+        for label, key in (
+            ("Tự động", "auto"),
+            ("Căn cước công dân", "cccd"),
+            ("Giấy chứng nhận doanh nghiệp (ERC)", "erc"),
+            ("Giấy chứng nhận địa điểm kinh doanh (BRC)", "brc"),
+        ):
+            self.scan_document_type_input.addItem(label, key)
+        self.scan_document_type_input.setToolTip(
+            "Chọn loại tài liệu khi app nhận diện sai. Chỉ áp dụng cho lần quét, không tự lưu dữ liệu vào hồ sơ."
+        )
+        actions.addWidget(self.scan_document_type_input)
 
         run_button = QPushButton("Quét tài liệu")
         run_button.setObjectName("PrimaryButton")
@@ -2595,14 +2726,15 @@ class BusinessRegistrationWorkspace(QWidget):
 
     def _add_authorized_person_default_options(self, selector: QComboBox) -> None:
         profiles = self.authorized_person_defaults.get("__profiles")
-        if isinstance(profiles, list) and profiles:
+        if isinstance(profiles, list):
             for index, profile in enumerate(profiles):
                 if not isinstance(profile, dict):
                     continue
                 name = profile.get("authorized_person_full_name") or f"Người được ủy quyền {index + 1}"
                 selector.addItem(str(name), f"authorized_profile:{index}")
             return
-        if self.authorized_person_defaults:
+        if any(str(key).startswith("authorized_person_") and str(value or "").strip()
+               for key, value in self.authorized_person_defaults.items()):
             name = self.authorized_person_defaults.get("authorized_person_full_name") or "Profile người ủy quyền đã lưu"
             selector.addItem(name, "authorized_defaults")
 
@@ -2966,6 +3098,9 @@ class BusinessRegistrationWorkspace(QWidget):
         self._financial_autosave_timer.start()
 
     def _autosave_existing_case_financial_values(self) -> None:
+        if hasattr(self, "draft_progress"):
+            self.draft_progress._safe_flush()
+            return
         existing = self.case
         if existing is None:
             return
@@ -3219,6 +3354,8 @@ class BusinessRegistrationWorkspace(QWidget):
         self._resize_business_line_table()
 
     def _add_ocr_person(self) -> None:
+        if getattr(getattr(self, "draft_progress", None), "active_scan", None) is not None:
+            return
         if len(self.ocr_people) >= 5:
             QMessageBox.information(self, "Đã đủ người", "Hồ sơ chỉ hỗ trợ tối đa 5 người.")
             return
@@ -3229,6 +3366,8 @@ class BusinessRegistrationWorkspace(QWidget):
         self._refresh_selected_person_images()
 
     def _select_ocr_person(self, index: int) -> None:
+        if getattr(getattr(self, "draft_progress", None), "active_scan", None) is not None:
+            return
         if index == self.current_person_index:
             return
         self._persist_current_person_recognition()
@@ -3245,6 +3384,7 @@ class BusinessRegistrationWorkspace(QWidget):
             item = self.people_list_layout.takeAt(0)
             widget = item.widget()
             if widget is not None:
+                widget.hide()
                 widget.deleteLater()
 
         for index, person in enumerate(self.ocr_people):
@@ -3279,6 +3419,8 @@ class BusinessRegistrationWorkspace(QWidget):
         self.person_role_input.setCurrentIndex(role_index)
         self.person_role_input.blockSignals(False)
         self._restore_selected_person_recognition(person)
+        if hasattr(self, "draft_progress"):
+            self.draft_progress.show_scan_state()
 
     def _persist_current_person_recognition(self) -> None:
         if not self.ocr_people or not (0 <= self.current_person_index < len(self.ocr_people)):
@@ -3408,6 +3550,8 @@ class BusinessRegistrationWorkspace(QWidget):
         return False
 
     def _choose_person_image(self, side: str) -> None:
+        if getattr(getattr(self, "draft_progress", None), "active_scan", None) is not None:
+            return
         path, _ = QFileDialog.getOpenFileName(
             self,
             "Tải lên tài liệu",
@@ -3421,7 +3565,11 @@ class BusinessRegistrationWorkspace(QWidget):
             else:
                 person.back_path = path
             self._refresh_selected_person_images()
+            if hasattr(self, "draft_progress"):
+                self.draft_progress._safe_flush()
     def _delete_person_image(self, side: str) -> None:
+        if getattr(getattr(self, "draft_progress", None), "active_scan", None) is not None:
+            return
         person = self.ocr_people[self.current_person_index]
         current_path = person.front_path if side == "front" else person.back_path
         if not current_path:
@@ -3457,7 +3605,7 @@ class BusinessRegistrationWorkspace(QWidget):
         self._refresh_selected_person_images()
 
     def _run_document_scan(self) -> None:
-        """Choose the recognition engine from the uploaded file type."""
+        """Honor explicit selection before the existing automatic file routing."""
         person = self.ocr_people[self.current_person_index]
         if not person.front_path:
             QMessageBox.warning(
@@ -3468,11 +3616,26 @@ class BusinessRegistrationWorkspace(QWidget):
             return
 
         suffix = Path(person.front_path).suffix.lower()
+        selected = self.scan_document_type_input.currentData()
+        expected = self.organization_document_service.DOCUMENT_TYPE
+        if selected in {"erc", "brc"} and selected != expected:
+            label = "ERC" if expected == "erc" else "BRC"
+            QMessageBox.warning(self, "Sai loại tài liệu", f"Hồ sơ này chỉ nhận CCCD hoặc {label}. Vui lòng chọn lại loại tài liệu.")
+            return
+        if suffix not in {".pdf", ".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}:
+            QMessageBox.warning(self, "Định dạng chưa hỗ trợ", "Vui lòng tải lên file PDF hoặc ảnh hợp lệ.")
+            return
+        if selected == "cccd":
+            self._run_qr_scan(person.front_path)
+            return
+        if selected in {"erc", "brc"}:
+            self._scan_organization_document(person.front_path)
+            return
         if suffix == ".pdf":
             self._scan_organization_document(person.front_path)
             return
         if suffix in {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}:
-            self._run_qr_scan(person.front_path)
+            self._run_auto_photo_scan(person.front_path)
             return
 
         QMessageBox.warning(
@@ -3485,6 +3648,39 @@ class BusinessRegistrationWorkspace(QWidget):
         # Keep the old entry point for existing callers and saved UI state.
         self._run_document_scan()
 
+    @checkpoint_scan
+    def _run_auto_photo_scan(self, image_path: str) -> None:
+        from mingo_assistant.services.ocr.certificate_scan import read_certificate
+
+        start = monotonic()
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            try:
+                qr_value = self.ocr_service.scan_qr(image_path)
+            except Exception:
+                certificate = read_certificate(
+                    self.organization_document_service, image_path, auto_photo=True,
+                    callback=lambda percent, status: self._update_ocr_progress(percent, status, self._format_elapsed(start)),
+                )
+                if certificate is not None:
+                    self._apply_certificate_scan_result(certificate, image_path, self._format_elapsed(start))
+                    return
+            else:
+                self.raw_ocr_text.setPlainText(qr_value)
+                self._parse_ocr_text("qr")
+                self._update_ocr_progress(100, "Hoàn thành quét CCCD bằng QR", self._format_elapsed(start))
+                return
+        except DocumentTypeMismatchError as exc:
+            QMessageBox.warning(self, "Sai loại tài liệu", str(exc))
+            return
+        except Exception as exc:
+            QMessageBox.critical(self, "Không thể đọc tài liệu", str(exc))
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+        self._run_qr_scan(image_path)
+
+    @checkpoint_scan
     def _run_qr_scan(self, image_path: str) -> None:
         self._show_recognition_result("cccd")
         QApplication.setOverrideCursor(Qt.WaitCursor)
@@ -3496,12 +3692,13 @@ class BusinessRegistrationWorkspace(QWidget):
             image_paths = [image_path]
             if person.back_path and person.back_path != image_path:
                 image_paths.append(person.back_path)
-            result = self.ocr_service.scan_identity(
-                image_paths,
-                progress_callback=lambda percent, status: self._update_ocr_progress(
-                    percent, status, self._format_elapsed(start)
-                ),
-            )
+            with identity_images(image_paths) as scan_paths:
+                result = self.ocr_service.scan_identity(
+                    scan_paths,
+                    progress_callback=lambda percent, status: self._update_ocr_progress(
+                        percent, status, self._format_elapsed(start)
+                    ),
+                )
         except Exception as exc:
             QMessageBox.critical(
                 self,
@@ -3517,6 +3714,13 @@ class BusinessRegistrationWorkspace(QWidget):
         self.raw_ocr_text.setPlainText(result.raw_text)
         self._parse_ocr_text(result.method)
 
+    def _extract_selected_organization_document(self, path, progress_callback=None):
+        from mingo_assistant.services.ocr.certificate_scan import read_certificate
+
+        selected = self.scan_document_type_input.currentData()
+        return read_certificate(self.organization_document_service, path, selected, progress_callback)
+
+    @checkpoint_scan
     def _scan_organization_document(self, path: str) -> None:
         expected_document_type = getattr(
             self.organization_document_service, "DOCUMENT_TYPE", "erc"
@@ -3526,7 +3730,7 @@ class BusinessRegistrationWorkspace(QWidget):
         start = monotonic()
         try:
             self._update_ocr_progress(0, "Đang đọc tài liệu doanh nghiệp", "0 giây")
-            result = self.organization_document_service.extract_pdf(
+            result = self._extract_selected_organization_document(
                 path,
                 progress_callback=lambda percent, status: self._update_ocr_progress(
                     percent, status, self._format_elapsed(start)
@@ -3570,46 +3774,11 @@ class BusinessRegistrationWorkspace(QWidget):
             self,
             "Tải tài liệu hồ sơ doanh nghiệp",
             "",
-            "Tài liệu PDF (*.pdf);;Tất cả file (*.*)",
+            "Giấy chứng nhận PDF hoặc ảnh (*.pdf *.png *.jpg *.jpeg *.bmp *.tif *.tiff);;PDF (*.pdf);;Ảnh (*.png *.jpg *.jpeg *.bmp *.tif *.tiff)",
         )
         if not path:
             return
-
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        start = monotonic()
-        try:
-            self._update_ocr_progress(0, "Đang đọc tài liệu doanh nghiệp", "0 giây")
-            result = self.organization_document_service.extract_pdf(
-                path,
-                progress_callback=lambda percent, status: self._update_ocr_progress(
-                    percent, status, self._format_elapsed(start)
-                ),
-            )
-        except DocumentTypeMismatchError as exc:
-            QMessageBox.warning(self, "Sai loại tài liệu", str(exc))
-            return
-        except Exception as exc:
-            QMessageBox.critical(self, "Không thể đọc tài liệu", f"Không thể nhận diện thông tin tổ chức:\n{exc}")
-            return
-        finally:
-            QApplication.restoreOverrideCursor()
-
-        self._apply_organization_values_to_current_person(
-            result.values,
-            result.raw_text,
-            result.extraction_method,
-            document_type=result.document_type,
-        )
-        self._update_organization_result_fields(result.values)
-        self.organization_document_label.setText(
-            f"Tài liệu: {Path(path).name} - Nhận diện bằng "
-            f"{'OCR' if result.extraction_method == 'ocr' else 'văn bản PDF'}"
-        )
-        self.raw_ocr_text.setPlainText(result.raw_text)
-        self._show_recognition_result(result.document_type)
-        self._update_ocr_progress(100, "Đã nhận diện thông tin tổ chức", self._format_elapsed(start))
-        if result.warnings:
-            QMessageBox.warning(self, "Cần kiểm tra dữ liệu tổ chức", "\n".join(result.warnings))
+        self._scan_organization_document(path)
 
     def _activate_organization_owner_for_document(self) -> bool:
         """Compatibility hook retained for callers; recognition no longer mutates the form."""
@@ -3743,7 +3912,10 @@ class BusinessRegistrationWorkspace(QWidget):
         self.ocr_progress.setFormat(f"{value}%")
         self.ocr_status_label.setText(status)
         self.ocr_eta_label.setText(f"Đã chạy: {eta}")
-        QApplication.processEvents()
+        if hasattr(self, "draft_progress"):
+            self.draft_progress.update_scan(value, status)
+        if self._scan_thread is None and not getattr(self, "_applying_scan_result", False):
+            QApplication.processEvents()
 
     def _format_elapsed(self, start: float) -> str:
         elapsed = max(0.0, monotonic() - start)
@@ -3980,7 +4152,7 @@ class BusinessRegistrationWorkspace(QWidget):
             self._apply_person_data_to_role(card_values, person.role, self.current_person_index + 1, overwrite=True)
         self._refresh_preview()
 
-    def _parse_ocr_text(self, recognition_method: str = "qr") -> None:
+    def _parse_ocr_text(self, recognition_method: str = "qr", *, show_warnings: bool = True) -> None:
         text = self.raw_ocr_text.toPlainText().strip()
         if not text:
             QMessageBox.warning(self, "Ch\u01b0a c\u00f3 d\u1eef li\u1ec7u QR", "B\u1ea1n c\u1ea7n qu\u00e9t QR CCCD tr\u01b0\u1edbc.")
@@ -3996,7 +4168,7 @@ class BusinessRegistrationWorkspace(QWidget):
         )
         self.ocr_people[self.current_person_index].raw_text = text
         self._parse_registration_office_from_text(text)
-        if card.warnings:
+        if card.warnings and show_warnings:
             QMessageBox.warning(self, "C\u1ea3nh b\u00e1o d\u1eef li\u1ec7u CCCD", "\\n".join(card.warnings))
         self._refresh_preview()
 
@@ -4073,6 +4245,15 @@ class BusinessRegistrationWorkspace(QWidget):
         return ", ".join(part for part in parts if part)
 
     def _save_draft(self) -> None:
+        if hasattr(self, "draft_progress"):
+            try:
+                self.draft_progress.flush(force=True, save=self.on_save)
+            except Exception:
+                QMessageBox.critical(self, "Không thể lưu nháp", "Không thể ghi hồ sơ. Vui lòng kiểm tra dung lượng và quyền ghi rồi thử lại.")
+                return
+            message = "Hồ sơ nháp đã được lưu vào danh sách." if self.case else "Chưa có dữ liệu để lưu nháp."
+            QMessageBox.information(self, "Lưu nháp", message)
+            return
         saved_case = self.build_case_summary()
         self.on_save(saved_case)
         self.case = saved_case
@@ -4130,8 +4311,7 @@ class BusinessRegistrationWorkspace(QWidget):
         self._export_worker.finished.connect(self._handle_export_finished)
         self._export_worker.finished.connect(self._export_thread.quit)
         self._export_thread.finished.connect(self._export_worker.deleteLater)
-        self._export_thread.finished.connect(self._export_thread.deleteLater)
-        self._export_thread.finished.connect(lambda: self._clear_export_worker())
+        self._export_thread.finished.connect(self._clear_export_worker)
         self._export_thread.start()
 
     def _set_export_busy(self, busy: bool) -> None:
@@ -4139,9 +4319,16 @@ class BusinessRegistrationWorkspace(QWidget):
         if busy:
             self.ocr_status_label.setText("Đang kiểm tra và tạo bộ file Word...")
 
+    @Slot()
     def _clear_export_worker(self) -> None:
+        thread = self._export_thread
+        if thread is not None and not thread.wait(0):
+            QTimer.singleShot(10, self._clear_export_worker)
+            return
         self._export_worker = None
         self._export_thread = None
+        if thread is not None:
+            thread.deleteLater()
         self._set_export_busy(False)
 
     @Slot(object)
@@ -4186,6 +4373,8 @@ class BusinessRegistrationWorkspace(QWidget):
         self.on_save(saved_case)
         self.case = saved_case
         cleanup_failures = self._remove_previous_export_versions(case_export_dir, result.output_dir)
+        if hasattr(self, "draft_progress"):
+            self.draft_progress.accept_export()
         message = [
             f"Đã tạo {len(result.generated)} file DOCX.",
             f"Thư mục hồ sơ: {case_export_dir}",
@@ -4200,7 +4389,8 @@ class BusinessRegistrationWorkspace(QWidget):
         if result.unresolved:
             message.append("\nCòn placeholder chưa điền:")
             message.append(self._format_template_issues(result.unresolved))
-        QMessageBox.information(self, "Xuất hồ sơ thành công", "\n".join(message))
+        if not getattr(self.window(), "_close_requested", False):
+            QMessageBox.information(self, "Xuất hồ sơ thành công", "\n".join(message))
         if self.on_export is not None:
             self.on_export(saved_case)
 
@@ -4401,7 +4591,7 @@ class BusinessRegistrationWorkspace(QWidget):
         self.registration_view_model.replace(values)
         return self.registration_view_model.snapshot()
 
-    def _store_people_values(self, values: dict[str, str]) -> None:
+    def _store_recognized_people_values(self, values: dict[str, str]) -> None:
         self._persist_current_person_recognition()
         values["people_count"] = str(len(self.ocr_people))
         for index, person in enumerate(self.ocr_people, start=1):
@@ -4423,6 +4613,8 @@ class BusinessRegistrationWorkspace(QWidget):
             for key, value in person.saved_data.items():
                 values[f"person_{index}_saved_{key}"] = value
 
+    def _store_people_values(self, values: dict[str, str]) -> None:
+        self._store_recognized_people_values(values)
         if self.template_variant == TWO_MEMBER_INDIVIDUAL_VARIANT:
             self._synchronize_two_member_list_values(values)
             return

@@ -19,9 +19,13 @@ EXE/
 data/app/*
 data/temp/*
 exports/*
+/output/
+/TemplatesBefore/
 logs/*
 DataTrainCCCD/
 .tmp-*
+# Personal-release seed data must never be committed, even if copied here.
+assets/defaults/authorized_person_seed.json
 tmp/
 releases/
 _template_eval/

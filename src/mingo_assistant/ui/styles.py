@@ -2435,6 +2435,26 @@ QLabel#StatusBadge {{ background: rgba(255, 255, 255, 0.88); color: {card_text};
     if effects_css:
         stylesheet += effects_css
 
+    # Keep the library selection in sync with the active presentation, including
+    # Liquid Glass, whose purple accent intentionally differs from QPalette.
+    library_accent = ("#bdaaff" if is_dark else "#7154b6") if layout == "liquid_glass" else theme_accent
+    library_hover = ("#354560" if is_dark else "#e8e3fa") if layout == "liquid_glass" else ("#30343b" if is_dark else "palette(alternate-base)")
+    library_border = "#53647c" if is_dark else "#bdc9dc"
+    library_selection = "#6750a4" if layout == "liquid_glass" else theme_accent
+    stylesheet += f"""
+QListWidget#TemplateFileList {{background: transparent; border: none; outline: none;}}
+QListWidget#TemplateFileList::item {{
+ padding: 8px 10px; border: 1px solid {library_border}; border-radius: 8px;
+}}
+QListWidget#TemplateFileList::item:hover {{background: {library_hover}; border-color: {library_accent};}}
+QListWidget#TemplateFileList::item:selected {{
+ background: {library_selection}; color: white; border-color: {library_accent};
+}}
+QLineEdit#TemplateSearchInput {{min-height: 0px; padding: 6px 10px;}}
+QWidget#TemplatesPage QPushButton#CompactPrimaryButton,
+QWidget#TemplatesPage QPushButton#CompactGhostButton {{min-height: 0px; padding: 6px 14px;}}
+"""
+
     return stylesheet
 
 

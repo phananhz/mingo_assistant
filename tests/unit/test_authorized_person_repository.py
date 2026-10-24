@@ -9,6 +9,86 @@ from mingo_assistant.repositories.authorized_person_repository import Authorized
 
 
 class AuthorizedPersonProfileRepositoryTest(unittest.TestCase):
+    def test_personal_release_seed_initializes_editable_profiles_once(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            defaults = root / "defaults.json"
+            defaults.write_text('{"profiles": []}', encoding="utf-8")
+            seed = root / "authorized_person_seed.json"
+            seed.write_text(json.dumps({"selected_profile_id": "seed-2", "profiles": [
+                {"id": "seed-1", "authorized_person_full_name": "NGƯỜI KIỂM THỬ MỘT"},
+                {"id": "seed-2", "authorized_person_full_name": "NGƯỜI KIỂM THỬ HAI"},
+            ]}), encoding="utf-8")
+            original_seed = seed.read_bytes()
+            repository = AuthorizedPersonProfileRepository(root / "local/profiles.json", defaults, seed)
+            loaded = repository.load()
+            self.assertEqual(2, len(loaded["profiles"]))
+            self.assertEqual("seed-2", loaded["selected_profile_id"])
+            self.assertFalse(repository.is_default("seed-2"))
+            loaded["profiles"][1]["authorized_person_phone"] = "0900000002"
+            repository.save(loaded)
+            self.assertEqual("0900000002", repository.load()["profiles"][1]["authorized_person_phone"])
+            repository.save({"profiles": [], "selected_profile_id": ""})
+            self.assertEqual([], repository.load()["profiles"])
+            self.assertEqual(original_seed, seed.read_bytes())
+
+    def test_seed_never_overwrites_existing_local_profiles(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            seed = root / "authorized_person_seed.json"
+            seed.write_text('{"profiles": [{"id": "seed", "authorized_person_full_name": "BUNDLED"}]}', encoding="utf-8")
+            data = root / "profiles.json"
+            data.write_text('{"profiles": [{"id": "local", "authorized_person_full_name": "LOCAL"}]}', encoding="utf-8")
+            original = data.read_bytes()
+            repository = AuthorizedPersonProfileRepository(data, root / "defaults.json", seed)
+            self.assertEqual("LOCAL", repository.load()["profiles"][0]["authorized_person_full_name"])
+            self.assertEqual(original, data.read_bytes())
+
+    def test_legacy_samples_are_hidden_without_rewriting_local_profiles(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            samples = [
+                {"id": f"builtin-authorized-person-{i}",
+                 "authorized_person_full_name": f"NGƯỜI ỦY QUYỀN MẪU {i}",
+                 "authorized_person_id_number": "000000000000"}
+                for i in range(1, 4)
+            ]
+            real = {"id": "saved-real", "authorized_person_full_name": "NGƯỜI DÙNG THẬT",
+                    "authorized_person_phone": "0900000001"}
+            defaults = root / "defaults.json"
+            defaults.write_text(json.dumps({"profiles": samples}), encoding="utf-8")
+            data = root / "profiles.json"
+            data.write_text(json.dumps({"selected_profile_id": samples[0]["id"], "profiles": samples + [real]}), encoding="utf-8")
+            original = data.read_bytes()
+            repository = AuthorizedPersonProfileRepository(data, defaults)
+
+            loaded = repository.load()
+
+            self.assertEqual([], repository.default_profiles())
+            self.assertEqual([real], loaded["profiles"])
+            self.assertEqual("saved-real", loaded["selected_profile_id"])
+            self.assertEqual(original, data.read_bytes())
+            self.assertEqual([real], repository.merge("saved-real", samples + [real])["profiles"])
+
+    def test_filter_does_not_hide_real_people_reusing_a_builtin_id_or_sample_name(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repository = AuthorizedPersonProfileRepository(root / "data.json", root / "no-defaults.json")
+            real = [
+                {"id": "builtin-authorized-person-1", "authorized_person_full_name": "NGƯỜI DÙNG THẬT"},
+                {"id": "builtin-authorized-person-2", "authorized_person_full_name": "NGƯỜI ỦY QUYỀN MẪU 2",
+                 "authorized_person_id_number": "012345678901"},
+            ]
+            self.assertEqual(real, repository.merge(real[0]["id"], real)["profiles"])
+
+    def test_samples_only_produce_empty_selection(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repository = AuthorizedPersonProfileRepository(root / "data.json", root / "no-defaults.json")
+            sample = {"id": "builtin-authorized-person-1", "authorized_person_full_name": "NGƯỜI ỦY QUYỀN MẪU 1",
+                      "authorized_person_id_number": "000000000000"}
+            self.assertEqual({"selected_profile_id": "", "profiles": []}, repository.merge(sample["id"], [sample]))
+
     def test_defaults_are_immutable_and_saved_profiles_are_appended(self) -> None:
         with TemporaryDirectory() as temporary:
             root = Path(temporary)

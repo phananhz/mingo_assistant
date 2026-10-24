@@ -47,7 +47,7 @@ class LocationTerminationTemplateGenerator(DependentUnitTemplateGenerator):
         document = Document(docx_path)
         if template_name == self.NOTICE_NAME:
             self._fill_notice(document, values)
-            expected_highlights = 13
+            expected_highlights = 15
             template_label = "thông báo chấm dứt hoạt động"
         elif template_name == self.AUTHORIZATION_NAME:
             self._fill_authorization(document, values)
@@ -85,14 +85,15 @@ class LocationTerminationTemplateGenerator(DependentUnitTemplateGenerator):
         fill(header, "parent_entity_name")
         date = document.tables[0].cell(0, 1).paragraphs[3]
         date_runs = self._highlighted_runs(date)
-        if len(date_runs) != 3:
-            raise ValueError("Không xác định được ba vùng tô sáng của ngày ký.")
-        for run, field in zip(date_runs, ("document_day", "document_month", "document_year")):
+        if len(date_runs) != 4:
+            raise ValueError("Không xác định được bốn vùng tô sáng của địa điểm và ngày ký.")
+        for run, field in zip(date_runs, ("document_place", "document_day", "document_month", "document_year")):
             replacement = str(values.get(field, "") or "").strip()
             if replacement:
                 run.text = replacement
 
         fields_by_prefix = {
+            "Kính gửi:": "business_registration_office",
             "Tên doanh nghiệp (": "parent_entity_name",
             "Mã số doanh nghiệp/Mã số thuế:": "parent_entity_registration_number",
             "1. Tên địa điểm kinh doanh (": "location_business_name",

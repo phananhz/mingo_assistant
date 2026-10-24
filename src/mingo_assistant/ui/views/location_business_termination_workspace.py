@@ -286,13 +286,18 @@ class LocationBusinessTerminationWorkspace(LocationBusinessWorkspace):
         selector = getattr(self, "brc_profile_selector", None)
         if selector is not None and selector.currentData() == f"brc:{self.current_person_index}":
             self._fill_brc_from_selector()
-        saved_case = self.build_case_summary()
+        saved_case = None
         try:
-            self.on_save(saved_case)
+            if hasattr(self, "draft_progress"):
+                self.draft_progress.flush(force=True, save=self.on_save)
+            else:
+                saved_case = self.build_case_summary()
+                self.on_save(saved_case)
         except Exception as exc:
             QMessageBox.critical(self, "Không lưu được giấy chứng nhận", str(exc))
             return
-        self.case = saved_case
+        if saved_case is not None:
+            self.case = saved_case
         self.ocr_status_label.setText("Đã lưu dữ liệu giấy chứng nhận")
         QMessageBox.information(
             self,

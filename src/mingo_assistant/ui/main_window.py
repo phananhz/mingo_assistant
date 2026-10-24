@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 from uuid import uuid4
 
-from PySide6.QtCore import QTimer, QRectF, Qt, QUrl
+from PySide6.QtCore import QThread, QTimer, QRectF, Qt, QUrl, Slot
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -42,6 +42,7 @@ from PySide6.QtGui import (
     QPen,
     QPixmap,
 )
+from shiboken6 import isValid
 
 from mingo_assistant import __version__
 from mingo_assistant.app.paths import AppPaths, get_app_paths, load_settings, save_settings
@@ -68,6 +69,7 @@ from mingo_assistant.ui.styles import (
     stylesheet_for_theme,
 )
 from mingo_assistant.ui.views.business_registration_documents import BusinessRegistrationDocumentsView
+from mingo_assistant.ui.views.business_registration_workspace import BusinessRegistrationWorkspace
 from mingo_assistant.ui.views.business_amendment_workspace import (
     BUSINESS_AMENDMENT_CASE_TYPE,
     BusinessAmendmentWorkspace,
@@ -90,6 +92,7 @@ from mingo_assistant.ui.routing import (
     route_for_workspace_class,
 )
 from mingo_assistant.ui.widgets.combo_box import NoWheelComboBox
+from mingo_assistant.ui.views.template_library_page import TemplateLibraryPage
 
 
 NAV_ITEMS = [
@@ -98,8 +101,8 @@ NAV_ITEMS = [
     ("dissolution", "3. Thủ tục giải thể DN"),
     ("dependent_units", "4. Thủ tục của đơn vị phụ thuộc"),
     ("household_business", "5. Thủ tục thành lập hộ kinh doanh"),
+    ("templates", "6. Biểu mẫu"),
     ("industry_lookup", "Tra cứu NNKD"),
-    ("legacy_industry_lookup", "Tra cứu NNKD Cũ"),
     ("trash", "Thùng rác"),
 ]
 
@@ -452,7 +455,7 @@ class MainWindow(QMainWindow):
             "dissolution": "Giải thể DN",
             "industry_lookup": "Tra mã ngành",
             "legacy_industry_lookup": "Tra mã ngành cũ",
-            "templates": "Biểu mẫu",
+            "templates": "6. Biểu mẫu",
             "people": "Cá nhân/Tổ chức",
             "trash": "Thùng rác",
         }
@@ -660,6 +663,7 @@ class MainWindow(QMainWindow):
         self.authorized_person_page = self._build_authorized_person_page()
         self.industry_lookup_page = self._build_industry_lookup_page()
         self.legacy_industry_lookup_page = self._build_legacy_industry_lookup_page()
+        self.templates_page = self._build_templates_page()
         self.trash_page = self._build_trash_page()
         self.coming_soon_page = self._build_coming_soon_page()
         self.settings_page = self._build_settings_page()
@@ -668,6 +672,7 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.business_amendment_page)
         self.stack.addWidget(self.dependent_units_page)
         self.stack.addWidget(self.household_business_page)
+        self.stack.addWidget(self.templates_page)
         self.stack.addWidget(self.dissolution_page)
         self.stack.addWidget(self.authorized_person_page)
         self.stack.addWidget(self.industry_lookup_page)
@@ -760,6 +765,11 @@ class MainWindow(QMainWindow):
                 self._open_household_business_workspace,
                 None,
             ),
+            "templates": (
+                self.templates_page,
+                None,
+                self._refresh_templates,
+            ),
             "dissolution": (
                 self.dissolution_page,
                 self._open_dissolution_modal,
@@ -781,6 +791,55 @@ class MainWindow(QMainWindow):
                 self._refresh_trash,
             ),
         }
+
+    def _build_templates_page(self) -> QWidget:
+        page = TemplateLibraryPage(bundle_root=self.app_paths.bundle_root)
+        page.tax_template_requested.connect(self._open_tax_template_workspace)
+        page.tax_case_requested.connect(self._open_saved_tax_case)
+        page.tax_case_edit_requested.connect(self._edit_saved_tax_case)
+        page.dossiers.delete_requested.connect(self._delete_tax_case)
+        page.set_cases(self.case_use_cases.list_active())
+        return page
+
+    def _refresh_templates(self) -> None:
+        self.templates_page.set_cases(self.case_use_cases.list_active())
+
+    def _delete_tax_case(self, case_id: str) -> None:
+        from mingo_assistant.ui.views.tax_template_workspace import TAX_TEMPLATE_CASE_TYPE
+        case = self.case_use_cases.get(case_id)
+        if case and not case.is_deleted and case.case_type == TAX_TEMPLATE_CASE_TYPE:
+            self._delete_case(case)
+            self._refresh_templates()
+
+    def _open_saved_tax_case(self, case_id: str) -> None:
+        from mingo_assistant.ui.views.tax_template_workspace import TAX_TEMPLATE_CASE_TYPE
+        case = self.case_use_cases.get(case_id)
+        if case and not case.is_deleted and case.case_type == TAX_TEMPLATE_CASE_TYPE:
+            self._open_case_documents(case)
+
+    def _edit_saved_tax_case(self, case_id: str) -> None:
+        from mingo_assistant.ui.views.tax_template_workspace import TAX_TEMPLATE_CASE_TYPE
+        case = self.case_use_cases.get(case_id)
+        if case and not case.is_deleted and case.case_type == TAX_TEMPLATE_CASE_TYPE:
+            self._open_case_workspace(case)
+
+    def _return_to_templates(self) -> None:
+        self.templates_page.tabs.setCurrentIndex(1)
+        self._select_nav("templates")
+
+    def _open_tax_template_workspace(self, template_id: str) -> None:
+        from uuid import uuid4
+        from mingo_assistant.ui.views.tax_template_workspace import TAX_TEMPLATE_CASE_TYPE
+        from mingo_assistant.ui.views.template_library_catalog import TEMPLATE_GROUPS
+        template = next((item for item in TEMPLATE_GROUPS[1].items if item.id == template_id), None)
+        if template is None:
+            return
+        case = CaseSummary(
+            id=str(uuid4()), company_name=template.title, case_type=TAX_TEMPLATE_CASE_TYPE,
+            owner="", updated_at="", status="Đang soạn", condition="", members=0, capital="",
+            form_values={"tax_template_id": template.id, "tax_template_title": template.title},
+        )
+        self._open_case_workspace(case)
 
     def _build_business_registration_page(self) -> QWidget:
         page = QWidget()
@@ -1920,27 +1979,11 @@ class MainWindow(QMainWindow):
         return text or company_name
 
     def _card_title_text(self, title: str, metrics: QFontMetrics, width: int, max_lines: int = 3) -> str:
-        words = title.split()
-        if not words:
-            return ""
-        lines: list[str] = []
-        index = 0
-        while index < len(words) and len(lines) < max_lines:
-            line = words[index]
-            index += 1
-            while index < len(words) and metrics.horizontalAdvance(f"{line} {words[index]}") <= width:
-                line = f"{line} {words[index]}"
-                index += 1
-            lines.append(line)
-        if index < len(words):
-            remaining = f"{lines[-1]} {' '.join(words[index:])}".rstrip()
-            suffix = "..."
-            while remaining and metrics.horizontalAdvance(f"{remaining}{suffix}") > width:
-                remaining = remaining[:-1].rstrip()
-            lines[-1] = f"{remaining}{suffix}"
-        return "\n".join(lines)
+        from mingo_assistant.ui.widgets.case_card import format_card_title
+        return format_card_title(title, metrics, width, max_lines)
 
     def _filtered_cases(self) -> list[CaseSummary]:
+        from mingo_assistant.ui.views.tax_template_workspace import TAX_TEMPLATE_CASE_TYPE
         search_text = self.search_input.text().strip().lower()
         case_type = self.case_type_filter.currentText()
         condition = self.condition_filter.currentText()
@@ -1952,6 +1995,7 @@ class MainWindow(QMainWindow):
                 self._is_dependent_case(case)
                 or case.case_type == BUSINESS_AMENDMENT_CASE_TYPE
                 or case.case_type == HOUSEHOLD_BUSINESS_CASE_TYPE
+                or case.case_type == TAX_TEMPLATE_CASE_TYPE
             ):
                 continue
             haystack = f"{case.company_name} {self._authorized_person_name(case)} {case.case_type} {case.status}".lower()
@@ -2079,104 +2123,23 @@ class MainWindow(QMainWindow):
         self._refresh_trash()
 
     def _build_case_card(self, case: CaseSummary) -> QWidget:
-        card = QFrame()
-        card.setObjectName("Card")
-        card.setFixedSize(220, 344)
+        from mingo_assistant.ui.widgets.case_card import build_case_card
 
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(0, 0, 0, 14)
-        layout.setSpacing(0)
-
-        header = QFrame()
-        header.setObjectName("CardHeader")
-        header.setFixedHeight(112)
-        header_layout = QVBoxLayout(header)
-        header_layout.setContentsMargins(14, 12, 14, 12)
-
-        top_row = QHBoxLayout()
-        badge = QLabel(case.warning or case.status)
-        badge.setObjectName("WarningBadge" if case.warning else "StatusBadge")
-        badge.setAlignment(Qt.AlignCenter)
-        badge.setFixedHeight(24)
-        delete_button = QPushButton("Xóa")
-        delete_button.setObjectName("HeaderDeleteButton")
-        delete_button.clicked.connect(lambda checked=False, selected=case: self._delete_case(selected))
-        top_row.addWidget(badge, 0, Qt.AlignLeft | Qt.AlignTop)
-        top_row.addStretch(1)
-        top_row.addWidget(delete_button, 0, Qt.AlignRight | Qt.AlignTop)
-        header_layout.addLayout(top_row)
-        header_layout.addStretch(1)
-
-        icon = QLabel("DOC")
-        icon.setStyleSheet("font-size: 28px; font-weight: 800; color: rgba(255,255,255,0.78);")
-        icon.setAlignment(Qt.AlignCenter)
-        header_layout.addWidget(icon)
-        header_layout.addStretch(1)
-
-        layout.addWidget(header)
-
-        body = QVBoxLayout()
-        body.setContentsMargins(14, 14, 14, 0)
-        body.setSpacing(8)
-
-        display_name = self._display_company_name(case.name)
-        title = QLabel()
-        title.setObjectName("CardTitle")
-        title.setToolTip(case.name)
-        title.setText(self._card_title_text(display_name, title.fontMetrics(), self.CARD_WIDTH - 28))
-        title.setWordWrap(False)
-        title.setMinimumHeight(title.fontMetrics().lineSpacing() * 3)
-        body.addWidget(title)
-
-        subtitle = QLabel(case.case_type.upper())
-        subtitle.setObjectName("CardSubtitle")
-        subtitle.setWordWrap(True)
-        body.addWidget(subtitle)
-
-        body.addSpacing(4)
-        body.addWidget(self._meta_row("Thành viên", str(case.members)))
-        body.addWidget(self._meta_row("Vốn điều lệ", case.capital))
-        body.addWidget(self._meta_row("Cập nhật", case.updated_at))
-        body.addStretch(1)
-
-        actions = QHBoxLayout()
-        open_button = QPushButton("Mở")
-        open_button.setObjectName("GhostButton")
-        open_button.clicked.connect(lambda checked=False, selected=case: self._open_case_documents(selected))
-        edit_button = QPushButton("Sửa")
-        edit_button.setObjectName("GhostButton")
-        edit_button.clicked.connect(lambda checked=False, selected=case: self._open_case_workspace(selected))
-        actions.addWidget(open_button)
-        actions.addWidget(edit_button)
-        body.addLayout(actions)
-
-        def on_card_click(event, c=case):
-            self._selected_case_for_detail = c
+        def select(selected):
+            self._selected_case_for_detail = selected
             if hasattr(self, "detail_preview_panel") and self.detail_preview_panel.isVisible():
-                self._update_detail_preview(c)
-            QFrame.mousePressEvent(card, event)
+                self._update_detail_preview(selected)
 
-        card.mousePressEvent = on_card_click
-
-        layout.addLayout(body, 1)
-        return card
+        return build_case_card(
+            case, display_name=self._display_company_name(case.name), format_title=self._card_title_text,
+            metadata=[("Thành viên", str(case.members)), ("Vốn điều lệ", case.capital), ("Cập nhật", case.updated_at)],
+            on_open=self._open_case_documents, on_edit=self._open_case_workspace,
+            on_delete=self._delete_case, on_select=select,
+        )
 
     def _meta_row(self, label: str, value: str) -> QWidget:
-        row = QWidget()
-        layout = QHBoxLayout(row)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
-
-        label_widget = QLabel(label)
-        label_widget.setObjectName("MetaText")
-        value_widget = QLabel(value)
-        value_widget.setObjectName("MetaText")
-        value_widget.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        value_widget.setWordWrap(True)
-
-        layout.addWidget(label_widget)
-        layout.addWidget(value_widget, 1)
-        return row
+        from mingo_assistant.ui.widgets.case_card import meta_row
+        return meta_row(label, value)
 
     def _build_create_card(self) -> QWidget:
         card = QFrame()
@@ -2615,7 +2578,7 @@ class MainWindow(QMainWindow):
 
         def restore() -> None:
             for scroll, vertical_value, horizontal_value in positions.values():
-                if scroll is None or scroll.isHidden():
+                if scroll is None or not isValid(scroll) or scroll.isHidden():
                     continue
                 scroll.verticalScrollBar().setValue(vertical_value)
                 scroll.horizontalScrollBar().setValue(horizontal_value)
@@ -3034,7 +2997,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(
                 self,
                 "Dữ liệu profile cần phục hồi",
-                "Tệp profile trên máy bị hỏng nên ứng dụng đang dùng 3 profile mặc định."
+                "Tệp profile trên máy bị hỏng nên ứng dụng chưa thể nạp các profile đã lưu."
                 f"\nTệp gốc không bị xóa hoặc ghi đè.{backup_text}",
             )
         return payload
@@ -3062,6 +3025,7 @@ class MainWindow(QMainWindow):
 
     def _return_callback_for_route(self, route: WorkspaceRoute):
         callbacks = {
+            "templates": self._return_to_templates,
             "business_registration": self._return_to_business_list,
             "business_amendment": self._return_to_amendment_list,
             "dependent_units": self._return_to_dependent_units,
@@ -3074,9 +3038,47 @@ class MainWindow(QMainWindow):
             widget = getattr(self, attribute, None)
             if widget is None:
                 continue
+            running = [thread for thread in widget.findChildren(QThread) if not thread.wait(0)]
+            progress = getattr(widget, "draft_progress", None)
+            if progress is not None:
+                progress.flush()
+                if not running:
+                    progress.stop()
             self.stack.removeWidget(widget)
-            widget.deleteLater()
+            widget.hide()
+            if running:
+                # Removing a view is not permission to destroy native work
+                # still owned by it (including the Word-export thread).
+                if not hasattr(self, "_retired_views"):
+                    self._retired_views = []
+                self._retired_views.append(widget)
+                for thread in running:
+                    thread.requestInterruption()
+                    thread.finished.connect(self._release_retired_views)
+            else:
+                widget.deleteLater()
             setattr(self, attribute, None)
+
+    @Slot()
+    def _release_retired_views(self) -> None:
+        if not isValid(self):
+            return
+        pending = []
+        for view in getattr(self, "_retired_views", []):
+            if not isValid(view):
+                continue
+            if (any(not thread.wait(0) for thread in view.findChildren(QThread))
+                    or getattr(view, "_scan_thread", None) is not None
+                    or getattr(view, "_export_thread", None) is not None):
+                pending.append(view)
+            else:
+                progress = getattr(view, "draft_progress", None)
+                if progress is not None:
+                    progress.stop()
+                view.deleteLater()
+        self._retired_views = pending
+        if pending:
+            QTimer.singleShot(20, self._release_retired_views)
 
     def _show_transient_view(self, attribute: str, widget: QWidget) -> None:
         self._clear_transient_views()
@@ -3097,8 +3099,9 @@ class MainWindow(QMainWindow):
         on_back=None,
     ) -> None:
         self._current_nav_key = route.nav_key
+        return_callback = on_back or self._return_callback_for_route(route)
         workspace_kwargs = {
-            "on_back": on_back or self._return_callback_for_route(route),
+            "on_back": lambda: self._leave_dossier_editor(return_callback),
             "on_save": self._save_case_from_workspace,
             "case": case,
             "on_export": self._open_case_documents,
@@ -3112,11 +3115,132 @@ class MainWindow(QMainWindow):
             workspace_kwargs["template_variant"] = template_variant
         if route.workspace_class is BusinessAmendmentWorkspace:
             workspace_kwargs["legacy_industry_catalog"] = self.legacy_industry_catalog
-        workspace = route.workspace_class(**workspace_kwargs)
+        workspace_class = route.workspace_class
+        if route.key == "tax_template" and case:
+            tax_template_id = case.form_values.get("tax_template_id")
+            if tax_template_id == "tax-commitment":
+                from mingo_assistant.ui.views.tax_commitment_workspace import TaxCommitmentWorkspace
+                workspace_class = TaxCommitmentWorkspace
+            elif tax_template_id == "tax-revenue":
+                from mingo_assistant.ui.views.tax_revenue_commitment_workspace import (
+                    TaxRevenueCommitmentWorkspace,
+                )
+                workspace_class = TaxRevenueCommitmentWorkspace
+            elif tax_template_id == "tax-ecommerce":
+                from mingo_assistant.ui.views.tax_ecommerce_commitment_workspace import (
+                    TaxEcommerceCommitmentWorkspace,
+                )
+                workspace_class = TaxEcommerceCommitmentWorkspace
+            elif tax_template_id == "tax-invoice":
+                from mingo_assistant.ui.views.tax_invoice_commitment_workspace import (
+                    TaxInvoiceCommitmentWorkspace,
+                )
+                workspace_class = TaxInvoiceCommitmentWorkspace
+            elif tax_template_id == "tax-refund":
+                from mingo_assistant.ui.views.tax_refund_refusal_workspace import (
+                    TaxRefundRefusalWorkspace,
+                )
+                workspace_class = TaxRefundRefusalWorkspace
+            elif tax_template_id == "tax-authorization-close":
+                from mingo_assistant.ui.views.tax_authorization_close_workspace import (
+                    TaxAuthorizationCloseWorkspace,
+                )
+                workspace_class = TaxAuthorizationCloseWorkspace
+            elif tax_template_id == "tax-authorization-restore":
+                from mingo_assistant.ui.views.tax_authorization_restore_workspace import (
+                    TaxAuthorizationRestoreWorkspace,
+                )
+                workspace_class = TaxAuthorizationRestoreWorkspace
+            elif tax_template_id == "tax-24":
+                from mingo_assistant.ui.views.tax_termination_workspace import TaxTerminationWorkspace
+                workspace_class = TaxTerminationWorkspace
+            elif tax_template_id == "tax-25":
+                from mingo_assistant.ui.views.tax_restoration_workspace import TaxRestorationWorkspace
+                workspace_class = TaxRestorationWorkspace
+            elif tax_template_id == "tax-customs":
+                from mingo_assistant.ui.views.tax_customs_confirmation_workspace import (
+                    TaxCustomsConfirmationWorkspace,
+                )
+                workspace_class = TaxCustomsConfirmationWorkspace
+        workspace = workspace_class(**workspace_kwargs)
         self._show_transient_view("current_workspace", workspace)
+        workspace.enable_draft_progress(self.case_use_cases.save)
+
+    def _leave_dossier_editor(self, callback) -> None:
+        progress = getattr(self.current_workspace, "draft_progress", None)
+        if progress is not None:
+            try:
+                progress.flush()
+            except Exception:
+                QMessageBox.critical(self, "Chưa lưu được tiến độ", "Không thể ghi hồ sơ. Vui lòng kiểm tra dung lượng và quyền ghi rồi thử lại.")
+                return
+            progress.stop()
+        callback()
+
+    def closeEvent(self, event) -> None:
+        workspace = getattr(self, "current_workspace", None)
+        editing = workspace is not None and self.stack.currentWidget() is workspace
+        if editing and self.isVisible() and not getattr(self, "_close_requested", False):
+            answer = QMessageBox.question(
+                self, "Tắt ứng dụng", "Bạn có muốn tắt ứng dụng không? Tiến độ đã nhập sẽ được lưu vào hồ sơ nháp.",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                event.ignore()
+                return
+        progress = getattr(workspace, "draft_progress", None)
+        if progress is not None:
+            try:
+                progress.flush()
+            except Exception:
+                QMessageBox.critical(self, "Chưa lưu được tiến độ", "Chưa thể lưu hồ sơ. Ứng dụng vẫn mở để bạn kiểm tra và thử lại.")
+                event.ignore()
+                return
+        running = [thread for thread in self.findChildren(QThread) if not thread.wait(0)]
+        pending_results = any(
+            getattr(view, "_scan_thread", None) is not None or getattr(view, "_export_thread", None) is not None
+            for view in self.findChildren(BusinessRegistrationWorkspace)
+        )
+        if running or pending_results:
+            self._close_requested = True
+            for thread in running:
+                thread.requestInterruption()
+                if not thread.property("closePending"):
+                    thread.setProperty("closePending", True)
+                    thread.finished.connect(self._finish_deferred_close)
+            if workspace is not None:
+                workspace.ocr_status_label.setText("Đang dừng tác vụ an toàn trước khi đóng ứng dụng…")
+            QTimer.singleShot(20, self._finish_deferred_close)
+            event.ignore()
+            return
+        if progress is not None:
+            progress.stop()
+        super().closeEvent(event)
+
+    @Slot()
+    def _finish_deferred_close(self) -> None:
+        if not isValid(self) or getattr(self, "_deferred_close_scheduled", False):
+            return
+        pending_results = any(
+            getattr(view, "_scan_thread", None) is not None or getattr(view, "_export_thread", None) is not None
+            for view in self.findChildren(BusinessRegistrationWorkspace)
+        )
+        if not pending_results and not any(not thread.wait(0) for thread in self.findChildren(QThread)):
+            self._deferred_close_scheduled = True
+            QTimer.singleShot(0, self._complete_deferred_close)
+        else:
+            QTimer.singleShot(20, self._finish_deferred_close)
+
+    @Slot()
+    def _complete_deferred_close(self) -> None:
+        if isValid(self):
+            self._deferred_close_scheduled = False
+            self.close()
 
     def _open_case_workspace(self, case: CaseSummary | None, *, template_variant: str = "") -> None:
         if case is not None:
+            if not self._flush_editor_before_reopen(case.id):
+                return
             case = self.case_use_cases.get(case.id) or case
         route = (
             route_for_case_type(case.case_type)
@@ -3134,6 +3258,8 @@ class MainWindow(QMainWindow):
         self, case: CaseSummary | None, *, workspace_class=LocationBusinessWorkspace, on_back=None,
     ) -> None:
         if case is not None:
+            if not self._flush_editor_before_reopen(case.id):
+                return
             case = self.case_use_cases.get(case.id) or case
         route = route_for_workspace_class(workspace_class)
         if route is None:
@@ -3143,6 +3269,17 @@ class MainWindow(QMainWindow):
             case,
             on_back=on_back,
         )
+
+    def _flush_editor_before_reopen(self, case_id: str) -> bool:
+        current = getattr(self, "current_workspace", None)
+        progress = getattr(current, "draft_progress", None)
+        if progress is not None and getattr(current, "case_id", "") == case_id:
+            try:
+                progress.flush()
+            except Exception:
+                QMessageBox.critical(self, "Chưa lưu được tiến độ", "Không thể lưu phần đang soạn. Ứng dụng giữ màn hình hiện tại để tránh mất dữ liệu.")
+                return False
+        return True
 
     def _open_location_business_update_workspace(self, case: CaseSummary | None) -> None:
         self._open_location_business_workspace(case, workspace_class=LocationBusinessUpdateWorkspace)
@@ -3161,6 +3298,7 @@ class MainWindow(QMainWindow):
         route = route_for_case_type(case.case_type) or DEFAULT_WORKSPACE_ROUTE
         documents_view = BusinessRegistrationDocumentsView(
             case=case,
+            on_save=self.case_use_cases.save,
             on_back=self._return_callback_for_route(route),
             on_edit=lambda selected_id=case.id: self._open_case_workspace(self.case_use_cases.get(selected_id) or case),
             description=(

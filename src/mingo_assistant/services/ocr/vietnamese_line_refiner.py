@@ -126,7 +126,7 @@ class VietnameseLineRefiner:
         return self._predictor
 
     @classmethod
-    def restore_accents(cls, original, candidate, *, allow_letter_repairs=True):
+    def restore_accents(cls, original, candidate, *, allow_letter_repairs=True, advance_unmatched=False):
         """Repair matched words without adding words or changing any digits.
 
         Exact folded matches restore accents. A close match may also restore
@@ -174,6 +174,13 @@ class VietnameseLineRefiner:
                         words[index] = alternative
                     position = offset + 1
                     break
+            else:
+                # High-confidence detector labels may omit vowels (vit/bng)
+                # that we deliberately leave unchanged. Still consume their
+                # aligned word so later proper-name accents can use real ink
+                # evidence instead of being stranded outside the lookahead.
+                if advance_unmatched:
+                    position = min(position + 1, len(alternatives))
         return "".join(words)
 
     @staticmethod
@@ -236,7 +243,7 @@ class VietnameseLineRefiner:
         return cv2.warpPerspective(image, transform, (width, height), flags=cv2.INTER_CUBIC,
                                    borderMode=cv2.BORDER_CONSTANT, borderValue=(255, 255, 255))
 
-    def refine(self, image, lines):
+    def refine(self, image, lines, *, padding=0.0):
         self.address_candidates = {}
         if not self.weights.is_file():
             return lines
@@ -273,7 +280,7 @@ class VietnameseLineRefiner:
                 continue
             if len(text) < 8 or "@" in text or sum(c.isalpha() for c in text) < 6:
                 continue
-            crop = self._rectified_crop(image, box)
+            crop = self._rectified_crop(image, box, padding=padding)
             if crop is not None and crop.size:
                 tiles = self._split_long_crop(crop)
                 crops.extend(Image.fromarray(tile[:, :, ::-1]) for tile in tiles)
@@ -302,7 +309,10 @@ class VietnameseLineRefiner:
             offset += count
             box, original, original_score = lines[index]
             if self.accept(original, text, score):
-                restored = self.restore_accents(original, text, allow_letter_repairs=float(original_score) < .90)
+                restored = self.restore_accents(original, text, allow_letter_repairs=float(original_score) < .90,
+                                                advance_unmatched=bool(padding))
+                if padding and score >= .90 and self._safe_photo_spacing(original, text):
+                    restored = text
                 # Confidence belongs to the full candidate; do not give a
                 # partially restored line a higher score than the detector.
                 confidence = float(score) if self._fold(restored) == self._fold(text) else original_score
@@ -329,6 +339,52 @@ class VietnameseLineRefiner:
             except Exception:
                 # Optional address rereading must not discard normal results.
                 self.address_candidates = {}
+        return result
+
+    @classmethod
+    def _safe_photo_spacing(cls, original, candidate):
+        """Accept actual crop spacing/marks only, with every identifier protected.
+
+        A photographed `128duong` may be reread as `128 đường`. This never
+        guesses a boundary from a dictionary: both image readers must agree on
+        all folded letters, digits and punctuation, at high crop confidence.
+        """
+        if cls._fold(original) != cls._fold(candidate):
+            return False
+        return cls._photo_identifiers_preserved(original, candidate)
+
+    @staticmethod
+    def _photo_identifiers_preserved(original, candidate):
+        if re.findall(r"\d+", original) != re.findall(r"\d+", candidate):
+            return False
+        if re.sub(r"[\w\s]", "", original) != re.sub(r"[\w\s]", "", candidate):
+            return False
+        for token in re.findall(r"\w+(?:[./-]\w+)*", original):
+            if not any(char.isdigit() for char in token):
+                continue
+            # Only this clearly labelled boundary may change spaces. Keep
+            # house/unit tokens such as 79/J4, 128A, D18, and 07-02 intact.
+            if re.fullmatch(r"\d+(?:duong|đường|phuong|phường)", token, re.IGNORECASE):
+                continue
+            if re.search(r"(?<!\w)" + re.escape(token) + r"(?!\w)", candidate, re.IGNORECASE) is None:
+                return False
+        return True
+
+    def corroborate_photo_addresses(self, lines, probe_text):
+        """Use a padded crop only if the other engine saw the same full letters.
+
+        RapidOCR's quick photo probe and VietOCR's independently padded crop
+        must agree; the PP-OCR line alone never authorizes restoring letters.
+        """
+        evidence = self._fold(probe_text)
+        result = list(lines)
+        for index, candidate in self.address_candidates.items():
+            if not 0 <= index < len(lines):
+                continue
+            box, original, score = lines[index]
+            canonical = self._fold(candidate)
+            if len(canonical) >= 12 and canonical in evidence and self._photo_identifiers_preserved(original, candidate):
+                result[index] = (box, candidate, score)
         return result
 
     @staticmethod

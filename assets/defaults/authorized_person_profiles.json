@@ -1,38 +1,4 @@
 {
   "schema_version": 1,
-  "profiles": [
-    {
-      "id": "builtin-authorized-person-1",
-      "authorized_person_full_name": "NGƯỜI ỦY QUYỀN MẪU 1",
-      "authorized_person_gender": "",
-      "authorized_person_id_number": "000000000000",
-      "authorized_person_issue_date": "",
-      "authorized_person_issue_place": "",
-      "authorized_person_contact_address": "Địa chỉ mẫu",
-      "authorized_person_phone": "0000000000",
-      "authorized_person_email": "sample1@example.invalid"
-    },
-    {
-      "id": "builtin-authorized-person-2",
-      "authorized_person_full_name": "NGƯỜI ỦY QUYỀN MẪU 2",
-      "authorized_person_gender": "",
-      "authorized_person_id_number": "000000000000",
-      "authorized_person_issue_date": "",
-      "authorized_person_issue_place": "",
-      "authorized_person_contact_address": "Địa chỉ mẫu",
-      "authorized_person_phone": "0000000000",
-      "authorized_person_email": "sample2@example.invalid"
-    },
-    {
-      "id": "builtin-authorized-person-3",
-      "authorized_person_full_name": "NGƯỜI ỦY QUYỀN MẪU 3",
-      "authorized_person_gender": "",
-      "authorized_person_id_number": "000000000000",
-      "authorized_person_issue_date": "",
-      "authorized_person_issue_place": "",
-      "authorized_person_contact_address": "Địa chỉ mẫu",
-      "authorized_person_phone": "0000000000",
-      "authorized_person_email": "sample3@example.invalid"
-    }
-  ]
+  "profiles": []
 }

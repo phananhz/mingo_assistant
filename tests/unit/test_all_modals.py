@@ -116,8 +116,8 @@ class TestAllModalsAndNavigation(unittest.TestCase):
                 "dissolution",
                 "dependent_units",
                 "household_business",
+                "templates",
                 "industry_lookup",
-                "legacy_industry_lookup",
                 "trash",
             ],
         )
@@ -134,6 +134,7 @@ class TestAllModalsAndNavigation(unittest.TestCase):
             win._refresh_industry_lookup = MagicMock()
             win._refresh_legacy_industry_lookup = MagicMock()
             win._refresh_trash = MagicMock()
+            win._refresh_templates = MagicMock()
             win._show_coming_soon = MagicMock()
 
             win.nav_buttons = {}
@@ -144,6 +145,7 @@ class TestAllModalsAndNavigation(unittest.TestCase):
             win.business_amendment_page = MagicMock()
             win.dependent_units_page = MagicMock()
             win.household_business_page = MagicMock()
+            win.templates_page = MagicMock()
             win.dissolution_page = MagicMock()
             win.industry_lookup_page = MagicMock()
             win.legacy_industry_lookup_page = MagicMock()
@@ -175,6 +177,12 @@ class TestAllModalsAndNavigation(unittest.TestCase):
             win.stack.currentWidget.return_value = win.household_business_page
             win._select_nav("household_business", is_user_action=True)
             win._open_household_business_workspace.assert_called_once()
+
+            # The new front-end library navigates without starting a dossier.
+            win._select_nav("templates", is_user_action=True)
+            win.stack.setCurrentWidget.assert_called_with(win.templates_page)
+            win._refresh_templates.assert_called_once()
+            win._show_coming_soon.assert_not_called()
 
             # 6. Dissolution category
             win.stack.currentWidget.return_value = win.dissolution_page

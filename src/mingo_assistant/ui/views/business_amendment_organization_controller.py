@@ -15,6 +15,7 @@ from shiboken6 import isValid
 from mingo_assistant.services.documents.business_amendment_fields import ORGANIZATION_MAPPING, REPRESENTATIVE_FIELDS
 from mingo_assistant.services.organization_documents.business_amendment_document_service import BusinessAmendmentDocumentService
 from mingo_assistant.ui.views.business_registration_workspace import BusinessRegistrationWorkspace
+from mingo_assistant.ui.views.draft_progress import checkpoint_scan
 
 if TYPE_CHECKING:
     from mingo_assistant.ui.views.business_amendment_workspace import BusinessAmendmentWorkspace
@@ -146,6 +147,7 @@ class AmendmentOrganizationController:
         owner._representative_company_code = ""
         owner._refresh_preview()
 
+    @checkpoint_scan
     def scan_document(self, path: str) -> None:
         owner = self.owner
         if owner._scan_in_progress:
@@ -159,7 +161,7 @@ class AmendmentOrganizationController:
         owner.setEnabled(False)
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
-            result = owner.organization_document_service.extract_pdf(
+            result = owner._extract_selected_organization_document(
                 path,
                 lambda percent, status: owner._update_ocr_progress(
                     percent, status, owner._format_elapsed(start)
@@ -184,6 +186,10 @@ class AmendmentOrganizationController:
             return
         if hasattr(owner.window(), "current_workspace") and owner.window().current_workspace is not owner:
             return
+        self.apply_scan_result(result, path, owner._format_elapsed(start))
+
+    def apply_scan_result(self, result, path, elapsed):
+        owner = self.owner
         values = dict(result.values)
         values.update({
             "amendment_recognition_confirmed": "",
@@ -197,14 +203,14 @@ class AmendmentOrganizationController:
         owner.raw_ocr_text.setPlainText(result.raw_text)
         owner.organization_document_label.setText(f"Tài liệu: {Path(path).name} — cần đối chiếu dữ liệu nhận diện")
         owner._show_recognition_result(result.document_type)
-        owner._update_ocr_progress(100, "Đã nhận diện — cần đối chiếu PDF", owner._format_elapsed(start))
+        owner._update_ocr_progress(100, "Đã nhận diện — cần đối chiếu PDF", elapsed)
 
     def choose_document(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self.owner,
             "Chọn giấy đăng ký doanh nghiệp",
             "",
-            "Tài liệu PDF (*.pdf)",
+            "Giấy chứng nhận PDF hoặc ảnh (*.pdf *.png *.jpg *.jpeg *.bmp *.tif *.tiff);;PDF (*.pdf);;Ảnh (*.png *.jpg *.jpeg *.bmp *.tif *.tiff)",
         )
         if path:
             self.scan_document(path)

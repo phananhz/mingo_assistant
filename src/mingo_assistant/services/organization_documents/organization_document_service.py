@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from copy import copy
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
@@ -10,6 +11,7 @@ from typing import Callable
 import fitz
 
 from mingo_assistant.services.normalization.address_parser import AddressParser
+from mingo_assistant.core.cancellation import ScanCancelledError
 from mingo_assistant.services.ocr.vietnamese_document_ocr import VietnameseDocumentOcr
 from mingo_assistant.services.ocr.certificate_layout import certificate_lines
 from mingo_assistant.services.organization_documents.pdf_text import extract_certificate_text
@@ -49,6 +51,17 @@ class OrganizationDocumentService:
     def __init__(self, address_parser: AddressParser | None = None, bundle_root: Path | None = None) -> None:
         self.address_parser = address_parser or AddressParser()
         self._vietnamese_ocr = VietnameseDocumentOcr(bundle_root) if bundle_root else None
+        self._engine_cache: dict[str, object] = {}
+
+    def extract_pdf_as(
+        self, path: str | Path, document_type: str, progress_callback: ProgressCallback | None = None,
+    ) -> OrganizationDocumentResult:
+        """Use an explicit type for this scan only; retain workflow-specific parsing."""
+        if document_type != self.DOCUMENT_TYPE:
+            raise DocumentTypeMismatchError("Loại tài liệu đã chọn không được hỗ trợ trong hồ sơ này.")
+        scanner = copy(self)
+        scanner._explicit_document_type = document_type
+        return scanner.extract_pdf(path, progress_callback)
 
     def extract_pdf(self, path: str | Path, progress_callback: ProgressCallback | None = None) -> OrganizationDocumentResult:
         document_path = Path(path)
@@ -59,11 +72,15 @@ class OrganizationDocumentService:
 
         self._progress(progress_callback, 5, "Đang mở tài liệu doanh nghiệp")
         with fitz.open(document_path) as document:
+            self._validate_pdf(document)
             direct_text = extract_certificate_text(document)
             detected_type = self._validate_expected_document_type(direct_text)
             quick_result = None
-            if not detected_type:
-                quick_text = self._extract_first_page_for_type_detection(document, progress_callback)
+            photo_probe = getattr(self, "_photo_probe", (None, ""))
+            quick_text = photo_probe[1] if photo_probe[0] == str(document_path) else ""
+            if not detected_type or quick_text:
+                if not quick_text:
+                    quick_text = self._extract_first_page_for_type_detection(document, progress_callback)
                 self._validate_expected_document_type(quick_text)
                 quick_result = self._extract_supported_document(quick_text, "ocr", source="rapidocr")
             direct_result = self._extract_supported_document(direct_text, "text", source="pdf_text")
@@ -79,7 +96,8 @@ class OrganizationDocumentService:
                 return early_result
 
             self._progress(progress_callback, 25, "Đang nhận diện chữ trong tài liệu")
-            ocr_text = self._extract_with_ocr(document, progress_callback)
+            recovery_warnings: list[str] = []
+            ocr_text = self._safe_ocr_pass(document, progress_callback, recovery_warnings)
             primary_source = (
                 "ppocr_v6"
                 if self._vietnamese_ocr and self._vietnamese_ocr.is_available
@@ -97,7 +115,7 @@ class OrganizationDocumentService:
                 and self._needs_ocr_fallback(result)
             ):
                 self._progress(progress_callback, 75, "Đang đối chiếu bằng bộ nhận diện dự phòng")
-                legacy_text = self._extract_with_ocr(document, progress_callback, use_legacy=True)
+                legacy_text = self._safe_ocr_pass(document, progress_callback, recovery_warnings, use_legacy=True)
                 legacy_result = self._extract_supported_document(legacy_text, "ocr", source="rapidocr")
                 candidates.append(legacy_result)
                 result = self._merge_results(*candidates)
@@ -105,7 +123,7 @@ class OrganizationDocumentService:
 
             if self._needs_enhanced_pass(result):
                 self._progress(progress_callback, 90, "Đang tăng cường ảnh tài liệu khó đọc")
-                enhanced_text = self._extract_with_ocr(document, progress_callback, enhanced=True)
+                enhanced_text = self._safe_ocr_pass(document, progress_callback, recovery_warnings, enhanced=True)
                 enhanced_source = (
                     "ppocr_v6_enhanced"
                     if self._vietnamese_ocr and self._vietnamese_ocr.is_available
@@ -123,11 +141,45 @@ class OrganizationDocumentService:
                 route.append(enhanced_source)
         if result is not None:
             self._progress(progress_callback, 100, "Đã nhận diện thông tin tổ chức")
-            return replace(result, processing_route=tuple(dict.fromkeys(route)))
+            return replace(result, processing_route=tuple(dict.fromkeys(route)),
+                           warnings=list(dict.fromkeys(result.warnings + recovery_warnings)))
 
+        if recovery_warnings:
+            raise RuntimeError("Chưa thể đọc tài liệu vì bộ OCR gặp lỗi. Vui lòng kiểm tra bộ công cụ OCR hoặc thử lại; đây không phải kết luận tài liệu sai loại.")
         raise ValueError(
             "Không nhận ra Giấy chứng nhận đăng ký doanh nghiệp (ERC) trong PDF đã chọn."
         )
+
+    @staticmethod
+    def _validate_pdf(document) -> None:
+        encrypted = getattr(document, "needs_pass", False)
+        if isinstance(encrypted, (bool, int)) and encrypted:
+            raise ValueError("PDF đang được bảo vệ bằng mật khẩu. Vui lòng mở khóa PDF trước khi quét.")
+        count = getattr(document, "page_count", None)
+        if isinstance(count, int) and count <= 0:
+            raise ValueError("PDF không có trang để nhận diện.")
+
+    def _safe_ocr_pass(self, document, callback, warnings, **options) -> str:
+        if options.get("enhanced"):
+            self._last_enhanced_text_candidates = ()
+        try:
+            return self._extract_with_ocr(document, callback, **options)
+        except ScanCancelledError:
+            raise
+        except Exception:
+            # Keep readable PDF/other-engine fields, but never claim completeness.
+            warnings.append("Một lượt OCR không thực hiện được. Dữ liệu đã đọc vẫn được giữ; vui lòng đối chiếu các trường còn thiếu với tài liệu gốc.")
+            return ""
+
+    def _get_legacy_engine(self):
+        if hasattr(self, "_legacy_engine"):
+            return self._legacy_engine
+        from rapidocr_onnxruntime import RapidOCR
+
+        if "legacy" not in self._engine_cache:
+            self._engine_cache["legacy"] = RapidOCR()
+        self._legacy_engine = self._engine_cache["legacy"]
+        return self._legacy_engine
 
     @classmethod
     def detect_document_type(cls, text: str) -> str:
@@ -163,6 +215,8 @@ class OrganizationDocumentService:
         return ""
 
     def _validate_expected_document_type(self, text: str) -> str:
+        if getattr(self, "_explicit_document_type", "") == self.DOCUMENT_TYPE:
+            return self.DOCUMENT_TYPE
         actual = self.detect_document_type(text)
         expected = self.DOCUMENT_TYPE
         if not actual or actual == expected:
@@ -192,10 +246,7 @@ class OrganizationDocumentService:
         try:
             if int(document.page_count) <= 0:
                 return ""
-            from rapidocr_onnxruntime import RapidOCR
-
-            if not hasattr(self, "_legacy_engine"):
-                self._legacy_engine = RapidOCR()
+            self._get_legacy_engine()
             self._progress(progress_callback, 12, "Đang kiểm tra nhanh loại tài liệu")
             page = document.load_page(0)
             # Some image-only PDFs declare a tiny physical page (under 400pt)
@@ -215,6 +266,8 @@ class OrganizationDocumentService:
                 image_bytes,
                 use_legacy=True,
             )
+        except ScanCancelledError:
+            raise
         except Exception:
             # Type detection is an early guard. If it is inconclusive, the
             # normal OCR pipeline remains responsible for the final result.
@@ -269,13 +322,10 @@ class OrganizationDocumentService:
         enhanced: bool = False,
     ) -> str:
         try:
-            from rapidocr_onnxruntime import RapidOCR
+            engine = self._get_legacy_engine()
         except ImportError as exc:  # pragma: no cover - protected by packaging configuration
             raise RuntimeError("Thiếu bộ OCR nội bộ. Hãy dùng bản ứng dụng đã đóng gói đầy đủ.") from exc
 
-        if not hasattr(self, "_legacy_engine"):
-            self._legacy_engine = RapidOCR()
-        engine = self._legacy_engine
         pages: list[str] = []
         enhanced_page_candidates: list[list[str]] = []
         if enhanced:
@@ -296,9 +346,18 @@ class OrganizationDocumentService:
             image = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
             image_bytes = image.tobytes("png")
             if enhanced:
+                variants = self._preprocess_variants_for_ocr(image_bytes)
+                if getattr(self, "_photo_input", False):
+                    from mingo_assistant.services.ocr.certificate_photo import geometry_variant
+
+                    geometry = geometry_variant(image_bytes)
+                    if geometry is not None:
+                        # Preserve fine accents and the untrimmed primary reading.
+                        # At most one extra candidate, only for uncertain photos.
+                        variants.append(self._preprocess_for_ocr(geometry))
                 texts = [
                     self._extract_page_with_ocr(engine, candidate, use_legacy=use_legacy)
-                    for candidate in self._preprocess_variants_for_ocr(image_bytes)
+                    for candidate in variants
                 ]
                 enhanced_page_candidates.append(texts)
                 pages.append(max(texts, key=self._ocr_text_quality, default=""))
@@ -337,7 +396,7 @@ class OrganizationDocumentService:
         # so reserve the larger render for the quality-triggered enhanced pass.
         target_pixels = 3300.0 if enhanced else 2200.0
         minimum, maximum = (3.5, 4.1) if enhanced else (2.5, 3.1)
-        return max(minimum, min(maximum, target_pixels / longest_side))
+        return min(maximum, max(minimum, target_pixels / longest_side), 4200.0 / longest_side)
 
     @staticmethod
     def _preprocess_for_ocr(image_bytes: bytes) -> bytes:
@@ -454,10 +513,20 @@ class OrganizationDocumentService:
                         from mingo_assistant.services.ocr.vietnamese_line_refiner import VietnameseLineRefiner
 
                         if not hasattr(self, "_line_refiner"):
-                            self._line_refiner = VietnameseLineRefiner(self._vietnamese_ocr.model_dir)
+                            if "line_refiner" not in self._engine_cache:
+                                self._engine_cache["line_refiner"] = VietnameseLineRefiner(self._vietnamese_ocr.model_dir)
+                            self._line_refiner = self._engine_cache["line_refiner"]
                         image = cv2.imdecode(np.frombuffer(image_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
                         if image is not None:
-                            lines = self._line_refiner.refine(image, lines)
+                            if getattr(self, "_photo_input", False):
+                                # Detector boxes on camera images can shave off
+                                # tiny tone marks. Reread actual padded ink, never
+                                # invent spelling from a dictionary.
+                                lines = self._line_refiner.refine(image, lines, padding=.12)
+                                probe = getattr(self, "_photo_probe", (None, ""))[1]
+                                lines = self._line_refiner.corroborate_photo_addresses(lines, probe)
+                            else:
+                                lines = self._line_refiner.refine(image, lines)
                     except Exception:
                         # PP-OCRv6 text remains usable if optional VietOCR refinement fails.
                         pass
@@ -494,6 +563,8 @@ class OrganizationDocumentService:
 
     def _is_business_certificate(self, text: str) -> bool:
         lines = self._lines(text)
+        if getattr(self, "_explicit_document_type", "") == "erc":
+            return any(self._is_registration_label(line) for line in lines)
         return any(
             compact.startswith("giaychungnh") and "dangkydoanhnghi" in compact
             for compact in (self._compact(line) for line in lines)
@@ -908,6 +979,15 @@ class OrganizationDocumentService:
             return 0.35
 
         if key == "organization_owner_name":
+            if getattr(self, "_photo_input", False):
+                # Camera OCR can confuse Vietnamese tone marks with a foreign
+                # combining mark (e.g. ring/diaeresis). This is only a request
+                # for another image reading, never a spelling substitution;
+                # genuinely international names may still need user review.
+                vietnamese_marks = {"\u0300", "\u0301", "\u0303", "\u0309", "\u0323", "\u0302", "\u0306", "\u031b"}
+                if any(unicodedata.combining(char) and char not in vietnamese_marks
+                       for char in unicodedata.normalize("NFD", value)):
+                    return .72
             letters = sum(character.isalpha() for character in value)
             if letters < 4:
                 return 0.35
@@ -915,9 +995,15 @@ class OrganizationDocumentService:
             if suspicious / max(len(value), 1) > 0.08:
                 return 0.45
             base = 0.94 if len(value) >= 10 else 0.82
-            return min(base, self._vietnamese_text_integrity(value))
+            return min(base, self._vietnamese_text_integrity(value), self._proper_name_integrity(value))
 
         if key == "organization_owner_address_detail":
+            if getattr(self, "_photo_input", False) and re.search(
+                r"\d(?:duong|durong|đường|phuong|phường|thanhpho)\b", value, re.IGNORECASE,
+            ):
+                # Do not split digit-bearing address tokens heuristically.
+                # Ask for a geometric reread instead; 128A, D18, 79/J4 stay valid.
+                return .72
             compact = self._compact(value)
             table_markers = ("stt", "tyle", "vongop", "tenthanhvien", "quoctich")
             contact_markers = ("dienthoai", "dinthoi", "sofax", "thudientu", "website")
@@ -967,6 +1053,22 @@ class OrganizationDocumentService:
             return 0.90 if len(value) >= 3 else 0.55
 
         return 0.80
+
+    @classmethod
+    def _proper_name_integrity(cls, value: str) -> float:
+        """Flag distinctive damaged Vietnamese tokens; never restore a proper noun.
+
+        Legal-form accents are not evidence that the rest of a name was read
+        correctly. English brands, abbreviations and ordinary ASCII names stay
+        valid. A flag only requests another reading / human comparison.
+        """
+        words = re.findall(r"[^\W\d_]+", unicodedata.normalize("NFC", value), re.UNICODE)
+        suspicious = {"nguyen", "huynh", "quynh", "nguyn", "nguyne", "thuongmai", "dichvu"}
+        if any(word.casefold() in suspicious for word in words):
+            return .72
+        if re.search(r"\b(?:giai\s+phap|thuong\s+mai|dich\s+vu|dau\s+tu|xay\s+dung|san\s+xuat|phat\s+trien|cong\s+nghe)\b", value, re.IGNORECASE):
+            return .72
+        return 1.0
 
     @classmethod
     def _vietnamese_text_integrity(cls, value: str) -> float:
@@ -1032,6 +1134,8 @@ class OrganizationDocumentService:
         ):
             if not normalized.get(key, ""):
                 warnings.append(f"Chưa nhận diện được: {label}.")
+            elif self._field_quality(key, normalized[key]) < .80:
+                warnings.append(f"Cần đối chiếu chữ/dấu hoặc định dạng ở: {label}.")
         if (
             normalized.get("organization_owner_country") == "Việt Nam"
             and normalized.get("organization_owner_address_detail")
